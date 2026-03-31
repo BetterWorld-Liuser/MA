@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::context::{FileSnapshot, ModifiedBy};
@@ -58,7 +58,7 @@ impl WatchedFileStore {
         Ok(())
     }
 
-    pub fn snapshots(&self) -> BTreeMap<PathBuf, FileSnapshot> {
+    pub fn snapshots(&self) -> IndexMap<PathBuf, FileSnapshot> {
         self.state
             .read()
             .expect("watch state poisoned")
@@ -164,6 +164,20 @@ impl FileWatcherService {
         Ok(snapshot)
     }
 
+    pub fn unwatch_file(&mut self, path: impl Into<PathBuf>) -> Result<()> {
+        let path = normalize_path(path.into())?;
+        self.watcher
+            .unwatch(&path)
+            .with_context(|| format!("failed to unwatch {}", path.display()))?;
+        self.store
+            .state
+            .write()
+            .expect("watch state poisoned")
+            .snapshots
+            .shift_remove(&path);
+        Ok(())
+    }
+
     pub fn store(&self) -> WatchedFileStore {
         self.store.clone()
     }
@@ -171,7 +185,7 @@ impl FileWatcherService {
 
 #[derive(Debug, Default)]
 struct WatchState {
-    snapshots: BTreeMap<PathBuf, FileSnapshot>,
+    snapshots: IndexMap<PathBuf, FileSnapshot>,
 }
 
 impl WatchState {

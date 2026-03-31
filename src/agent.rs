@@ -5,29 +5,41 @@ use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 
 use crate::context::{
-    AgentContext, AgentContextBuilder, ContextBuildConfig, ConversationHistory, DisplayTurn, Role,
-    ToolSummary,
+    AgentContext, AgentContextBuilder, ContextBuildConfig, ConversationHistory, DisplayTurn,
+    FileSnapshot, Injection, Role, ToolSummary,
 };
 use crate::provider::OpenAiCompatibleClient;
+use crate::tools::{ToolDefinition, ToolRuntime};
 use crate::watcher::FileWatcherService;
 
 /// AgentSession 是当前阶段的主编排对象：
-/// 它把历史、watcher、命令执行和模型调用收拢到同一个会话里。
+/// 它把外部聊天历史、open file 集、notes、命令执行和模型调用收拢到同一个会话里。
+pub struct AgentSession {
+    config: AgentConfig,
+    watcher: FileWatcherService,
+    history: ConversationHistory,
+    notes: IndexMap<String, String>,
+    injections: Vec<Injection>,
+    available_shells: Vec<AvailableShell>,
+    working_directory: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    pub system_prompt: String,
+    pub system_core: String,
     pub max_recent_turns: usize,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            system_prompt:
+            system_core:
                 "You are Ma, an agentic coding assistant whose source of truth is the filesystem."
                     .to_string(),
-            max_recent_turns: 6,
+            max_recent_turns: 3,
         }
     }
 }
@@ -35,9 +47,7 @@ impl Default for AgentConfig {
 #[derive(Debug, Clone)]
 pub struct CommandRequest {
     pub command: String,
-    pub working_directory: PathBuf,
-    pub shell: Option<CommandShell>,
-    pub touched_files: Vec<PathBuf>,
+    pub shell: CommandShell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,22 +70,15 @@ pub struct CommandExecution {
     pub finished_at: SystemTime,
 }
 
-pub struct AgentSession {
-    config: AgentConfig,
-    watcher: FileWatcherService,
-    history: ConversationHistory,
-    available_shells: Vec<AvailableShell>,
-}
-
 impl AgentSession {
-    /// 会话初始化时先建立 watcher，这样后续所有 prompt 都能基于同一份实时文件视图构建。
+    /// 会话初始化时先建立 open file watcher，这样后续 prompt 都基于同一份实时文件视图构建。
     pub fn new(
         config: AgentConfig,
         history: ConversationHistory,
-        watched_files: impl IntoIterator<Item = PathBuf>,
+        open_files: impl IntoIterator<Item = PathBuf>,
     ) -> Result<Self> {
         let mut watcher = FileWatcherService::new()?;
-        for path in watched_files {
+        for path in open_files {
             watcher.watch_file(path)?;
         }
 
@@ -83,13 +86,44 @@ impl AgentSession {
             config,
             watcher,
             history,
+            notes: IndexMap::new(),
+            injections: Vec::new(),
             available_shells: detect_available_shells()?,
+            working_directory: std::env::current_dir()
+                .context("failed to resolve current directory")?,
         })
     }
 
-    pub fn watch_file(&mut self, path: impl Into<PathBuf>) -> Result<()> {
+    pub fn open_file(&mut self, path: impl Into<PathBuf>) -> Result<()> {
         self.watcher.watch_file(path.into())?;
         Ok(())
+    }
+
+    pub fn close_file(&mut self, path: impl Into<PathBuf>) -> Result<()> {
+        self.watcher.unwatch_file(path.into())?;
+        Ok(())
+    }
+
+    pub fn add_injection(&mut self, id: impl Into<String>, content: impl Into<String>) {
+        let id = id.into();
+        let content = content.into();
+
+        if let Some(injection) = self.injections.iter_mut().find(|injection| injection.id == id) {
+            injection.content = content;
+        } else {
+            self.injections.push(Injection { id, content });
+        }
+    }
+
+    pub fn write_note(&mut self, id: impl Into<String>, content: impl Into<String>) {
+        let id = id.into();
+        let content = content.into();
+
+        self.notes.insert(id, content);
+    }
+
+    pub fn remove_note(&mut self, id: &str) {
+        self.notes.shift_remove(id);
     }
 
     pub fn add_user_turn(&mut self, content: impl Into<String>) {
@@ -101,7 +135,11 @@ impl AgentSession {
         });
     }
 
-    pub fn add_assistant_turn(&mut self, content: impl Into<String>, tool_calls: Vec<ToolSummary>) {
+    pub fn add_assistant_turn(
+        &mut self,
+        content: impl Into<String>,
+        tool_calls: Vec<ToolSummary>,
+    ) {
         self.history.turns.push(DisplayTurn {
             role: Role::Assistant,
             content: content.into(),
@@ -111,28 +149,30 @@ impl AgentSession {
     }
 
     pub fn build_context(&self) -> AgentContext {
-        AgentContextBuilder::new(self.config.system_prompt.clone())
+        let tools = ToolRuntime::for_session(&self.available_shells, &self.working_directory).tools;
+
+        AgentContextBuilder::new(self.config.system_core.clone())
             .with_config(ContextBuildConfig {
-                max_recent_turns: self.config.max_recent_turns,
+                max_recent_chat_turns: self.config.max_recent_turns,
             })
+            .injections(self.injections.clone())
+            .tools(tools)
+            .notes(self.notes.clone())
             .history(self.history.clone())
-            .build_from_snapshots(self.watcher.store().snapshots())
+            .build_from_open_files(self.open_file_snapshots())
     }
 
     pub fn render_prompt(&self) -> String {
         let context = self.build_context();
-        render_prompt(&context, &self.available_shells)
+        render_prompt(&context, &self.available_shells, &self.working_directory)
     }
 
     pub async fn generate_assistant_reply(
         &mut self,
         client: &OpenAiCompatibleClient,
     ) -> Result<String> {
-        // 目前的最小模型调用路径：
-        // 直接把当前上下文渲染成 prompt 发给兼容接口，再把返回文本记录成 assistant turn。
         let context = self.build_context();
-        let prompt = render_prompt(&context, &self.available_shells);
-        let reply = client.complete_text(&context.system, &prompt).await?;
+        let reply = client.complete_context(&context).await?;
 
         self.add_assistant_turn(
             reply.clone(),
@@ -145,38 +185,21 @@ impl AgentSession {
         Ok(reply)
     }
 
-    /// 当前暴露通用 run_command，并允许调用方显式声明命令运行在哪个 shell 环境里。
-    /// 这里会把命令执行、agent 写入归因、watcher 刷新和 tool turn 记录一次串起来。
+    /// run_command 负责调用外部环境能力；
+    /// 命令执行日志属于当前轮执行态，不会混入跨轮 recent_chat。
     pub fn run_command(&mut self, request: CommandRequest) -> Result<CommandExecution> {
         let started_at = SystemTime::now();
-        let selected_shell = request
-            .shell
-            .map(|shell| self.resolve_shell(shell))
-            .transpose()?
-            .unwrap_or_else(|| self.default_shell());
-        let touched_files = request
-            .touched_files
-            .iter()
-            .map(|path| absolutize(path, &request.working_directory))
-            .collect::<Result<Vec<_>>>()?;
-
-        for path in &touched_files {
-            if !self.watcher.store().snapshots().contains_key(path) && path.exists() {
-                self.watch_file(path.clone())?;
-            }
-        }
-
+        let selected_shell = self.resolve_shell(request.shell)?;
+        let tracked_paths = self.open_file_snapshots().keys().cloned().collect::<Vec<_>>();
         let _agent_write_guard = self
             .watcher
             .store()
-            .begin_agent_write(touched_files.clone())?;
-        // 真正的命令执行保持平台相关逻辑在 shell_command 里，
-        // session 只关心“命令跑了”和“跑完后文件真实状态是什么”。
+            .begin_agent_write(tracked_paths.clone())?;
         let output = shell_command(
             selected_shell.kind,
             &selected_shell.program,
             &request.command,
-            &request.working_directory,
+            &self.working_directory,
         )
         .with_context(|| {
             format!(
@@ -188,21 +211,17 @@ impl AgentSession {
         })?;
         let finished_at = SystemTime::now();
 
-        for path in touched_files {
+        for path in tracked_paths {
             if path.exists() {
                 self.watcher
                     .store()
                     .refresh_file(path, crate::context::ModifiedBy::Agent)?;
-            } else {
-                self.watcher
-                    .store()
-                    .remove_file(path, crate::context::ModifiedBy::Agent)?;
             }
         }
 
         let execution = CommandExecution {
             command: request.command.clone(),
-            working_directory: request.working_directory.clone(),
+            working_directory: self.working_directory.clone(),
             shell: selected_shell.kind,
             exit_code: output.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
@@ -232,6 +251,14 @@ impl AgentSession {
         &self.available_shells
     }
 
+    pub fn working_directory(&self) -> &Path {
+        &self.working_directory
+    }
+
+    fn open_file_snapshots(&self) -> IndexMap<PathBuf, FileSnapshot> {
+        self.watcher.store().snapshots()
+    }
+
     fn resolve_shell(&self, shell: CommandShell) -> Result<AvailableShell> {
         self.available_shells
             .iter()
@@ -241,32 +268,41 @@ impl AgentSession {
                 format!(
                     "requested shell {} is not available in current environment; available shells: {}",
                     shell.label(),
-                    format_available_shells(&self.available_shells)
+                    format_available_shells_for_error(&self.available_shells)
                 )
             })
     }
-
-    fn default_shell(&self) -> AvailableShell {
-        self.available_shells
-            .iter()
-            .find(|shell| shell.kind == CommandShell::default_for_current_platform())
-            .cloned()
-            .or_else(|| self.available_shells.first().cloned())
-            .expect("session must have at least one available shell")
-    }
 }
 
-/// 这里先用纯文本 prompt，目的是快速把“上下文构建链路”跑通。
-/// 后面如果切到更结构化的输入格式，也应保留这个函数作为单一出口。
-fn render_prompt(context: &AgentContext, available_shells: &[AvailableShell]) -> String {
+/// 这里先用纯文本 prompt，把“上下文构建链路”跑通。
+fn render_prompt(
+    context: &AgentContext,
+    _available_shells: &[AvailableShell],
+    _working_directory: &Path,
+) -> String {
     let mut output = String::new();
-    output.push_str("# System\n");
-    output.push_str(&context.system);
-    output.push_str("\n\n# Tooling\n");
-    output.push_str(&render_tooling_instructions(available_shells));
-    output.push_str("\n\n# Watched Files\n");
+    output.push_str("# System Core\n");
+    output.push_str(&context.system_core);
+    output.push_str("\n\n# Injections\n");
+    if context.injections.is_empty() {
+        output.push_str("(none)\n");
+    } else {
+        for injection in &context.injections {
+            output.push_str(&format!("## {}\n{}\n", injection.id, injection.content));
+        }
+    }
+    output.push_str("\n# Tools\n");
+    output.push_str(&render_tools_layer(&context.tools));
+    output.push_str("\n\n");
+    output.push_str(&render_prompt_body(context));
+    output
+}
 
-    for snapshot in context.watched_files_in_prompt_order() {
+fn render_prompt_body(context: &AgentContext) -> String {
+    let mut output = String::new();
+    output.push_str("# Open Files\n");
+
+    for snapshot in context.open_files_in_prompt_order() {
         output.push_str(&format!(
             "## {}\nmodified_by={:?} changed={}\n{}\n\n",
             snapshot.path.display(),
@@ -276,16 +312,32 @@ fn render_prompt(context: &AgentContext, available_shells: &[AvailableShell]) ->
         ));
     }
 
-    output.push_str("# Messages\n");
-    for message in &context.messages {
-        output.push_str(&format!("{:?}: {}\n", message.role, message.content));
+    output.push_str("# Notes\n");
+    if context.notes.is_empty() {
+        output.push_str("(none)\n");
+    } else {
+        for (id, content) in &context.notes {
+            output.push_str(&format!("{id}: {content}\n"));
+        }
+    }
+
+    output.push_str("\n# Recent Chat\n");
+    for turn in &context.recent_chat {
+        output.push_str(&format!("{:?}: {}\n", turn.role, turn.content));
     }
 
     output
 }
 
-/// Tool turn 目前保留命令、目录、退出码和 stdout/stderr，
-/// 既方便调试，也方便后续做更细粒度的 tool summary。
+fn render_tools_layer(tools: &[ToolDefinition]) -> String {
+    let runtime = ToolRuntime {
+        tools: tools.to_vec(),
+    };
+    runtime.render_prompt_section()
+}
+
+/// Tool turn 目前保留命令、目录、退出码和 stdout/stderr，方便调试与展示；
+/// 但这份内容只留在 display history，不进入 recent_chat。
 fn format_tool_output(execution: &CommandExecution) -> String {
     let mut text = format!(
         "Command: {}\nShell: {:?}\nWorking directory: {}\nExit code: {}",
@@ -339,7 +391,6 @@ impl CommandShell {
 }
 
 /// 用调用方指定的 shell 执行命令，保持“命令文本”和“解释器环境”都在显式输入里。
-/// 这里不尝试解析命令语义，命令本身由上层或模型决定。
 fn shell_command(
     shell: CommandShell,
     program: &str,
@@ -466,58 +517,12 @@ fn executable_extensions() -> Vec<OsString> {
     }
 }
 
-fn render_tooling_instructions(available_shells: &[AvailableShell]) -> String {
-    let default_shell = available_shells
-        .iter()
-        .find(|shell| shell.kind == CommandShell::default_for_current_platform())
-        .unwrap_or(&available_shells[0]);
-
-    let mut text = String::new();
-    text.push_str("run_command shells are discovered from the current environment at session start.\n");
-    text.push_str(&format!(
-        "Available shells: {}\n",
-        format_available_shells(available_shells)
-    ));
-    text.push_str(&format!(
-        "Default shell: {}\n",
-        default_shell.kind.label()
-    ));
-    text.push_str(
-        "When calling run_command, choose the shell that matches the command syntax and only select from the available shells above.",
-    );
-    text
-}
-
-fn format_available_shells(available_shells: &[AvailableShell]) -> String {
+fn format_available_shells_for_error(available_shells: &[AvailableShell]) -> String {
     available_shells
         .iter()
-        .map(|shell| {
-            if shell.program == shell.kind.label() {
-                shell.kind.label().to_string()
-            } else {
-                format!("{} ({})", shell.kind.label(), shell.program)
-            }
-        })
+        .map(|shell| shell.kind.label())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// touched_files 既可能来自相对路径，也可能来自绝对路径。
-/// 统一绝对化后，watcher 和 context 层才不会把同一个文件视为不同实体。
-fn absolutize(path: &Path, working_directory: &Path) -> Result<PathBuf> {
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        working_directory.join(path)
-    };
-
-    if candidate.exists() {
-        candidate
-            .canonicalize()
-            .with_context(|| format!("failed to canonicalize {}", candidate.display()))
-    } else {
-        Ok(candidate)
-    }
 }
 
 #[cfg(test)]
@@ -525,7 +530,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn render_prompt_contains_watched_files_and_messages() {
+    fn render_prompt_contains_context_layers() {
         let cwd = std::env::current_dir().expect("cwd");
         let history = ConversationHistory::new(vec![DisplayTurn {
             role: Role::User,
@@ -533,18 +538,26 @@ mod tests {
             tool_calls: Vec::new(),
             timestamp: SystemTime::UNIX_EPOCH,
         }]);
-        let session = AgentSession::new(
+        let mut session = AgentSession::new(
             AgentConfig::default(),
             history,
             [cwd.join("src").join("main.rs")],
         )
         .expect("session");
+        session.add_injection("skill:test", "testing injection");
+        session.write_note("target", "读取入口文件");
 
         let prompt = session.render_prompt();
 
-        assert!(prompt.contains("# Tooling"));
-        assert!(prompt.contains("Available shells:"));
-        assert!(prompt.contains("# Watched Files"));
+        assert!(prompt.contains("# System Core"));
+        assert!(prompt.contains("# Injections"));
+        assert!(prompt.contains("## skill:test"));
+        assert!(prompt.contains("# Tools"));
+        assert!(prompt.contains("## run_command"));
+        assert!(prompt.contains("# Open Files"));
+        assert!(prompt.contains("# Notes"));
+        assert!(prompt.contains("target: 读取入口文件"));
+        assert!(prompt.contains("# Recent Chat"));
         assert!(prompt.contains("src\\main.rs") || prompt.contains("src/main.rs"));
         assert!(prompt.contains("帮我读取 main.rs"));
     }
@@ -560,17 +573,50 @@ mod tests {
         let result = session
             .run_command(CommandRequest {
                 command: command.to_string(),
-                working_directory: cwd,
-                shell: Some(shell),
-                touched_files: Vec::new(),
+                shell,
             })
             .expect("command");
 
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("hello from ma"));
         assert_eq!(result.shell, shell);
+        assert_eq!(result.working_directory, cwd);
         assert_eq!(session.history().turns.len(), 1);
         assert_eq!(session.history().turns[0].role, Role::Tool);
+    }
+
+    #[test]
+    fn build_context_excludes_tool_turns_from_recent_chat() {
+        let mut session =
+            AgentSession::new(AgentConfig::default(), ConversationHistory::new(vec![]), [])
+                .expect("session");
+        session.add_user_turn("first");
+        session.add_assistant_turn("second", Vec::new());
+        session.history.turns.push(DisplayTurn {
+            role: Role::Tool,
+            content: "tool".to_string(),
+            tool_calls: Vec::new(),
+            timestamp: SystemTime::now(),
+        });
+
+        let context = session.build_context();
+
+        assert_eq!(context.recent_chat.len(), 2);
+        assert_eq!(context.recent_chat[0].content, "first");
+        assert_eq!(context.recent_chat[1].content, "second");
+    }
+
+    #[test]
+    fn notes_support_overwrite_and_remove() {
+        let mut session =
+            AgentSession::new(AgentConfig::default(), ConversationHistory::new(vec![]), [])
+                .expect("session");
+
+        session.write_note("target", "first");
+        session.write_note("target", "second");
+        session.remove_note("target");
+
+        assert!(session.build_context().notes.is_empty());
     }
 
     #[cfg(windows)]

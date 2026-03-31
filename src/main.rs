@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
     )?;
 
     session.add_user_turn("请展示当前最小 agent loop 的状态");
+    session.write_note("target", "展示当前最小 agent loop 的状态");
     session.add_assistant_turn(
         "已根据 watcher 快照和最近对话构建 prompt，并准备执行一次命令行读取。",
         Vec::new(),
@@ -47,9 +48,7 @@ async fn main() -> Result<()> {
 
     let execution = session.run_command(CommandRequest {
         command: preview_command().to_string(),
-        working_directory: cwd.clone(),
-        shell: Some(preview_shell()),
-        touched_files: Vec::new(),
+        shell: preview_shell(),
     })?;
 
     let provider_reply = match OpenAiCompatibleConfig::from_env() {
@@ -63,9 +62,10 @@ async fn main() -> Result<()> {
     let context = session.build_context();
 
     println!("Ma agent loop ready.");
-    println!("Recent messages kept: {}", context.messages.len());
-    println!("Watched files in prompt order:");
-    for snapshot in context.watched_files_in_prompt_order() {
+    println!("Recent chat kept: {}", context.recent_chat.len());
+    println!("Notes kept: {}", context.notes.len());
+    println!("Open files in prompt order:");
+    for snapshot in context.open_files_in_prompt_order() {
         println!(
             "- {} ({:?}, changed={})",
             snapshot.path.display(),

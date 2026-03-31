@@ -1,40 +1,39 @@
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-/// 每轮真正发给模型的上下文视图。
-/// 这里刻意和“用户看到的完整历史”分离，方便后续做裁剪、压缩和 prefix cache 优化。
+use indexmap::IndexMap;
+
+use crate::tools::ToolDefinition;
+
+/// AI 每轮实际收到的上下文。
+/// 分层顺序直接对应设计文档中的 cache 稳定性排序，
+/// 方便后续把不同层映射到 provider 的独立输入结构。
 #[derive(Debug, Clone)]
 pub struct AgentContext {
-    pub system: String,
-    pub watched_files: BTreeMap<PathBuf, FileSnapshot>,
-    pub messages: Vec<Message>,
+    pub system_core: String,
+    pub injections: Vec<Injection>,
+    pub tools: Vec<ToolDefinition>,
+    pub open_files: IndexMap<PathBuf, FileSnapshot>,
+    pub notes: IndexMap<String, String>,
+    pub recent_chat: Vec<ChatTurn>,
 }
 
 impl AgentContext {
-    /// 按 prompt 构建顺序返回文件快照：
-    /// 稳定文件优先，最近变过的文件靠后，以减少前缀缓存被频繁打断。
-    pub fn watched_files_in_prompt_order(&self) -> Vec<&FileSnapshot> {
-        let mut stable = Vec::new();
-        let mut changed = Vec::new();
-
-        for snapshot in self.watched_files.values() {
-            if snapshot.has_changed_since_watch {
-                changed.push(snapshot);
-            } else {
-                stable.push(snapshot);
-            }
-        }
-
-        stable.sort_by(|left, right| left.path.cmp(&right.path));
-        changed.sort_by(|left, right| left.last_modified.cmp(&right.last_modified));
-
-        stable.into_iter().chain(changed).collect()
+    /// open_files 需要保序，因此这里返回其当前插入顺序视图，
+    /// 而不是再做一次额外排序，避免 prompt 前缀无意义抖动。
+    pub fn open_files_in_prompt_order(&self) -> Vec<&FileSnapshot> {
+        self.open_files.values().collect()
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Injection {
+    pub id: String,
+    pub content: String,
+}
+
 /// watcher 维护的单文件真实状态。
-/// 这份数据的目标不是表达“模型上一次怎么改的”，而是表达“磁盘现在是什么样”。
+/// 这份数据表达的是“磁盘现在是什么样”，而不是“上一轮模型以为它是什么样”。
 #[derive(Debug, Clone)]
 pub struct FileSnapshot {
     pub path: PathBuf,
@@ -45,8 +44,6 @@ pub struct FileSnapshot {
 }
 
 impl FileSnapshot {
-    /// Unknown 表示只是初始加载，不代表文件“未变”；
-    /// 这里只是避免把初次注册也误当成一次有效修改。
     pub fn new(
         path: impl Into<PathBuf>,
         content: impl Into<String>,
@@ -71,9 +68,9 @@ pub enum ModifiedBy {
     Unknown,
 }
 
-/// 给用户展示的完整会话历史。
-/// 后续即使做摘要、压缩，原始展示层也应该独立保留。
-#[derive(Debug, Clone)]
+/// 用户看到的完整会话历史。
+/// 这层是展示真相，不参与“给 AI 什么”的裁剪决策。
+#[derive(Debug, Clone, Default)]
 pub struct ConversationHistory {
     pub turns: Vec<DisplayTurn>,
 }
@@ -92,14 +89,15 @@ pub struct DisplayTurn {
     pub timestamp: SystemTime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSummary {
     pub name: String,
     pub summary: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct Message {
+/// recent_chat 只保留人类↔AI 的外部对话，不混入工具执行记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatTurn {
     pub role: Role,
     pub content: String,
     pub timestamp: SystemTime,
@@ -115,32 +113,38 @@ pub enum Role {
 
 #[derive(Debug, Clone)]
 pub struct ContextBuildConfig {
-    pub max_recent_turns: usize,
+    pub max_recent_chat_turns: usize,
 }
 
 impl Default for ContextBuildConfig {
     fn default() -> Self {
         Self {
-            max_recent_turns: 6,
+            max_recent_chat_turns: 3,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentContextBuilder {
-    system: String,
-    watched_files: BTreeMap<PathBuf, FileSnapshot>,
+    system_core: String,
+    injections: Vec<Injection>,
+    tools: Vec<ToolDefinition>,
+    open_files: IndexMap<PathBuf, FileSnapshot>,
+    notes: IndexMap<String, String>,
     history: ConversationHistory,
     config: ContextBuildConfig,
 }
 
 impl AgentContextBuilder {
-    /// Builder 的职责是把稳定 system、最新文件快照和裁剪后的消息历史重新拼成一轮上下文。
-    pub fn new(system: impl Into<String>) -> Self {
+    /// Builder 的职责是把稳定层与可变层重新拼成一轮 AgentContext。
+    pub fn new(system_core: impl Into<String>) -> Self {
         Self {
-            system: system.into(),
-            watched_files: BTreeMap::new(),
-            history: ConversationHistory { turns: Vec::new() },
+            system_core: system_core.into(),
+            injections: Vec::new(),
+            tools: Vec::new(),
+            open_files: IndexMap::new(),
+            notes: IndexMap::new(),
+            history: ConversationHistory::default(),
             config: ContextBuildConfig::default(),
         }
     }
@@ -150,19 +154,32 @@ impl AgentContextBuilder {
         self
     }
 
-    pub fn watch_file(mut self, snapshot: FileSnapshot) -> Self {
-        self.watched_files.insert(snapshot.path.clone(), snapshot);
+    pub fn injections(mut self, injections: Vec<Injection>) -> Self {
+        self.injections = injections;
         self
     }
 
-    pub fn build_from_snapshots(
+    pub fn tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn open_file(mut self, snapshot: FileSnapshot) -> Self {
+        self.open_files.insert(snapshot.path.clone(), snapshot);
+        self
+    }
+
+    pub fn build_from_open_files(
         mut self,
-        snapshots: BTreeMap<PathBuf, FileSnapshot>,
+        snapshots: IndexMap<PathBuf, FileSnapshot>,
     ) -> AgentContext {
-        // 允许上层直接把 watcher 当前维护的整份快照表灌进来，
-        // 避免 session 层重复逐个 watch_file 调 builder。
-        self.watched_files = snapshots;
+        self.open_files = snapshots;
         self.build()
+    }
+
+    pub fn notes(mut self, notes: IndexMap<String, String>) -> Self {
+        self.notes = notes;
+        self
     }
 
     pub fn history(mut self, history: ConversationHistory) -> Self {
@@ -171,48 +188,41 @@ impl AgentContextBuilder {
     }
 
     pub fn build(self) -> AgentContext {
-        // 当前阶段先用“保留最近 N 轮”的朴素策略，
-        // 后面可以在这里替换成摘要、分层保留等更复杂的压缩逻辑。
-        let max_recent_turns = self.config.max_recent_turns.max(1);
-        let kept_turns = self
+        let max_recent_chat_turns = self.config.max_recent_chat_turns.max(1);
+        let recent_chat = self
             .history
             .turns
             .into_iter()
+            .filter_map(|turn| ChatTurn::from_display_turn(&turn))
             .rev()
-            .take(max_recent_turns)
+            .take(max_recent_chat_turns)
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
-            .map(|turn| Message {
-                role: turn.role,
-                content: summarize_turn(&turn),
-                timestamp: turn.timestamp,
-            })
             .collect();
 
         AgentContext {
-            system: self.system,
-            watched_files: self.watched_files,
-            messages: kept_turns,
+            system_core: self.system_core,
+            injections: self.injections,
+            tools: self.tools,
+            open_files: self.open_files,
+            notes: self.notes,
+            recent_chat,
         }
     }
 }
 
-/// 对用户可见 turn 做轻量摘要，让工具信息能进入模型上下文，
-/// 同时避免未来把完整工具原始输出无差别塞回 prompt。
-fn summarize_turn(turn: &DisplayTurn) -> String {
-    if turn.tool_calls.is_empty() {
-        return turn.content.clone();
+impl ChatTurn {
+    fn from_display_turn(turn: &DisplayTurn) -> Option<Self> {
+        match turn.role {
+            Role::User | Role::Assistant => Some(Self {
+                role: turn.role,
+                content: turn.content.clone(),
+                timestamp: turn.timestamp,
+            }),
+            Role::System | Role::Tool => None,
+        }
     }
-
-    let tool_summaries = turn
-        .tool_calls
-        .iter()
-        .map(|tool| format!("{}: {}", tool.name, tool.summary))
-        .collect::<Vec<_>>()
-        .join("; ");
-
-    format!("{}\n\nTool summary: {}", turn.content, tool_summaries)
 }
 
 #[cfg(test)]
@@ -220,54 +230,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builder_keeps_only_recent_turns() {
+    fn builder_keeps_only_recent_external_chat_turns() {
         let history = ConversationHistory::new(vec![
-            display_turn("first"),
-            display_turn("second"),
-            display_turn("third"),
+            display_turn(Role::User, "first"),
+            display_turn(Role::Tool, "tool output"),
+            display_turn(Role::Assistant, "second"),
+            display_turn(Role::User, "third"),
+            display_turn(Role::Assistant, "fourth"),
         ]);
 
         let context = AgentContextBuilder::new("system")
-            .with_config(ContextBuildConfig {
-                max_recent_turns: 2,
-            })
             .history(history)
             .build();
 
-        assert_eq!(context.messages.len(), 2);
-        assert_eq!(context.messages[0].content, "second");
-        assert_eq!(context.messages[1].content, "third");
+        assert_eq!(context.recent_chat.len(), 3);
+        assert_eq!(context.recent_chat[0].content, "second");
+        assert_eq!(context.recent_chat[1].content, "third");
+        assert_eq!(context.recent_chat[2].content, "fourth");
     }
 
     #[test]
-    fn prompt_order_puts_changed_files_last() {
-        let stable = FileSnapshot::new(
-            "src/lib.rs",
-            "pub mod context;",
+    fn open_files_keep_insertion_order() {
+        let first = FileSnapshot::new(
+            "src/main.rs",
+            "fn main() {}",
             SystemTime::UNIX_EPOCH,
             ModifiedBy::Unknown,
         );
-        let changed = FileSnapshot::new(
-            "src/main.rs",
-            "fn main() {}",
+        let second = FileSnapshot::new(
+            "src/lib.rs",
+            "pub mod context;",
             SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10),
             ModifiedBy::Agent,
         );
 
         let context = AgentContextBuilder::new("system")
-            .watch_file(changed)
-            .watch_file(stable)
+            .open_file(first)
+            .open_file(second)
             .build();
 
-        let ordered = context.watched_files_in_prompt_order();
+        let ordered = context.open_files_in_prompt_order();
 
-        assert_eq!(ordered[0].path, PathBuf::from("src/lib.rs"));
-        assert_eq!(ordered[1].path, PathBuf::from("src/main.rs"));
+        assert_eq!(ordered[0].path, PathBuf::from("src/main.rs"));
+        assert_eq!(ordered[1].path, PathBuf::from("src/lib.rs"));
     }
 
-    fn display_turn(content: &str) -> DisplayTurn {
+    fn display_turn(role: Role, content: &str) -> DisplayTurn {
         DisplayTurn {
-            role: Role::User,
+            role,
             content: content.to_string(),
             tool_calls: Vec::new(),
             timestamp: SystemTime::UNIX_EPOCH,
