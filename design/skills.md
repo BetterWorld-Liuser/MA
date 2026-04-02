@@ -118,9 +118,9 @@ struct Injection {
 
 ---
 
-## TUI 展示
+## 右侧面板展示
 
-右侧面板展示当前可用的 skill 列表，已被 AI open 的标注打开状态：
+右侧面板展示当前可用的 skill 列表，已被 AI open 的标注打开状态，**只读**：
 
 ```
   [Skills]
@@ -129,4 +129,4 @@ struct Injection {
   api-style
 ```
 
-用户可手动触发 open/close，效果等同于在聊天框里告诉 AI。
+操作权在 AI，用户若想影响 skill 使用，通过聊天消息告知即可。详见 → [ui-chat.md](ui-chat.md)
