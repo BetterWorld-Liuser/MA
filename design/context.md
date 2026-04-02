@@ -215,6 +215,14 @@ CREATE TABLE hints (
 - 没有 `read_file`——打开即追踪，上下文里的内容永远是磁盘真实状态
 - March 也可以根据 Notes 大小、文件访问频率等自动触发 close，AI 的 `close_file` 只是一个额外的主动信号
 
+### 自动 open 的触发场景
+
+除了 AI 主动调用 `open_file`，以下两种情况 Ma 会自动将文件加入 `open_files`：
+
+**AI 写入文件**：AI 通过 `write_file` 落盘的文件，若不在 `open_files` 中，Ma 自动加入并开始追踪。逻辑是：AI 写完之后往往还需要确认效果、继续修改，文件理应留在上下文里反映最新状态。
+
+**用户 @ 引用文件**：用户在消息中以 `@path` 形式引用的文件，Ma 自动加入 `open_files`。这是明确的"我希望 AI 看到这个文件"的意图表达，无需 AI 再手动调用 `open_file`。
+
 ### Prefix Cache 与文件顺序
 
 文件列表在 System prompt 之下、Notes 之上，属于相对稳定的层。close_file 会使其下方所有层的缓存失效，但下方的 Notes 和对话历史本身每轮都在变，缓存代价可以接受。
