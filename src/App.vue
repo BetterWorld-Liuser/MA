@@ -563,13 +563,26 @@ function closeConfirmDialog() {
 }
 
 function handleConfirmDialogOpenChange(open: boolean) {
-  if (!open) {
-    closeConfirmDialog();
+  confirmDialogOpen.value = open;
+
+  // Radix/shadcn 的 action/cancel 会先驱动弹窗关闭。
+  // 这里如果顺手把 action 清空，后面的 click handler 就拿不到真正的删除操作了。
+  if (open) {
+    return;
   }
+
+  confirmDialogTitle.value = '';
+  confirmDialogDescription.value = '';
+  confirmDialogBody.value = '';
+  confirmDialogLabel.value = '删除';
 }
 
 async function submitConfirmDialog() {
-  await confirmDialogAction.value?.();
+  const action = confirmDialogAction.value;
+  if (!action) {
+    return;
+  }
+  await action();
 }
 
 async function toggleOpenFileLock(path: string, locked: boolean) {

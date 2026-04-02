@@ -160,14 +160,37 @@ impl MaStorage {
     }
 
     pub fn delete_task(&self, task_id: i64) -> Result<()> {
-        let affected = self
+        let transaction = self
             .connection
+            .unchecked_transaction()
+            .context("failed to start delete_task transaction")?;
+
+        // 历史数据库里这些子表可能没有 `ON DELETE CASCADE`。
+        // 这里显式按依赖顺序清理，保证旧工作区升级后也能稳定删除任务。
+        transaction
+            .execute(
+                "DELETE FROM conversation_turns WHERE task_id = ?1",
+                params![task_id],
+            )
+            .context("failed to delete task conversation turns")?;
+        transaction
+            .execute("DELETE FROM notes WHERE task_id = ?1", params![task_id])
+            .context("failed to delete task notes")?;
+        transaction
+            .execute("DELETE FROM open_files WHERE task_id = ?1", params![task_id])
+            .context("failed to delete task open files")?;
+
+        let affected = transaction
             .execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
             .context("failed to delete task")?;
 
         if affected == 0 {
             bail!("task {} not found", task_id);
         }
+
+        transaction
+            .commit()
+            .context("failed to commit delete_task transaction")?;
 
         Ok(())
     }
@@ -798,6 +821,99 @@ mod tests {
         assert_eq!(loaded.task.name, "检查 main.rs 问题");
         assert_eq!(loaded.task.title_source, TaskTitleSource::Auto);
         assert!(!loaded.task.title_locked);
+    }
+
+    #[test]
+    fn delete_task_cleans_up_legacy_child_rows_without_cascade() {
+        let workdir = temp_workspace();
+        let ma_dir = workdir.join(".ma");
+        fs::create_dir_all(&ma_dir).expect("create .ma dir");
+        let db_path = ma_dir.join("ma.db");
+        let connection = Connection::open(&db_path).expect("open legacy db");
+
+        connection
+            .execute_batch(
+                "
+                PRAGMA foreign_keys = ON;
+
+                CREATE TABLE tasks (
+                    id          INTEGER PRIMARY KEY,
+                    name        TEXT    NOT NULL,
+                    created_at  INTEGER NOT NULL,
+                    last_active INTEGER NOT NULL
+                );
+
+                CREATE TABLE conversation_turns (
+                    id             INTEGER PRIMARY KEY,
+                    task_id        INTEGER NOT NULL REFERENCES tasks(id),
+                    role           TEXT    NOT NULL,
+                    content        TEXT    NOT NULL,
+                    tool_summaries TEXT,
+                    created_at     INTEGER NOT NULL
+                );
+
+                CREATE TABLE notes (
+                    task_id  INTEGER NOT NULL REFERENCES tasks(id),
+                    note_id  TEXT    NOT NULL,
+                    content  TEXT    NOT NULL,
+                    position INTEGER NOT NULL,
+                    PRIMARY KEY (task_id, note_id)
+                );
+
+                CREATE TABLE open_files (
+                    task_id  INTEGER NOT NULL REFERENCES tasks(id),
+                    path     TEXT    NOT NULL,
+                    position INTEGER NOT NULL,
+                    locked   INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (task_id, path)
+                );
+                ",
+            )
+            .expect("create legacy schema");
+
+        connection
+            .execute(
+                "INSERT INTO tasks (id, name, created_at, last_active) VALUES (1, 'legacy', 1, 1)",
+                [],
+            )
+            .expect("insert task");
+        connection
+            .execute(
+                "INSERT INTO conversation_turns (task_id, role, content, created_at) VALUES (1, 'user', 'hello', 1)",
+                [],
+            )
+            .expect("insert turn");
+        connection
+            .execute(
+                "INSERT INTO notes (task_id, note_id, content, position) VALUES (1, 'target', 'keep', 0)",
+                [],
+            )
+            .expect("insert note");
+        connection
+            .execute(
+                "INSERT INTO open_files (task_id, path, position, locked) VALUES (1, 'src/main.rs', 0, 0)",
+                [],
+            )
+            .expect("insert open file");
+        drop(connection);
+
+        let storage = MaStorage::open(&workdir).expect("open migrated storage");
+        storage.delete_task(1).expect("delete legacy task");
+
+        assert!(storage.list_tasks().expect("list tasks").is_empty());
+        let verification = Connection::open(&db_path).expect("reopen db");
+        let turn_count: i64 = verification
+            .query_row("SELECT COUNT(*) FROM conversation_turns", [], |row| row.get(0))
+            .expect("count turns");
+        let note_count: i64 = verification
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .expect("count notes");
+        let open_file_count: i64 = verification
+            .query_row("SELECT COUNT(*) FROM open_files", [], |row| row.get(0))
+            .expect("count open files");
+        assert_eq!(turn_count, 0);
+        assert_eq!(note_count, 0);
+        assert_eq!(open_file_count, 0);
     }
 
     fn temp_workspace() -> PathBuf {
