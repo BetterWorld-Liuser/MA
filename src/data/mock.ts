@@ -1,0 +1,438 @@
+export type TaskItem = {
+  id: string;
+  name: string;
+  status: 'active' | 'running' | 'idle';
+  updatedAt: string;
+};
+
+export type ChatTool = {
+  label: string;
+  summary: string;
+};
+
+export type LiveToolItem = {
+  id: string;
+  label: string;
+  summary: string;
+  state: 'running' | 'success' | 'error';
+  preview?: string;
+};
+
+export type LiveTurn = {
+  turnId: string;
+  state: 'pending' | 'running' | 'streaming' | 'error';
+  statusLabel: string;
+  content: string;
+  tools: LiveToolItem[];
+};
+
+export type ChatMessage = {
+  role: 'user' | 'assistant';
+  author: string;
+  time: string;
+  content: string;
+  tools?: ChatTool[];
+};
+
+export type NoteItem = {
+  id: string;
+  content: string;
+};
+
+export type OpenFileItem = {
+  path: string;
+  time: string;
+  freshness: 'high' | 'medium' | 'low';
+  locked: boolean;
+};
+
+export type HintItem = {
+  source: string;
+  content: string;
+  timeLeft: string;
+  turnsLeft: string;
+};
+
+export type ContextUsage = {
+  percent: number;
+  current: string;
+  limit: string;
+  sections: Array<{
+    name: string;
+    size: string;
+  }>;
+};
+
+export type DebugRoundItem = {
+  iteration: number;
+  contextPreview: string;
+  providerRequestJson: string;
+  providerResponseRaw: string;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    argumentsJson: string;
+  }>;
+  toolResults: string[];
+};
+
+export type WorkspaceView = {
+  title: string;
+  tasks: TaskItem[];
+  activeTaskId: string;
+  chat: ChatMessage[];
+  notes: NoteItem[];
+  openFiles: OpenFileItem[];
+  hints: HintItem[];
+  contextUsage: ContextUsage;
+  debugRounds: DebugRoundItem[];
+  liveTurn?: LiveTurn;
+  workspacePath?: string;
+  databasePath?: string;
+};
+
+export type BackendWorkspaceSnapshot = {
+  workspace_path?: string;
+  database_path?: string;
+  tasks: Array<{
+    id: number;
+    name: string;
+    last_active: number;
+  }>;
+  active_task?: {
+    task: {
+      id: number;
+      name: string;
+    };
+    history: Array<{
+      role: 'System' | 'User' | 'Assistant' | 'Tool';
+      content: string;
+      timestamp: number;
+      tool_summaries: Array<{
+        name: string;
+        summary: string;
+      }>;
+    }>;
+    notes: Array<{
+      id: string;
+      content: string;
+    }>;
+    open_files: Array<{
+      path: string;
+      locked: boolean;
+      snapshot?: {
+        Available?: {
+          last_modified_at: number;
+        };
+        Deleted?: {
+          last_seen_at: number;
+        };
+        Moved?: {
+          last_seen_at: number;
+        };
+      } | null;
+    }>;
+    hints: Array<{
+      content: string;
+      expires_at?: number | null;
+      turns_remaining?: number | null;
+    }>;
+    runtime?: {
+      context_usage: {
+        used_percent: number;
+        used_bytes: number;
+        budget_bytes: number;
+        sections: Array<{
+          name: string;
+          bytes: number;
+        }>;
+      };
+    } | null;
+    debug_trace?: {
+      rounds: Array<{
+        iteration: number;
+        context_preview: string;
+        provider_request_json: string;
+        provider_response_raw: string;
+        tool_calls: Array<{
+          id: string;
+          name: string;
+          arguments_json: string;
+        }>;
+        tool_results: string[];
+      }>;
+    } | null;
+  } | null;
+};
+
+export type BackendAgentProgressEvent =
+  | {
+      kind: 'turn_started';
+      task_id: number;
+      turn_id: string;
+      user_message: string;
+    }
+  | {
+      kind: 'status';
+      task_id: number;
+      turn_id: string;
+      phase: 'building_context' | 'waiting_model' | 'running_tool' | 'streaming';
+      label: string;
+    }
+  | {
+      kind: 'tool_started';
+      task_id: number;
+      turn_id: string;
+      tool_call_id: string;
+      tool_name: string;
+      summary: string;
+    }
+  | {
+      kind: 'tool_finished';
+      task_id: number;
+      turn_id: string;
+      tool_call_id: string;
+      status: 'success' | 'error';
+      summary: string;
+      preview?: string | null;
+    }
+  | {
+      kind: 'reply_preview';
+      task_id: number;
+      turn_id: string;
+      message: string;
+    }
+  | {
+      kind: 'reply';
+      task_id: number;
+      turn_id: string;
+      task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
+      wait: boolean;
+    }
+  | {
+      kind: 'round_complete';
+      task_id: number;
+      turn_id: string;
+      task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
+    };
+
+export const mockWorkspace: WorkspaceView = {
+  title: '默认任务',
+  tasks: [
+    { id: 'task-1', name: '重构认证模块', status: 'active', updatedAt: '14:32' },
+    { id: 'task-2', name: '添加支付集成', status: 'idle', updatedAt: '11:08' },
+    { id: 'task-3', name: '修复登录 bug', status: 'running', updatedAt: '09:41' },
+  ] satisfies TaskItem[],
+  activeTaskId: 'task-1',
+  chat: [
+    {
+      role: 'user',
+      author: 'User',
+      time: '14:32',
+      content: '帮我把 auth 模块拆成更小的单元。',
+    },
+    {
+      role: 'assistant',
+      author: 'March',
+      time: '14:32',
+      content: '好的，我先看一下现有结构，然后把依赖边界切开。',
+      tools: [
+        { label: 'open_file', summary: 'src/auth.rs' },
+        { label: 'replace_lines', summary: '12-30' },
+        { label: 'reply', summary: '发送了用户可见消息' },
+      ],
+    },
+    {
+      role: 'assistant',
+      author: 'March',
+      time: '14:33',
+      content: '已完成，auth 模块现在拆成了三个文件，接口层更清晰了。',
+    },
+  ] satisfies ChatMessage[],
+  notes: [
+    { id: 'target', content: '当前目标：拆分 auth 模块' },
+    { id: 'plan', content: '1. 读现有结构 2. 拆接口层 3. 补测试' },
+  ] satisfies NoteItem[],
+  openFiles: [
+    { path: 'src/auth.rs', time: '14:32', freshness: 'high', locked: false },
+    { path: 'src/lib.rs', time: '14:28', freshness: 'high', locked: false },
+    { path: 'src/models.rs', time: '11:05', freshness: 'medium', locked: false },
+    { path: 'config/prod.toml', time: '09:11', freshness: 'low', locked: true },
+  ] satisfies OpenFileItem[],
+  hints: [
+    { source: 'Telegram', content: 'foo: 部署好了吗？', timeLeft: '4m32s', turnsLeft: '3轮' },
+    { source: 'CI', content: 'main 构建失败 exit 1', timeLeft: '12m08s', turnsLeft: '1轮' },
+  ] satisfies HintItem[],
+  contextUsage: {
+    percent: 42,
+    current: '10.2k',
+    limit: '24k',
+    sections: [
+      { name: '文件', size: '6.1k' },
+      { name: '笔记', size: '0.8k' },
+      { name: '提示', size: '0.1k' },
+      { name: '对话', size: '2.1k' },
+      { name: '系统', size: '1.2k' },
+    ],
+  } satisfies ContextUsage,
+  debugRounds: [
+    {
+      iteration: 1,
+      contextPreview: '# Open Files\nsrc/auth.rs\n\n# Recent Chat\nUser: 帮我把 auth 模块拆成更小的单元。',
+      providerRequestJson: '{\n  "model": "gpt-5",\n  "messages": [],\n  "tools": []\n}',
+      providerResponseRaw:
+        '{\n  "choices": [\n    {\n      "message": {\n        "tool_calls": [\n          {\n            "id": "call_1",\n            "function": {\n              "name": "open_file",\n              "arguments": "{\\"path\\":\\"src/auth.rs\\"}"\n            }\n          }\n        ]\n      }\n    }\n  ]\n}',
+      toolCalls: [
+        {
+          id: 'call_1',
+          name: 'open_file',
+          argumentsJson: '{"path":"src/auth.rs"}',
+        },
+      ],
+      toolResults: ['opened D:/playground/MA/src/auth.rs'],
+    },
+  ] satisfies DebugRoundItem[],
+};
+
+export function toWorkspaceView(snapshot: unknown): WorkspaceView {
+  const workspace = snapshot as BackendWorkspaceSnapshot;
+  const activeTask = workspace.active_task;
+  const activeTaskId = activeTask ? String(activeTask.task.id) : '';
+
+  return {
+    title: activeTask?.task.name ?? 'March',
+    workspacePath: workspace.workspace_path,
+    databasePath: workspace.database_path,
+    tasks: workspace.tasks.map((task) => ({
+      id: String(task.id),
+      name: task.name,
+      status: String(task.id) === activeTaskId ? 'active' : 'idle',
+      updatedAt: formatRelativeTime(task.last_active),
+    })),
+    activeTaskId,
+    chat: activeTask?.history.map((turn) => ({
+      role: turn.role === 'User' ? 'user' : 'assistant',
+      author: turn.role === 'User' ? 'User' : 'March',
+      time: formatTime(turn.timestamp),
+      content: turn.content,
+      tools: turn.tool_summaries.map((tool) => ({
+        label: tool.name,
+        summary: tool.summary,
+      })),
+    })) ?? [],
+    notes: activeTask?.notes ?? [],
+    openFiles: activeTask?.open_files.map((file) => ({
+      path: normalizePath(file.path),
+      time: formatOpenFileTime(file.snapshot),
+      freshness: file.locked ? 'low' : file.snapshot ? 'high' : 'medium',
+      locked: file.locked,
+    })) ?? [],
+    hints: activeTask?.hints.map((hint, index) => ({
+      source: `Hint ${index + 1}`,
+      content: hint.content,
+      timeLeft: formatHintTime(hint.expires_at),
+      turnsLeft: hint.turns_remaining ? `${hint.turns_remaining}轮` : '∞',
+    })) ?? [],
+    contextUsage: formatContextUsage(activeTask?.runtime?.context_usage),
+    debugRounds: activeTask?.debug_trace?.rounds.map((round) => ({
+      iteration: round.iteration,
+      contextPreview: round.context_preview,
+      providerRequestJson: round.provider_request_json,
+      providerResponseRaw: round.provider_response_raw,
+      toolCalls: round.tool_calls.map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.name,
+        argumentsJson: toolCall.arguments_json,
+      })),
+      toolResults: round.tool_results,
+    })) ?? [],
+  };
+}
+
+function formatTime(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatRelativeTime(timestamp: number) {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const diffSeconds = Math.max(0, nowSeconds - timestamp);
+  const minutes = Math.floor(diffSeconds / 60);
+
+  if (minutes < 1) {
+    return '刚刚';
+  }
+  if (minutes < 60) {
+    return `${minutes} 分`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} 小时`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days} 天`;
+}
+
+function normalizePath(path: string) {
+  return path.replaceAll('\\', '/');
+}
+
+function formatOpenFileTime(snapshot: BackendWorkspaceSnapshot['active_task'] extends infer T
+  ? T extends { open_files: Array<infer OpenFile> }
+    ? OpenFile extends { snapshot?: infer Snapshot }
+      ? Snapshot
+      : never
+    : never
+  : never) {
+  if (!snapshot) {
+    return 'untracked';
+  }
+
+  const entry = Object.values(snapshot)[0] as { last_modified_at?: number; last_seen_at?: number } | undefined;
+  const timestamp = entry?.last_modified_at ?? entry?.last_seen_at;
+  return timestamp ? formatTime(timestamp) : 'unknown';
+}
+
+function formatHintTime(expiresAt?: number | null) {
+  if (!expiresAt) {
+    return 'no ttl';
+  }
+
+  const seconds = Math.max(0, expiresAt - Math.floor(Date.now() / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m${String(remainder).padStart(2, '0')}s`;
+}
+
+function formatContextUsage(
+  usage?: BackendWorkspaceSnapshot['active_task'] extends infer T
+    ? T extends { runtime?: { context_usage: infer U } | null }
+      ? U
+      : never
+    : never,
+): ContextUsage {
+  if (!usage) {
+    return mockWorkspace.contextUsage;
+  }
+
+  return {
+    percent: usage.used_percent,
+    current: formatBytes(usage.used_bytes),
+    limit: formatBytes(usage.budget_bytes),
+    sections: usage.sections.map((section) => ({
+      name: section.name,
+      size: formatBytes(section.bytes),
+    })),
+  };
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1000) {
+    return `${(bytes / 1000).toFixed(1)}k`;
+  }
+  return `${bytes}`;
+}

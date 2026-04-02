@@ -1,0 +1,66 @@
+:root {
+  --ma-bg: #0a0a0a;
+  --ma-bg-secondary: #111111;
+  --ma-bg-tertiary: #1a1a1a;
+  --ma-bg-hover: #202020;
+  --ma-border: #2a2a2a;
+  --ma-border-focus: #444444;
+  --ma-text: #e8e8e8;
+  --ma-text-muted: #8a8a8a;
+  --ma-text-dim: #5a5a5a;
+  --ma-accent: #d4692a;
+  --ma-accent-hover: #e07a3a;
+  --ma-accent-dim: rgba(212, 105, 42, 0.15);
+  --ma-warning: #e6a817;
+  --ma-error: #e05252;
+  --ma-success: #4caf7d;
+  --ma-font-sans: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --ma-font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", "Cascadia Mono", "Cascadia Code",
+    Consolas, "SFMono-Regular", Menlo, Monaco, ui-monospace, monospace;
+  --ma-radius-sm: 4px;
+  --ma-radius-md: 6px;
+  --ma-radius-lg: 10px;
+
+  --color-bg: var(--ma-bg);
+  --color-bg-secondary: var(--ma-bg-secondary);
+  --color-bg-tertiary: var(--ma-bg-tertiary);
+  --color-bg-hover: var(--ma-bg-hover);
+  --color-border: var(--ma-border);
+  --color-border-focus: var(--ma-border-focus);
+  --color-text: var(--ma-text);
+  --color-text-muted: var(--ma-text-muted);
+  --color-text-dim: var(--ma-text-dim);
+  --color-accent: var(--ma-accent);
+  --color-accent-hover: var(--ma-accent-hover);
+  --color-accent-dim: var(--ma-accent-dim);
+  --color-warning: var(--ma-warning);
+  --color-error: var(--ma-error);
+  --color-success: var(--ma-success);
+  --font-sans: var(--ma-font-sans);
+  --font-mono: var(--ma-font-mono);
+  --radius-sm: var(--ma-radius-sm);
+  --radius-md: var(--ma-radius-md);
+  --radius-lg: var(--ma-radius-lg);
+
+  --background: var(--ma-bg);
+  --foreground: var(--ma-text);
+  --card: rgba(17, 17, 17, 0.96);
+  --card-foreground: var(--ma-text);
+  --popover: rgba(14, 14, 14, 0.98);
+  --popover-foreground: var(--ma-text);
+  --primary: var(--ma-accent);
+  --primary-foreground: #16110d;
+  --secondary: #151515;
+  --secondary-foreground: var(--ma-text);
+  --muted: #141414;
+  --muted-foreground: var(--ma-text-muted);
+  --accent: rgba(255, 255, 255, 0.04);
+  --accent-foreground: var(--ma-text);
+  --destructive: var(--ma-error);
+  --destructive-foreground: #fff1f1;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: rgba(212, 105, 42, 0.45);
+  --radius: 0.875rem;
+  --scrollbar-width: 4px;
+}

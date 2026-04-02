@@ -1,0 +1,18 @@
+[package]
+name = "ma-ui"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[lib]
+name = "ma_ui_lib"
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+anyhow = "1.0"
+dotenvy = "0.15"
+ma = { path = "../crates/ma-core" }
+tauri = { version = "2.0.0", features = [] }

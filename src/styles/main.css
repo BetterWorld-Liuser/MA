@@ -1,0 +1,545 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@theme {
+  --color-bg: var(--ma-bg);
+  --color-bg-secondary: var(--ma-bg-secondary);
+  --color-bg-tertiary: var(--ma-bg-tertiary);
+  --color-bg-hover: var(--ma-bg-hover);
+  --color-border: var(--ma-border);
+  --color-border-focus: var(--ma-border-focus);
+  --color-text: var(--ma-text);
+  --color-text-muted: var(--ma-text-muted);
+  --color-text-dim: var(--ma-text-dim);
+  --color-accent: var(--ma-accent);
+  --color-accent-hover: var(--ma-accent-hover);
+  --color-accent-dim: var(--ma-accent-dim);
+  --color-warning: var(--ma-warning);
+  --color-error: var(--ma-error);
+  --color-success: var(--ma-success);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: var(--ma-font-sans);
+  --font-mono: var(--ma-font-mono);
+
+  --radius-sm: var(--ma-radius-sm);
+  --radius-md: var(--ma-radius-md);
+  --radius-lg: var(--ma-radius-lg);
+  --radius-xl: calc(var(--radius) + 0.25rem);
+
+  --shadow-panel:
+    0 0 0 1px rgba(255, 255, 255, 0.04), 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@utility panel {
+  @apply min-h-0 bg-transparent;
+}
+
+@utility task-column-divider {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@utility context-column-divider {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@utility titlebar-button {
+  @apply inline-flex h-10 w-12 items-center justify-center border-l border-border text-text-muted transition hover:bg-bg-hover hover:text-text;
+}
+
+@utility titlebar-icon {
+  @apply h-[14px] w-[14px];
+}
+
+@utility titlebar-icon-close {
+  @apply h-4 w-4;
+}
+
+@utility titlebar-button-close {
+  @apply hover:border-[#c42b1c] hover:bg-[#c42b1c] hover:text-white;
+}
+
+@utility panel-header {
+  @apply px-3 py-2.5;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@utility pill {
+  @apply inline-flex items-center gap-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-text-muted transition hover:bg-bg-hover hover:text-text;
+}
+
+@utility pill-primary {
+  @apply border border-accent bg-transparent text-accent hover:border-accent hover:bg-accent-dim;
+}
+
+@utility pill-locked {
+  @apply border-border-focus text-text-dim;
+}
+
+@utility status-chip {
+  @apply inline-flex items-center rounded-full bg-bg-tertiary px-2 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-text-dim;
+}
+
+@utility status-chip-locked {
+  @apply bg-accent-dim text-accent;
+}
+
+@utility task-item {
+  @apply flex w-full items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-[13px] text-text-muted transition hover:bg-bg-secondary hover:text-text;
+}
+
+@utility task-item-active {
+  @apply bg-bg-hover text-text;
+}
+
+@utility task-item-meta {
+  @apply shrink-0 text-[12px] text-text-dim;
+}
+
+@utility task-item-delete {
+  @apply shrink-0 items-center justify-center rounded-md p-1 text-text-dim transition hover:bg-bg hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+@utility message-avatar {
+  @apply inline-flex h-7 w-7 items-center justify-center rounded-md bg-bg-secondary text-[11px] uppercase text-text-muted;
+}
+
+@utility chat-row {
+  @apply mb-3 flex items-start gap-2.5;
+}
+
+@utility chat-row-user {
+  @apply flex-row-reverse;
+}
+
+@utility chat-row-assistant {
+  @apply flex-row;
+}
+
+@utility message-stack {
+  @apply flex min-w-0 max-w-[85%] flex-col gap-1.5;
+}
+
+@utility message-meta {
+  @apply flex items-center gap-2 px-1;
+}
+
+@utility message-bubble {
+  @apply rounded-2xl px-4 py-2.5 text-[13px] leading-5;
+}
+
+@utility message-bubble-user {
+  @apply bg-bg-secondary;
+}
+
+@utility message-bubble-assistant {
+  @apply bg-bg-secondary;
+}
+
+@utility message-tools {
+  @apply mt-2 rounded-xl bg-bg-secondary px-3 py-2;
+}
+
+@utility live-status-row {
+  @apply flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-muted;
+}
+
+@utility live-status-dots {
+  @apply inline-flex items-center gap-1;
+
+  & span {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--color-accent);
+    opacity: 0.35;
+    animation: ma-live-pulse 1.2s infinite ease-in-out;
+  }
+
+  & span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  & span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+}
+
+@utility live-status-label {
+  @apply text-text-muted;
+}
+
+@utility live-tools {
+  @apply mt-3 space-y-1.5;
+}
+
+@utility live-tool-item {
+  @apply flex items-center gap-2 rounded-md px-1 py-0.5;
+}
+
+@utility live-tool-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-text-dim);
+  flex: 0 0 auto;
+}
+
+@utility live-tool-state-running {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 3px rgba(230, 168, 23, 0.1);
+}
+
+@utility live-tool-state-success {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(76, 175, 125, 0.1);
+}
+
+@utility live-tool-state-error {
+  background: var(--color-error);
+  box-shadow: 0 0 0 3px rgba(224, 82, 82, 0.1);
+}
+
+@utility live-tool-text {
+  @apply truncate font-mono text-[11px] text-text-dim;
+}
+
+@utility section-card {
+  @apply rounded-lg bg-transparent p-2.5;
+}
+
+@utility section-card-primary {
+  @apply rounded-lg bg-transparent px-3 py-2.5;
+  border-color: transparent;
+}
+
+@utility section-title {
+  @apply mb-2 text-[10px] uppercase tracking-[0.18em] text-text-dim;
+}
+
+@utility context-row {
+  @apply flex items-start justify-between gap-3 rounded-md px-3 py-2;
+}
+
+@utility context-row-quiet {
+  @apply flex items-start justify-between gap-3 rounded-md px-2 py-2 transition hover:bg-bg-secondary;
+}
+
+@utility compact-row {
+  @apply flex min-h-8 items-center gap-2 rounded-md px-2 py-1.5 transition hover:bg-bg-secondary;
+}
+
+@utility compact-empty {
+  @apply px-1 py-0.5 text-[11px] text-text-dim;
+}
+
+@utility context-icon-button {
+  @apply inline-flex h-5 w-5 items-center justify-center rounded text-text-dim transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-30;
+}
+
+@utility open-file-glyph {
+  @apply inline-flex h-4 w-4 items-center justify-center border-0 bg-transparent p-0 text-text-dim transition duration-150 hover:text-text disabled:cursor-not-allowed disabled:opacity-30;
+}
+
+@utility open-file-glyph-locked {
+  @apply text-accent hover:text-accent-hover;
+}
+
+@utility open-file-glyph-unlocked {
+  @apply text-text-dim hover:text-text-muted;
+}
+
+@utility context-divider {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@utility empty-state {
+  @apply rounded-lg bg-transparent px-4 py-6 text-center;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+@utility debug-tab-row {
+  @apply flex flex-wrap gap-1 rounded-md bg-bg-secondary p-1;
+}
+
+@utility debug-tab {
+  @apply rounded-md px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-dim transition hover:bg-bg-hover hover:text-text;
+}
+
+@utility debug-tab-active {
+  @apply bg-bg-hover text-text;
+}
+
+@utility debug-panel {
+  @apply rounded-md bg-transparent p-2;
+}
+
+@utility debug-round-summary {
+  @apply rounded-md bg-bg-secondary px-2 py-1.5;
+}
+
+@utility debug-block {
+  @apply mb-2 last:mb-0;
+}
+
+@utility debug-block-header {
+  @apply mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+}
+
+@utility debug-subtitle {
+  @apply mb-1 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+}
+
+@utility debug-inline-card {
+  @apply rounded-md bg-bg-secondary p-2;
+}
+
+@utility debug-copy-button {
+  @apply inline-flex h-5 w-5 items-center justify-center rounded text-text-dim transition hover:bg-bg-hover hover:text-text;
+}
+
+@utility debug-pre {
+  @apply max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md bg-bg-secondary p-2 font-mono text-[11px] leading-5 text-text;
+}
+
+@utility debug-pre-inline {
+  @apply max-h-40;
+}
+
+@utility debug-pre-modal {
+  @apply h-full min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-bg-secondary p-2.5 font-mono text-[12px] leading-6 text-text;
+}
+
+@utility app-button {
+  @apply inline-flex min-h-9 items-center justify-center rounded-lg border px-3.5 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility app-button-primary {
+  background: var(--color-accent);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #16110d;
+
+  &:hover {
+    background: var(--color-accent-hover);
+  }
+}
+
+@utility app-button-secondary {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--color-text);
+
+  &:hover {
+    background: var(--color-bg-hover);
+  }
+}
+
+@utility app-button-danger {
+  background: rgba(224, 82, 82, 0.16);
+  border-color: rgba(224, 82, 82, 0.25);
+  color: #ffb2b2;
+
+  &:hover {
+    background: rgba(224, 82, 82, 0.24);
+  }
+}
+
+@utility app-input {
+  @apply w-full rounded-xl border bg-bg-secondary px-3 py-2 text-[13px] text-text outline-hidden transition;
+  border-color: rgba(255, 255, 255, 0.08);
+
+  &::placeholder {
+    color: var(--color-text-dim);
+  }
+
+  &:focus {
+    border-color: rgba(212, 105, 42, 0.45);
+    box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+  }
+}
+
+@utility app-textarea {
+  @apply w-full rounded-xl border bg-bg-secondary px-3 py-2 text-[13px] text-text outline-hidden transition;
+  border-color: rgba(255, 255, 255, 0.08);
+
+  &::placeholder {
+    color: var(--color-text-dim);
+  }
+
+  &:focus {
+    border-color: rgba(212, 105, 42, 0.45);
+    box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+  }
+  @apply min-h-28 resize-y leading-6;
+}
+
+@utility dialog-backdrop {
+  @apply fixed inset-0 z-50 flex items-center justify-center px-4 py-8;
+  background:
+    radial-gradient(circle at top, rgba(212, 105, 42, 0.08), transparent 32%),
+    rgba(3, 3, 3, 0.7);
+  backdrop-filter: blur(14px);
+}
+
+@utility dialog-panel {
+  width: min(560px, 100%);
+  @apply rounded-[22px] border;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.035),
+      rgba(255, 255, 255, 0.015)
+    ),
+    rgba(10, 10, 10, 0.94);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 28px 90px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+@utility dialog-header {
+  @apply flex items-start gap-3 px-5 pb-3 pt-5;
+}
+
+@utility dialog-title {
+  @apply text-[18px] font-semibold tracking-[-0.01em] text-text;
+}
+
+@utility dialog-description {
+  @apply mt-1 text-[12px] leading-5 text-text-muted;
+}
+
+@utility dialog-close {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+@utility dialog-body {
+  @apply space-y-4 px-5 pb-4;
+}
+
+@utility dialog-actions {
+  @apply flex items-center justify-end gap-2 border-t px-5 py-4;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+@utility dialog-field {
+  @apply space-y-1.5;
+}
+
+@utility dialog-label {
+  @apply text-[10px] uppercase tracking-[0.16em] text-text-dim;
+}
+
+@utility dialog-hint {
+  @apply text-[11px] leading-5 text-text-dim;
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  html {
+    color-scheme: dark;
+    background:
+      radial-gradient(circle at top left, rgba(212, 105, 42, 0.13), transparent 28%),
+      radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.04), transparent 30%),
+      var(--color-bg);
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background: transparent;
+    color: var(--color-text);
+    overflow: hidden;
+    cursor: default;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  button,
+  summary,
+  a,
+  [role='button'] {
+    cursor: pointer;
+  }
+
+  input,
+  textarea,
+  [contenteditable='true'] {
+    cursor: text;
+  }
+
+  ::selection {
+    background: var(--color-accent-dim);
+    color: var(--color-text);
+  }
+
+  ::-webkit-scrollbar {
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@keyframes ma-live-pulse {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+
+  40% {
+    transform: translateY(-1px);
+    opacity: 1;
+  }
+}
