@@ -35,7 +35,7 @@ AI 看截图理解页面，看坐标列表决定点哪里，不传完整 DOM。
 google-chrome --remote-debugging-port=9222
 ```
 
-连上后 Ma 可以读取当前页面 DOM、截图，模拟点击输入滚动，完整保留用户的 session 和 cookie。
+连上后 March 可以读取当前页面 DOM、截图，模拟点击输入滚动，完整保留用户的 session 和 cookie。
 
 ---
 
