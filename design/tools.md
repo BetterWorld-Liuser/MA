@@ -111,6 +111,25 @@ reply {
 
 **AI 运行中用户发新消息**：如果 AI 尚未 `reply(wait=true)`，用户发来的新消息暂存。下一轮构建上下文时，新消息会被刷新到 `recent_chat`，AI 自然感知到。Ma 不打断当前正在进行的 API 请求，等它返回后再处理。
 
+### 轮内消息历史与轮间清理
+
+**两个层次的"历史"需要区分清楚：**
+
+- **轮内消息历史**：从用户发消息到 AI 调用 `reply(wait=true)` 之间，agent loop 产生的所有 API 交互——中间 assistant 消息、tool_calls、tool_results——构成本轮的消息历史，每次 API 请求都带上完整的轮内历史以维持连贯性。
+- **recent_chat**（跨轮）：只记录外层对话：用户消息 + AI 通过 `reply` 发出的内容，最近 3 轮。轮内的中间过程不进入 `recent_chat`。
+
+**`finish_reason: stop` + `message.content` 的处理**：如果 API 返回了文本内容但没有工具调用，这是 AI 的中间思考过程，**不是向用户的回复**。Ma 的处理方式：
+
+1. 将该 assistant 消息追加到轮内消息历史
+2. 继续发起下一次 API 请求，AI 从这个思考状态接着往下走
+3. 不展示给用户，不终止 agent loop
+
+只有 `reply` 工具调用才是 AI 与用户交互的合法出口，`finish_reason: stop` 不是终止信号。
+
+**`reply(wait=true)` 调用后的清理**：轮内消息历史整块丢弃——AI 的中间思考、工具调用记录、执行结果全部不保留。`recent_chat` 追加一条 `{ user: 用户消息, ai: reply 的内容 }`，下一轮从重新构建的 system prompt 上下文 + recent_chat 启动。
+
+**轮内历史不做滚动窗口**：轮内连贯性不可截断——AI 刚 `open_file` 之后执行的 `replace_lines` 必须能看到之前的上下文。如果轮内 token 用量过高，上下文压力机制会提示 AI 主动收缩 `open_files` 和 Notes，但轮内历史本身不裁剪。轮内历史天然有生命周期：`reply(wait=true)` 一触发即整块丢弃，不会跨轮累积。
+
 ---
 
 ### 4. Notes 工具：AI 的跨轮工作记忆
