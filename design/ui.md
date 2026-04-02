@@ -1,69 +1,39 @@
 # UI 设计
 
-> 基于 Tauri 实现，Rust 后端 + Web 前端。风格参考 Claude Code 官网：深色、等宽字体、极简。
+> 基于 Tauri 实现，Rust 后端 + Web 前端。风格参考 Claude Code 官网：深色、极简，但桌面 UI 文字使用无衬线字体，代码/路径再局部使用等宽字体。整体密度偏桌面应用而非营销页，避免过高标题栏、超大按钮和过度装饰。
+
+当前实现进度见 → [Working/ui-status.md](Working/ui-status.md)
 
 ---
 
-## 技术选型
+## 文档拆分
 
-| 层 | 技术 |
-|----|------|
-| 壳 | Tauri（Rust 后端，原生窗口） |
-| 前端框架 | Vue 3 |
-| 样式 | Tailwind CSS + CSS Variables |
+UI 设计拆为“总览 + 子系统文档”，避免把布局、聊天交互、上下文面板和状态反馈混在一份长文里：
 
-Rust 后端通过 Tauri command / event 与前端通信：
-- **command**：前端主动调用后端（发送消息、open_file、lock 文件等）
-- **event**：后端主动推送到前端（AI 流式输出、watcher 变更、上下文用量更新等）
+- [ui-shell.md](ui-shell.md)：应用壳层、视觉风格、窗口结构、三栏布局、左右侧面板、设置页
+- [ui-chat.md](ui-chat.md)：聊天区、消息流、等待态、工具调用展示、输入框交互
+- [ui-events.md](ui-events.md)：聊天运行事件模型、前后端状态边界、右栏联动草案
+
+`ui.md` 只保留总览和文档边界；具体实现细节写入子文档，避免多个地方重复定义同一交互。
 
 ---
 
-## 视觉风格
+## UI 目标
 
-参考 Claude Code 官网风格：深色背景、等宽字体、低饱和度边框、橙色 accent。
+UI 必须服务于 Ma 的核心设计，而不是单独演化出一套“看起来像 AI 工具”的界面风格：
 
-颜色通过 CSS 变量定义在 `:root`，Tailwind theme 直接引用这些变量——两层分离的好处是：调色时只改 CSS 变量，Tailwind 工具类自动生效，无需改 config。
+- 聊天区负责承载完整用户视图，让用户持续看到完整对话与当前进展
+- 右侧面板负责投影 AI 下一轮真正会收到的上下文，让“上下文管理”变成可见、可操作对象
+- 等待态、工具反馈、文件变化提示都应基于真实 agent 事件，而不是纯装饰性动画
 
-### CSS 变量（`src/styles/vars.css`）
+这延续了 [`DESIGN.md`](DESIGN.md) 中“用户视图 vs AI 上下文分离”的原则：
 
-```css
-:root {
-  /* 背景 */
-  --color-bg:           #0a0a0a;
-  --color-bg-secondary: #111111;
-  --color-bg-tertiary:  #1a1a1a;
-  --color-bg-hover:     #222222;
-
-  /* 边框 */
-  --color-border:       #2a2a2a;
-  --color-border-focus: #444444;
-
-  /* 文字 */
-  --color-text:         #e8e8e8;
-  --color-text-muted:   #888888;
-  --color-text-dim:     #555555;
-
-  /* Accent（橙色，参考 Anthropic 品牌色） */
-  --color-accent:       #d4692a;
-  --color-accent-hover: #e07a3a;
-  --color-accent-dim:   rgba(212, 105, 42, 0.15);
-
-  /* 语义色 */
-  --color-warning: #e6a817;
-  --color-error:   #e05252;
-  --color-success: #4caf7d;
-
-  /* 字体 */
-  --font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
-
-  /* 圆角 */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-
-  /* 滚动条 */
-  --scrollbar-width: 4px;
-}
+```text
+用户看到的                    AI 收到的
+─────────────────            ─────────────────
+完整聊天记录                  精简后的上下文
+完整执行过程提示              当前轮真实工作状态
+工具调用摘要                  当轮工具结果
 ```
 
 ### Tailwind 配置（`tailwind.config.js`）
@@ -246,8 +216,12 @@ plan     1. 读现有结构 2. 拆接口层     [编辑] [×]
 
 ## 设计原则
 
-**全等宽字体**：代码和 UI 文字统一用 `--font-mono`，不混用衬线字体。
+**界面与代码字体分层**：UI 文字默认使用无衬线字体，代码、路径、命令等技术内容使用等宽字体。
 
-**透明但不强迫**：右侧面板默认展开，可折叠，不感兴趣的用户只看聊天区。
+**状态与操作分离**：如果一个元素只是状态提示，就不要把它做成看起来像按钮的样子。
 
-**操作即指令**：右侧面板的操作直接修改 AI 下一轮收到的上下文，等价于用自然语言告诉 AI，但更精确。
+**透明但不强迫**：用户应该能看到 AI 正在做什么，但默认看到的是摘要而不是调试日志全文。
+
+**操作即指令**：右侧面板的编辑、删除、锁定等操作直接影响 AI 下一轮收到的上下文。
+
+**等待必须可感知**：用户发送消息后，界面应持续反馈“当前轮正在推进”，但只展示真实事件，不伪造思考痕迹。

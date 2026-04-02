@@ -27,3 +27,5 @@ target
 .env
 .env.local
 .claude
+dist
+node_modules
