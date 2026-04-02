@@ -43,13 +43,9 @@
           ref="chatPaneRef"
           :chat="workspace.chat"
           :live-turn="workspace.liveTurn"
-          :task-id="activeTaskIdNumber"
-          :selected-model="workspace.selectedModel"
           :disabled="!activeTaskIdNumber"
-          :sending="hasPendingSend"
+          :sending="sending"
           @send="sendMessage"
-          @open-files="openFilesFromComposer"
-          @set-model="setTaskModel"
         />
         <ContextPanel
           :notes="workspace.notes"
@@ -163,12 +159,12 @@ import {
 
 const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
 const busy = ref(false);
-const sendingTaskId = ref<number | null>(null);
+const sending = ref(false);
 const errorMessage = ref('');
 const isMaximized = ref(false);
 const appWindow = getCurrentWindow();
 let unlistenAgentProgress: UnlistenFn | null = null;
-const liveTurns = ref<Record<number, LiveTurn>>({});
+const liveTurn = ref<LiveTurn | null>(null);
 type FocusableField = { focus: () => void; select: () => void };
 type ChatPaneHandle = { focusComposer: () => void };
 const chatPaneRef = ref<ChatPaneHandle | null>(null);
@@ -186,14 +182,10 @@ const confirmDialogLabel = ref('删除');
 const confirmDialogAction = ref<(() => Promise<void>) | null>(null);
 
 const workspace = computed<WorkspaceView>(() => {
-  const activeTaskId =
-    snapshot.value?.active_task?.task.id ??
-    (snapshot.value?.tasks[0]?.id ?? null);
-
   if (snapshot.value) {
     return {
       ...toWorkspaceView(snapshot.value),
-      liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
+      liveTurn: liveTurn.value ?? undefined,
     };
   }
   return mockWorkspace;
@@ -207,7 +199,6 @@ const activeTaskIdNumber = computed(() => {
 const appTitle = 'March';
 
 const currentTaskTitle = computed(() => workspace.value.title || appTitle);
-const hasPendingSend = computed(() => sendingTaskId.value !== null);
 
 onMounted(async () => {
   isMaximized.value = await appWindow.isMaximized();
@@ -278,73 +269,46 @@ async function deleteTask(taskId: string) {
           input: { taskId: Number(taskId) },
         });
       });
-      clearLiveTurn(Number(taskId));
-      if (sendingTaskId.value === Number(taskId)) {
-        sendingTaskId.value = null;
-      }
       closeConfirmDialog();
     },
   });
 }
 
-async function sendMessage(payload: { content: string; directories: string[] }) {
-  if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
+async function sendMessage(content: string) {
+  if (!activeTaskIdNumber.value || sending.value) {
     return;
   }
 
-  const taskId = activeTaskIdNumber.value;
-  const content = augmentComposerMessage(payload);
-
   appendOptimisticUserMessage(content);
-  upsertLiveTurn(taskId, {
+  liveTurn.value = {
     turnId: `pending-${Date.now()}`,
     state: 'pending',
     statusLabel: '已发送，正在准备',
     content: '',
     tools: [],
-  });
-  sendingTaskId.value = taskId;
+  };
+  sending.value = true;
   try {
-    const nextSnapshot = await invoke<BackendWorkspaceSnapshot>('send_message', {
+    snapshot.value = await invoke<BackendWorkspaceSnapshot>('send_message', {
       input: {
-        taskId,
+        taskId: activeTaskIdNumber.value,
         content,
       },
     });
-    clearLiveTurn(taskId);
-    if (snapshot.value?.active_task?.task.id === taskId) {
-      snapshot.value = nextSnapshot;
-    } else if (snapshot.value) {
-      snapshot.value = {
-        ...snapshot.value,
-        tasks: nextSnapshot.tasks,
-      };
-    }
+    liveTurn.value = null;
     errorMessage.value = '';
   } catch (error) {
-    const currentLiveTurn = liveTurns.value[taskId];
-    if (currentLiveTurn) {
-      upsertLiveTurn(taskId, {
-        ...currentLiveTurn,
+    if (liveTurn.value) {
+      liveTurn.value = {
+        ...liveTurn.value,
         state: 'error',
         statusLabel: '本轮执行失败',
-      });
+      };
     }
     errorMessage.value = humanizeError(error);
   } finally {
-    if (sendingTaskId.value === taskId) {
-      sendingTaskId.value = null;
-    }
+    sending.value = false;
   }
-}
-
-function augmentComposerMessage(payload: { content: string; directories: string[] }) {
-  const base = payload.content.trim();
-  if (!payload.directories.length) {
-    return base;
-  }
-
-  return `${base}\n\n[目录引用]\n${payload.directories.map((path) => `- ${path}`).join('\n')}`;
 }
 
 function appendOptimisticUserMessage(content: string) {
@@ -370,36 +334,43 @@ function appendOptimisticUserMessage(content: string) {
 }
 
 function applyAgentProgress(event: BackendAgentProgressEvent) {
+  if (!snapshot.value?.active_task) {
+    return;
+  }
+  if (!activeTaskIdNumber.value || event.task_id !== activeTaskIdNumber.value) {
+    return;
+  }
+
   switch (event.kind) {
     case 'turn_started':
-      upsertLiveTurn(event.task_id, {
+      liveTurn.value = {
         turnId: event.turn_id,
         state: 'pending',
         statusLabel: '正在整理上下文',
         content: '',
         tools: [],
-      });
+      };
       return;
     case 'status':
-      ensureLiveTurn(event.task_id, event.turn_id);
-      if (!liveTurns.value[event.task_id]) {
+      ensureLiveTurn(event.turn_id);
+      if (!liveTurn.value) {
         return;
       }
-      upsertLiveTurn(event.task_id, {
-        ...liveTurns.value[event.task_id],
-        state: liveTurns.value[event.task_id].content ? liveTurns.value[event.task_id].state : 'running',
+      liveTurn.value = {
+        ...liveTurn.value,
+        state: liveTurn.value.content ? liveTurn.value.state : 'running',
         statusLabel: event.label,
-      });
+      };
       return;
     case 'tool_started':
-      ensureLiveTurn(event.task_id, event.turn_id);
-      if (!liveTurns.value[event.task_id]) {
+      ensureLiveTurn(event.turn_id);
+      if (!liveTurn.value) {
         return;
       }
-      upsertLiveTurn(event.task_id, {
-        ...liveTurns.value[event.task_id],
+      liveTurn.value = {
+        ...liveTurn.value,
         tools: [
-          ...liveTurns.value[event.task_id].tools,
+          ...liveTurn.value.tools,
           {
             id: event.tool_call_id,
             label: event.tool_name,
@@ -407,16 +378,16 @@ function applyAgentProgress(event: BackendAgentProgressEvent) {
             state: 'running',
           },
         ],
-      });
+      };
       return;
     case 'tool_finished':
-      ensureLiveTurn(event.task_id, event.turn_id);
-      if (!liveTurns.value[event.task_id]) {
+      ensureLiveTurn(event.turn_id);
+      if (!liveTurn.value) {
         return;
       }
-      upsertLiveTurn(event.task_id, {
-        ...liveTurns.value[event.task_id],
-        tools: liveTurns.value[event.task_id].tools.map((tool) =>
+      liveTurn.value = {
+        ...liveTurn.value,
+        tools: liveTurn.value.tools.map((tool) =>
           tool.id === event.tool_call_id
             ? {
                 ...tool,
@@ -426,88 +397,50 @@ function applyAgentProgress(event: BackendAgentProgressEvent) {
               }
             : tool,
         ),
-      });
+      };
       return;
     case 'reply_preview':
-      ensureLiveTurn(event.task_id, event.turn_id);
-      if (!liveTurns.value[event.task_id]) {
+      ensureLiveTurn(event.turn_id);
+      if (!liveTurn.value) {
         return;
       }
-      upsertLiveTurn(event.task_id, {
-        ...liveTurns.value[event.task_id],
+      liveTurn.value = {
+        ...liveTurn.value,
         state: 'streaming',
         statusLabel: '正在生成回复',
         content: event.message,
-      });
+      };
       return;
     case 'reply':
-      if (snapshot.value?.active_task?.task.id === event.task_id) {
-        snapshot.value = {
-          ...snapshot.value,
-          active_task: event.task,
-        };
-      }
+      snapshot.value = {
+        ...snapshot.value,
+        active_task: event.task,
+      };
       if (event.wait) {
-        clearLiveTurn(event.task_id);
+        liveTurn.value = null;
       }
       return;
     case 'round_complete':
-      if (snapshot.value?.active_task?.task.id === event.task_id) {
-        snapshot.value = {
-          ...snapshot.value,
-          active_task: event.task,
-        };
-      }
-      return;
-    case 'turn_failed':
-      ensureLiveTurn(event.task_id, event.turn_id);
-      if (!liveTurns.value[event.task_id]) {
-        return;
-      }
-      upsertLiveTurn(event.task_id, {
-        ...liveTurns.value[event.task_id],
-        state: 'error',
-        statusLabel: '本轮执行失败',
-      });
-      if (sendingTaskId.value === event.task_id) {
-        sendingTaskId.value = null;
-      }
-      if (snapshot.value?.active_task?.task.id === event.task_id) {
-        errorMessage.value = event.message;
-      }
+      snapshot.value = {
+        ...snapshot.value,
+        active_task: event.task,
+      };
       return;
   }
 }
 
-function ensureLiveTurn(taskId: number, turnId: string) {
-  if (liveTurns.value[taskId]?.turnId === turnId) {
+function ensureLiveTurn(turnId: string) {
+  if (liveTurn.value?.turnId === turnId) {
     return;
   }
 
-  upsertLiveTurn(taskId, {
+  liveTurn.value = {
     turnId,
     state: 'running',
     statusLabel: '正在处理',
     content: '',
     tools: [],
-  });
-}
-
-function upsertLiveTurn(taskId: number, turn: LiveTurn) {
-  liveTurns.value = {
-    ...liveTurns.value,
-    [taskId]: turn,
   };
-}
-
-function clearLiveTurn(taskId: number) {
-  if (!(taskId in liveTurns.value)) {
-    return;
-  }
-
-  const nextTurns = { ...liveTurns.value };
-  delete nextTurns[taskId];
-  liveTurns.value = nextTurns;
 }
 
 async function addNote() {
@@ -678,36 +611,6 @@ async function closeOpenFile(path: string) {
       input: {
         taskId: activeTaskIdNumber.value,
         path,
-      },
-    });
-  });
-}
-
-async function openFilesFromComposer(paths: string[]) {
-  if (!activeTaskIdNumber.value || !paths.length) {
-    return;
-  }
-
-  await runWorkspaceAction(async () => {
-    snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
-      input: {
-        taskId: activeTaskIdNumber.value,
-        paths,
-      },
-    });
-  });
-}
-
-async function setTaskModel(model: string) {
-  if (!activeTaskIdNumber.value || busy.value) {
-    return;
-  }
-
-  await runWorkspaceAction(async () => {
-    snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_model', {
-      input: {
-        taskId: activeTaskIdNumber.value,
-        model,
       },
     });
   });

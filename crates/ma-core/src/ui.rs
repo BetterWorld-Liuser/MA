@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
@@ -6,13 +7,14 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{
-    AgentConfig, AgentProgressEvent, AgentSession, AgentStatusPhase, AgentToolStatus, DebugRound,
-    DebugToolCall,
+    AgentConfig, AgentProgressEvent, AgentSession, AgentStatusPhase, AgentToolStatus,
+    DEFAULT_CONTEXT_WINDOW_TOKENS, DebugRound, DebugToolCall,
 };
 use crate::context::{
     ContextPressure, ConversationHistory, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role,
     SystemStatus, ToolSummary,
 };
+use crate::model_capabilities::get_model_capabilities;
 use crate::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig, fallback_task_title};
 use crate::storage::{
     PersistedOpenFile, PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource,
@@ -45,6 +47,28 @@ pub struct UiDeleteTaskRequest {
 pub struct UiSendMessageRequest {
     pub task_id: Option<i64>,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiOpenFilesRequest {
+    pub task_id: Option<i64>,
+    pub paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiSetTaskModelRequest {
+    pub task_id: Option<i64>,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiSearchWorkspaceEntriesRequest {
+    pub query: String,
+    pub kind: Option<UiWorkspaceEntryKind>,
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,8 +117,29 @@ pub struct UiTaskSummary {
     pub name: String,
     pub title_source: String,
     pub title_locked: bool,
+    pub selected_model: Option<String>,
     pub created_at: i64,
     pub last_active: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiProviderModelsView {
+    pub current_model: String,
+    pub available_models: Vec<String>,
+    pub provider_cache_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiWorkspaceEntryKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiWorkspaceEntryView {
+    pub path: String,
+    pub kind: UiWorkspaceEntryKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +230,13 @@ pub enum UiAgentProgressEvent {
         turn_id: String,
         task: UiTaskSnapshot,
     },
+    TurnFailed {
+        task_id: i64,
+        turn_id: String,
+        stage: UiAgentFailureStage,
+        message: String,
+        retryable: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +253,15 @@ pub enum UiAgentStatusPhase {
 pub enum UiAgentToolStatus {
     Success,
     Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAgentFailureStage {
+    Context,
+    Tool,
+    Provider,
+    Internal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,8 +371,8 @@ pub struct UiContextPressureView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiContextUsageView {
-    pub used_bytes: usize,
-    pub budget_bytes: usize,
+    pub used_tokens: usize,
+    pub budget_tokens: usize,
     pub used_percent: u8,
     pub sections: Vec<UiContextUsageSectionView>,
 }
@@ -319,7 +380,7 @@ pub struct UiContextUsageView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiContextUsageSectionView {
     pub name: String,
-    pub bytes: usize,
+    pub tokens: usize,
 }
 
 pub struct UiAppBackend {
@@ -415,6 +476,14 @@ impl UiAppBackend {
         self.save_session(task_id, &session)
     }
 
+    pub fn open_files(&mut self, task_id: i64, paths: Vec<PathBuf>) -> Result<()> {
+        let mut session = self.load_session(task_id)?;
+        for path in paths {
+            session.open_file(path)?;
+        }
+        self.save_session(task_id, &session)
+    }
+
     pub fn workspace_snapshot(
         &mut self,
         active_task_id: Option<i64>,
@@ -427,10 +496,12 @@ impl UiAppBackend {
             .map(UiTaskSummary::from)
             .collect::<Vec<_>>();
         let persisted = self.storage.load_task(active_task_id)?;
+        let context_budget_tokens =
+            resolve_context_window_fallback(persisted.task.selected_model.as_deref());
         let runtime = self
             .load_session(active_task_id)
             .ok()
-            .map(|session| session.ui_runtime_snapshot());
+            .map(|session| session.ui_runtime_snapshot(context_budget_tokens));
         let active_task = Some({
             let snapshot = UiTaskSnapshot::from_persisted(persisted);
             if let Some(runtime) = runtime {
@@ -486,7 +557,14 @@ impl UiAppBackend {
 
         let persisted_before = self.storage.load_task(task_id)?;
         let should_auto_title = should_auto_title(&persisted_before, content);
-        let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::from_env()?);
+        let provider_config = provider_config_for_task(&persisted_before.task)?;
+        let provider = OpenAiCompatibleClient::new(provider_config.clone());
+        let context_budget_tokens =
+            resolve_context_window_with_provider(&provider, &provider_config.model)
+                .await
+                .unwrap_or_else(|| {
+                    resolve_context_window_fallback(Some(provider_config.model.as_str()))
+                });
         let mut session = self.load_session(task_id)?;
         let turn_id = format!(
             "turn-{}-{}",
@@ -556,6 +634,7 @@ impl UiAppBackend {
                             progress_task.clone(),
                             session,
                             &progress_rounds,
+                            context_budget_tokens,
                         )?;
                         on_progress(UiAgentProgressEvent::Reply {
                             task_id,
@@ -570,6 +649,7 @@ impl UiAppBackend {
                             progress_task.clone(),
                             session,
                             &progress_rounds,
+                            context_budget_tokens,
                         )?;
                         on_progress(UiAgentProgressEvent::RoundComplete {
                             task_id,
@@ -580,8 +660,20 @@ impl UiAppBackend {
                 }
                 Ok(())
             })
-            .await?;
-        let runtime = session.ui_runtime_snapshot();
+            .await;
+        if let Err(error) = &result {
+            self.save_session(task_id, &session)?;
+            let (stage, retryable) = classify_turn_failure(error);
+            on_progress(UiAgentProgressEvent::TurnFailed {
+                task_id,
+                turn_id: turn_id.clone(),
+                stage,
+                message: error.to_string(),
+                retryable,
+            })?;
+        }
+        let result = result?;
+        let runtime = session.ui_runtime_snapshot(context_budget_tokens);
         self.save_session(task_id, &session)?;
         if should_auto_title {
             let suggested_title = provider
@@ -607,6 +699,7 @@ impl UiAppBackend {
         task: TaskRecord,
         session: &AgentSession,
         debug_rounds: &[DebugRound],
+        context_budget_tokens: usize,
     ) -> Result<UiTaskSnapshot> {
         let PersistedTaskState {
             history,
@@ -615,7 +708,7 @@ impl UiAppBackend {
             hints,
             ..
         } = session.persisted_state();
-        let runtime = session.ui_runtime_snapshot();
+        let runtime = session.ui_runtime_snapshot(context_budget_tokens);
 
         Ok(UiTaskSnapshot::from_persisted(PersistedTask {
             task,
@@ -721,6 +814,98 @@ impl UiAppBackend {
         self.close_open_file(task_id, request.path)?;
         self.workspace_snapshot(Some(task_id))
     }
+
+    pub fn handle_open_files(
+        &mut self,
+        request: UiOpenFilesRequest,
+    ) -> Result<UiWorkspaceSnapshot> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        self.open_files(task_id, request.paths)?;
+        self.workspace_snapshot(Some(task_id))
+    }
+
+    pub fn selected_model_for_task(&self, task_id: Option<i64>) -> Result<Option<String>> {
+        Ok(task_id
+            .and_then(|id| self.storage.load_task(id).ok())
+            .and_then(|task| task.task.selected_model))
+    }
+
+    pub fn handle_set_task_model(
+        &mut self,
+        request: UiSetTaskModelRequest,
+    ) -> Result<UiWorkspaceSnapshot> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        let model = request.model.trim();
+        if model.is_empty() {
+            bail!("model cannot be empty");
+        }
+        self.storage
+            .update_task_model(task_id, Some(model.to_string()))?;
+        self.workspace_snapshot(Some(task_id))
+    }
+
+    pub fn search_workspace_entries(
+        &self,
+        request: UiSearchWorkspaceEntriesRequest,
+    ) -> Result<Vec<UiWorkspaceEntryView>> {
+        let query = request.query.trim().to_lowercase();
+        let limit = request.limit.unwrap_or(12).clamp(1, 50);
+        let mut files = git_visible_files(&self.workspace_path)?;
+        files.sort();
+        files.dedup();
+
+        let mut directories = files
+            .iter()
+            .flat_map(|path| collect_parent_directories(path))
+            .collect::<Vec<_>>();
+        directories.sort();
+        directories.dedup();
+
+        let entries = match request.kind {
+            Some(UiWorkspaceEntryKind::File) => files
+                .into_iter()
+                .map(|path| UiWorkspaceEntryView {
+                    path,
+                    kind: UiWorkspaceEntryKind::File,
+                })
+                .collect::<Vec<_>>(),
+            Some(UiWorkspaceEntryKind::Directory) => directories
+                .into_iter()
+                .map(|path| UiWorkspaceEntryView {
+                    path,
+                    kind: UiWorkspaceEntryKind::Directory,
+                })
+                .collect::<Vec<_>>(),
+            None => {
+                let mut combined = files
+                    .into_iter()
+                    .map(|path| UiWorkspaceEntryView {
+                        path,
+                        kind: UiWorkspaceEntryKind::File,
+                    })
+                    .collect::<Vec<_>>();
+                combined.extend(directories.into_iter().map(|path| UiWorkspaceEntryView {
+                    path,
+                    kind: UiWorkspaceEntryKind::Directory,
+                }));
+                combined
+            }
+        };
+
+        let mut ranked = entries
+            .into_iter()
+            .filter_map(|entry| {
+                rank_workspace_entry(&entry.path, &query).map(|score| (score, entry))
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.path.cmp(&right.1.path))
+        });
+        ranked.truncate(limit);
+        Ok(ranked.into_iter().map(|(_, entry)| entry).collect())
+    }
 }
 
 fn ui_agent_config() -> AgentConfig {
@@ -824,10 +1009,153 @@ impl From<TaskRecord> for UiTaskSummary {
             name: task.name,
             title_source: task.title_source.as_db_value().to_string(),
             title_locked: task.title_locked,
+            selected_model: task.selected_model,
             created_at: system_time_to_unix(task.created_at),
             last_active: system_time_to_unix(task.last_active),
         }
     }
+}
+
+fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
+    let mut config = OpenAiCompatibleConfig::from_env()?;
+    if let Some(model) = &task.selected_model {
+        config.model = model.clone();
+    }
+    Ok(config)
+}
+
+pub async fn fetch_provider_models(selected_model: Option<String>) -> Result<UiProviderModelsView> {
+    let config = OpenAiCompatibleConfig::from_env()?;
+    let current_model = selected_model.unwrap_or_else(|| config.model.clone());
+    // UI 侧会按 provider 维度缓存模型列表。
+    // 目前运行时 provider 仍由环境变量驱动，因此用标准化 base_url 作为稳定缓存键。
+    let provider_cache_key = config.base_url.clone();
+    let client = OpenAiCompatibleClient::new(config);
+    let mut available_models = client.list_models().await.unwrap_or_default();
+    if !available_models.iter().any(|model| model == &current_model) {
+        available_models.insert(0, current_model.clone());
+    }
+    available_models.sort();
+    available_models.dedup();
+
+    Ok(UiProviderModelsView {
+        current_model,
+        available_models,
+        provider_cache_key,
+    })
+}
+
+fn git_visible_files(workspace_path: &Path) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workspace_path)
+        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(stdout
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect())
+        }
+        _ => fallback_visible_files(workspace_path),
+    }
+}
+
+fn fallback_visible_files(workspace_path: &Path) -> Result<Vec<String>> {
+    let mut pending = vec![workspace_path.to_path_buf()];
+    let mut files = Vec::new();
+
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(&path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if file_name == ".git"
+                || file_name == "node_modules"
+                || file_name == "target"
+                || file_name == "dist"
+            {
+                continue;
+            }
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                pending.push(entry_path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            if let Ok(relative) = entry_path.strip_prefix(workspace_path) {
+                files.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+fn collect_parent_directories(path: &str) -> Vec<String> {
+    let mut current = Path::new(path).parent();
+    let mut directories = Vec::new();
+    while let Some(parent) = current {
+        if parent.components().next().is_none() {
+            break;
+        }
+        let normalized = normalize_relative_path(parent);
+        if !normalized.is_empty() {
+            directories.push(normalized);
+        }
+        current = parent.parent();
+    }
+    directories
+}
+
+fn normalize_relative_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn rank_workspace_entry(path: &str, query: &str) -> Option<(u8, usize)> {
+    if query.is_empty() {
+        return Some((3, path.len()));
+    }
+
+    let haystack = path.to_lowercase();
+    if haystack == query {
+        return Some((0, path.len()));
+    }
+    if haystack.starts_with(query) {
+        return Some((1, path.len()));
+    }
+    if haystack.contains(query) {
+        return Some((2, path.len()));
+    }
+    subsequence_score(&haystack, query).map(|score| (4, score))
+}
+
+fn subsequence_score(haystack: &str, needle: &str) -> Option<usize> {
+    let mut score = 0usize;
+    let mut cursor = 0usize;
+
+    for ch in needle.chars() {
+        let slice = &haystack[cursor..];
+        let offset = slice.find(ch)?;
+        score += offset;
+        cursor += offset + ch.len_utf8();
+    }
+
+    Some(score + haystack.len())
 }
 
 fn should_auto_title(task: &PersistedTask, user_message: &str) -> bool {
@@ -988,19 +1316,19 @@ impl UiSystemStatusView {
 
 impl UiContextUsageView {
     pub fn new(
-        used_bytes: usize,
-        budget_bytes: usize,
+        used_tokens: usize,
+        budget_tokens: usize,
         sections: Vec<UiContextUsageSectionView>,
     ) -> Self {
-        let used_percent = if budget_bytes == 0 {
+        let used_percent = if budget_tokens == 0 {
             0
         } else {
-            (((used_bytes as f64 / budget_bytes as f64) * 100.0).round()).clamp(0.0, 100.0) as u8
+            (((used_tokens as f64 / budget_tokens as f64) * 100.0).round()).clamp(0.0, 100.0) as u8
         };
 
         Self {
-            used_bytes,
-            budget_bytes,
+            used_tokens,
+            budget_tokens,
             used_percent,
             sections,
         }
@@ -1008,10 +1336,10 @@ impl UiContextUsageView {
 }
 
 impl UiContextUsageSectionView {
-    pub fn new(name: impl Into<String>, bytes: usize) -> Self {
+    pub fn new(name: impl Into<String>, tokens: usize) -> Self {
         Self {
             name: name.into(),
-            bytes,
+            tokens,
         }
     }
 }
@@ -1036,9 +1364,44 @@ impl From<AgentToolStatus> for UiAgentToolStatus {
     }
 }
 
+fn classify_turn_failure(error: &anyhow::Error) -> (UiAgentFailureStage, bool) {
+    let message = error.to_string().to_ascii_lowercase();
+
+    if message.contains("tool ")
+        || message.contains("invalid ")
+        || message.contains("failed to decode arguments for tool")
+        || message.contains("write_file")
+        || message.contains("replace_lines")
+        || message.contains("insert_lines")
+        || message.contains("delete_lines")
+        || message.contains("run_command")
+        || message.contains("open_file")
+        || message.contains("reply(")
+    {
+        return (UiAgentFailureStage::Tool, true);
+    }
+
+    if message.contains("provider")
+        || message.contains("chat completion")
+        || message.contains("model list")
+        || message.contains("request chat")
+        || message.contains("stream")
+        || message.contains("assistant text without tool calls")
+        || message.contains("neither assistant text nor tool calls")
+    {
+        return (UiAgentFailureStage::Provider, true);
+    }
+
+    if message.contains("context") {
+        return (UiAgentFailureStage::Context, true);
+    }
+
+    (UiAgentFailureStage::Internal, false)
+}
+
 impl UiRuntimeSnapshot {
-    pub fn from_session(session: &AgentSession) -> Self {
-        session.ui_runtime_snapshot()
+    pub fn from_session(session: &AgentSession, context_budget_tokens: usize) -> Self {
+        session.ui_runtime_snapshot(context_budget_tokens)
     }
 }
 
@@ -1052,6 +1415,67 @@ fn pretty_json_or_original(text: &str) -> String {
     serde_json::from_str::<serde_json::Value>(text)
         .and_then(|value| serde_json::to_string_pretty(&value))
         .unwrap_or_else(|_| text.to_string())
+}
+
+async fn resolve_context_window_with_provider(
+    provider: &OpenAiCompatibleClient,
+    current_model: &str,
+) -> Option<usize> {
+    provider
+        .resolve_model_context_window(current_model)
+        .await
+        .ok()
+        .flatten()
+        .or_else(|| Some(resolve_context_window_fallback(Some(current_model))))
+}
+
+fn resolve_context_window_fallback(model_id: Option<&str>) -> usize {
+    if let Some(override_tokens) = std::env::var("MA_CONTEXT_WINDOW_TOKENS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        return override_tokens;
+    }
+
+    model_id
+        .and_then(|model| {
+            get_model_capabilities(model)
+                .map(|capabilities| capabilities.context_window)
+                .or_else(|| guess_context_window_from_model_name(model))
+        })
+        .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
+}
+
+fn guess_context_window_from_model_name(model_id: &str) -> Option<usize> {
+    let normalized = model_id.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    for suffix in ['k', 'm'] {
+        if let Some(index) = normalized.find(suffix) {
+            let digits = normalized[..index]
+                .chars()
+                .rev()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            if digits.is_empty() {
+                continue;
+            }
+            if let Ok(base) = digits.parse::<usize>() {
+                return Some(match suffix {
+                    'k' => base * 1_000,
+                    'm' => base * 1_000_000,
+                    _ => unreachable!(),
+                });
+            }
+        }
+    }
+
+    None
 }
 
 fn system_time_to_unix(time: SystemTime) -> i64 {

@@ -135,6 +135,21 @@ CREATE TABLE settings (
 
 内置列表随 March 版本更新维护，不做自动 API 拉取（避免冷启动依赖网络）。
 
+## 上下文窗口元数据
+
+右侧的 context usage 预算应优先来自**当前模型的真实上下文窗口**，而不是固定常量。
+
+运行时按以下优先级确定 `context_window`：
+
+```
+1. provider `/models` 返回的模型元数据（如 `context_window` / `max_input_tokens`）
+2. March 内置的模型能力表（已知模型）
+3. 环境变量手动覆盖（便于兼容非标准 provider）
+4. 保守默认值
+```
+
+注意：不同 OpenAI-compatible provider 对 `/models` 的扩展字段并不统一，因此需要做 best-effort 解析，拿不到时明确走 fallback，而不是假装是 provider 官方值。
+
 ---
 
 ## 运行时模型解析

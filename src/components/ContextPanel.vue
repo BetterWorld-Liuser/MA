@@ -91,7 +91,7 @@
 
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title mb-0">Context usage</h3>
+          <h3 class="section-title mb-0">Context usage (est.)</h3>
           <div class="flex items-center gap-2 text-[10px] text-text-dim">
             <span class="font-mono">{{ usage.percent }}%</span>
             <span class="font-mono text-text-muted">{{ usage.current }} / {{ usage.limit }}</span>

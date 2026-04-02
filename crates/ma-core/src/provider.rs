@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::context::{AgentContext, render_file_snapshot_for_prompt};
 use crate::tools::{ToolDefinition, ToolParameter};
@@ -48,6 +49,27 @@ impl OpenAiCompatibleClient {
     }
 
     pub async fn list_models(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_model_descriptors()
+            .await?
+            .into_iter()
+            .map(|model| model.id)
+            .collect())
+    }
+
+    /// 尽力从 provider 的 `/models` 元数据里读取真实上下文窗口。
+    /// OpenAI-compatible 生态并不统一，因此这里只做 best-effort 解析：
+    /// - 若供应商返回 `context_window` / `max_input_tokens` 等字段，则直接采用
+    /// - 若没有这些字段，则由调用侧决定是否使用本地 fallback
+    pub async fn resolve_model_context_window(&self, model_id: &str) -> Result<Option<usize>> {
+        let descriptors = self.list_model_descriptors().await?;
+        Ok(descriptors
+            .into_iter()
+            .find(|model| model.id == model_id)
+            .and_then(|model| model.context_window_tokens))
+    }
+
+    async fn list_model_descriptors(&self) -> Result<Vec<ModelDescriptor>> {
         let response = self
             .http
             .get(format!("{}/models", self.config.base_url))
@@ -63,7 +85,11 @@ impl OpenAiCompatibleClient {
             .await
             .context("failed to decode model list response")?;
 
-        Ok(payload.data.into_iter().map(|model| model.id).collect())
+        payload
+            .data
+            .into_iter()
+            .map(ModelDescriptor::from_value)
+            .collect()
     }
 
     /// 这是最小 agent loop 的核心入口：
@@ -973,12 +999,96 @@ fn pop_sse_event(buffer: &mut String) -> Option<SseEvent> {
 
 #[derive(Debug, Deserialize)]
 struct ModelListResponse {
-    data: Vec<ModelInfo>,
+    data: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ModelInfo {
+#[derive(Debug, Clone)]
+struct ModelDescriptor {
     id: String,
+    context_window_tokens: Option<usize>,
+}
+
+impl ModelDescriptor {
+    fn from_value(value: Value) -> Result<Self> {
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .context("provider model entry missing string id")?;
+
+        Ok(Self {
+            context_window_tokens: extract_context_window_tokens(&value),
+            id,
+        })
+    }
+}
+
+fn extract_context_window_tokens(value: &Value) -> Option<usize> {
+    for key in [
+        "context_window",
+        "context_length",
+        "max_context_tokens",
+        "max_input_tokens",
+        "input_token_limit",
+    ] {
+        if let Some(tokens) = value.get(key).and_then(parse_token_limit_value) {
+            return Some(tokens);
+        }
+    }
+
+    for container in ["capabilities", "limits", "architecture", "metadata"] {
+        let Some(nested) = value.get(container) else {
+            continue;
+        };
+        for key in [
+            "context_window",
+            "context_length",
+            "max_context_tokens",
+            "max_input_tokens",
+            "input_token_limit",
+        ] {
+            if let Some(tokens) = nested.get(key).and_then(parse_token_limit_value) {
+                return Some(tokens);
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_token_limit_value(value: &Value) -> Option<usize> {
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok()),
+        Value::String(text) => parse_human_token_limit(text),
+        _ => None,
+    }
+}
+
+fn parse_human_token_limit(text: &str) -> Option<usize> {
+    let normalized = text.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if let Some(stripped) = normalized.strip_suffix('k') {
+        return stripped
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .map(|value| value * 1_000);
+    }
+
+    if let Some(stripped) = normalized.strip_suffix('m') {
+        return stripped
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .map(|value| value * 1_000_000);
+    }
+
+    normalized.parse::<usize>().ok()
 }
 
 #[cfg(test)]

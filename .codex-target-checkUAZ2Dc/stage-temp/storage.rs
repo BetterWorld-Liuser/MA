@@ -21,7 +21,6 @@ pub struct TaskRecord {
     pub name: String,
     pub title_source: TaskTitleSource,
     pub title_locked: bool,
-    pub selected_model: Option<String>,
     pub created_at: SystemTime,
     pub last_active: SystemTime,
 }
@@ -121,7 +120,6 @@ impl MaStorage {
             name: name.to_string(),
             title_source,
             title_locked,
-            selected_model: None,
             created_at: now,
             last_active: now,
         })
@@ -197,39 +195,11 @@ impl MaStorage {
         Ok(())
     }
 
-    pub fn update_task_model(&self, task_id: i64, selected_model: Option<String>) -> Result<()> {
-        let normalized = selected_model.and_then(|model| {
-            let trimmed = model.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
-
-        let affected = self
-            .connection
-            .execute(
-                "UPDATE tasks
-                 SET selected_model = ?2
-                 WHERE id = ?1",
-                params![task_id, normalized],
-            )
-            .context("failed to update task model")?;
-
-        if affected == 0 {
-            bail!("task {} not found", task_id);
-        }
-
-        Ok(())
-    }
-
     pub fn list_tasks(&self) -> Result<Vec<TaskRecord>> {
         let mut statement = self
             .connection
             .prepare(
                 "SELECT id, name, title_source, title_locked, created_at, last_active
-                 , selected_model
                  FROM tasks
                  ORDER BY last_active DESC, id DESC",
             )
@@ -244,21 +214,19 @@ impl MaStorage {
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
-                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .context("failed to query tasks")?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let (id, name, title_source, title_locked, created_at, last_active, selected_model) =
+            let (id, name, title_source, title_locked, created_at, last_active) =
                 row.context("failed to decode task row")?;
             tasks.push(TaskRecord {
                 id,
                 name,
                 title_source: TaskTitleSource::from_db_value(&title_source)?,
                 title_locked: title_locked != 0,
-                selected_model,
                 created_at: system_time_from_unix(created_at)?,
                 last_active: system_time_from_unix(last_active)?,
             });
@@ -309,7 +277,6 @@ impl MaStorage {
                     name        TEXT    NOT NULL,
                     title_source TEXT   NOT NULL DEFAULT 'default',
                     title_locked INTEGER NOT NULL DEFAULT 0,
-                    selected_model TEXT,
                     created_at  INTEGER NOT NULL,
                     last_active INTEGER NOT NULL
                 );
@@ -370,7 +337,6 @@ impl MaStorage {
             .connection
             .query_row(
                 "SELECT id, name, title_source, title_locked, created_at, last_active
-                 , selected_model
                  FROM tasks
                  WHERE id = ?1",
                 params![task_id],
@@ -382,7 +348,6 @@ impl MaStorage {
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
-                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
@@ -395,7 +360,6 @@ impl MaStorage {
             name: raw.1,
             title_source: TaskTitleSource::from_db_value(&raw.2)?,
             title_locked: raw.3 != 0,
-            selected_model: raw.6,
             created_at: system_time_from_unix(raw.4)?,
             last_active: system_time_from_unix(raw.5)?,
         })
@@ -412,7 +376,6 @@ impl MaStorage {
 
         let mut has_title_source = false;
         let mut has_title_locked = false;
-        let mut has_selected_model = false;
         for column in columns {
             let column = column.context("failed to decode tasks table_info row")?;
             if column == "title_source" {
@@ -420,9 +383,6 @@ impl MaStorage {
             }
             if column == "title_locked" {
                 has_title_locked = true;
-            }
-            if column == "selected_model" {
-                has_selected_model = true;
             }
         }
 
@@ -442,12 +402,6 @@ impl MaStorage {
                     [],
                 )
                 .context("failed to add tasks.title_locked column")?;
-        }
-
-        if !has_selected_model {
-            self.connection
-                .execute("ALTER TABLE tasks ADD COLUMN selected_model TEXT", [])
-                .context("failed to add tasks.selected_model column")?;
         }
 
         Ok(())

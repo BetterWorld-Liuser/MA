@@ -4,8 +4,9 @@ use tauri::Emitter;
 
 use ma::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteNoteRequest,
-    UiDeleteTaskRequest, UiSelectTaskRequest, UiSendMessageRequest, UiToggleOpenFileLockRequest,
-    UiUpsertNoteRequest, UiWorkspaceSnapshot,
+    UiDeleteTaskRequest, UiOpenFilesRequest, UiProviderModelsView, UiSearchWorkspaceEntriesRequest,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetTaskModelRequest, UiToggleOpenFileLockRequest,
+    UiUpsertNoteRequest, UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_provider_models,
 };
 
 #[derive(Clone)]
@@ -126,6 +127,55 @@ fn close_open_file(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn open_files(
+    state: tauri::State<'_, AppState>,
+    input: UiOpenFilesRequest,
+) -> Result<UiWorkspaceSnapshot, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_open_files(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn list_provider_models(
+    state: tauri::State<'_, AppState>,
+    task_id: Option<i64>,
+) -> Result<UiProviderModelsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    let selected_model = backend
+        .selected_model_for_task(task_id)
+        .map_err(|error| error.to_string())?;
+    fetch_provider_models(selected_model)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_task_model(
+    state: tauri::State<'_, AppState>,
+    input: UiSetTaskModelRequest,
+) -> Result<UiWorkspaceSnapshot, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_set_task_model(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn search_workspace_entries(
+    state: tauri::State<'_, AppState>,
+    input: UiSearchWorkspaceEntriesRequest,
+) -> Result<Vec<UiWorkspaceEntryView>, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .search_workspace_entries(input)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = dotenvy::dotenv();
@@ -146,7 +196,11 @@ pub fn run() {
             upsert_note,
             delete_note,
             toggle_open_file_lock,
-            close_open_file
+            close_open_file,
+            open_files,
+            list_provider_models,
+            set_task_model,
+            search_workspace_entries
         ])
         .run(tauri::generate_context!())
         .expect("error while running March");

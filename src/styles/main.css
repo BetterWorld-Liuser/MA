@@ -239,6 +239,225 @@
   @apply truncate font-mono text-[11px] text-text-dim;
 }
 
+@utility chat-composer-shell {
+  @apply relative overflow-visible;
+}
+
+@utility chat-composer {
+  @apply relative overflow-hidden rounded-[22px] border;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+    rgba(10, 10, 10, 0.92);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 14px 40px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+@utility chat-composer-chips {
+  @apply flex flex-wrap gap-2 px-4 pt-4;
+}
+
+@utility mention-chip {
+  @apply inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] text-text transition disabled:cursor-not-allowed disabled:opacity-50;
+  background: rgba(212, 105, 42, 0.12);
+  border-color: rgba(212, 105, 42, 0.26);
+
+  &:hover:not(:disabled) {
+    background: rgba(212, 105, 42, 0.18);
+    border-color: rgba(212, 105, 42, 0.34);
+  }
+}
+
+@utility mention-chip-directory {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+@utility mention-chip-kind {
+  @apply rounded-full bg-black/30 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-text-dim;
+}
+
+@utility mention-chip-label {
+  @apply max-w-56 truncate font-mono text-[11px];
+}
+
+@utility mention-chip-remove {
+  @apply text-[14px] leading-none text-text-dim;
+}
+
+@utility chat-composer-input {
+  @apply block w-full resize-none border-0 bg-transparent px-4 pb-3 pt-4 text-[14px] leading-6 text-text outline-hidden;
+  min-height: 88px;
+  max-height: 160px;
+
+  &::placeholder {
+    color: rgba(232, 232, 232, 0.4);
+  }
+}
+
+@utility chat-composer-toolbar {
+  @apply flex items-center justify-between gap-3 border-t px-3 py-2.5;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+@utility composer-popover {
+  @apply absolute left-0 right-0 z-20 overflow-hidden rounded-2xl border;
+  bottom: calc(100% + 10px);
+  background: rgba(12, 12, 12, 0.98);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+}
+
+@utility composer-popover-header {
+  @apply flex items-center justify-between gap-3 border-b px-4 py-2 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+@utility composer-popover-query {
+  @apply truncate font-mono normal-case tracking-normal text-text-muted;
+}
+
+@utility composer-popover-list {
+  @apply max-h-64 overflow-y-auto p-1.5;
+}
+
+@utility composer-popover-item {
+  @apply flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
+@utility composer-popover-item-active {
+  background: rgba(212, 105, 42, 0.12);
+}
+
+@utility composer-popover-item-kind {
+  @apply shrink-0 text-[10px] uppercase tracking-[0.14em] text-text-dim;
+}
+
+@utility composer-popover-item-path {
+  @apply truncate font-mono text-[12px] text-text;
+}
+
+@utility composer-popover-empty {
+  @apply px-4 py-3 text-[12px] text-text-dim;
+}
+
+@utility composer-menu {
+  @apply absolute bottom-[3.25rem] left-3 z-20 min-w-52 overflow-hidden rounded-2xl border py-1;
+  background: rgba(12, 12, 12, 0.98);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+}
+
+@utility composer-menu-portal {
+  @apply z-[1000] flex flex-col overflow-hidden rounded-2xl py-1;
+  background: rgba(12, 12, 12, 0.98);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(10px);
+}
+
+@utility composer-menu-model {
+  min-width: 20rem;
+}
+
+@utility composer-menu-header {
+  @apply flex items-center justify-between gap-3 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+}
+
+@utility composer-menu-search-shell {
+  @apply px-3 pb-2;
+}
+
+@utility composer-menu-search-input {
+  @apply h-9 rounded-lg px-3 py-2 text-[12px];
+}
+
+@utility composer-menu-list {
+  @apply min-h-0 flex-1 overflow-y-auto;
+}
+
+@utility composer-menu-item {
+  @apply flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[12px] text-text transition;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+}
+
+@utility composer-menu-item-model {
+  @apply font-mono;
+}
+
+@utility composer-menu-item-active {
+  background: rgba(212, 105, 42, 0.12);
+}
+
+@utility composer-menu-empty {
+  @apply px-3 py-2 text-[12px] text-text-dim;
+}
+
+@utility composer-menu-status {
+  @apply normal-case tracking-normal text-text-muted;
+}
+
+@utility chat-composer-toolbar-group {
+  @apply flex min-w-0 items-center gap-2;
+}
+
+@utility composer-model-anchor {
+  @apply relative shrink-0;
+}
+
+@utility composer-action {
+  @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border text-text transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+@utility composer-action-icon {
+  @apply text-[18px] leading-none;
+}
+
+@utility composer-model-button {
+  @apply inline-flex max-w-[220px] items-center gap-2 rounded-xl border px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-text-muted transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--color-text);
+  }
+}
+
+@utility composer-shortcut-hint {
+  @apply hidden text-[11px] text-text-dim md:block;
+}
+
+@utility composer-send-button {
+  @apply inline-flex min-h-9 items-center justify-center rounded-xl border px-3.5 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-45;
+  border-color: rgba(212, 105, 42, 0.2);
+  background: var(--color-accent);
+  color: #16110d;
+
+  &:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
+}
+
+@utility composer-send-button-paused {
+  @apply min-w-10 px-3;
+}
+
 @utility section-card {
   @apply rounded-lg bg-transparent p-2.5;
 }

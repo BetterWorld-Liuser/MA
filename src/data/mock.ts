@@ -80,6 +80,7 @@ export type WorkspaceView = {
   title: string;
   tasks: TaskItem[];
   activeTaskId: string;
+  selectedModel?: string;
   chat: ChatMessage[];
   notes: NoteItem[];
   openFiles: OpenFileItem[];
@@ -98,11 +99,13 @@ export type BackendWorkspaceSnapshot = {
     id: number;
     name: string;
     last_active: number;
+    selected_model?: string | null;
   }>;
   active_task?: {
     task: {
       id: number;
       name: string;
+      selected_model?: string | null;
     };
     history: Array<{
       role: 'System' | 'User' | 'Assistant' | 'Tool';
@@ -140,11 +143,11 @@ export type BackendWorkspaceSnapshot = {
     runtime?: {
       context_usage: {
         used_percent: number;
-        used_bytes: number;
-        budget_bytes: number;
+        used_tokens: number;
+        budget_tokens: number;
         sections: Array<{
           name: string;
-          bytes: number;
+          tokens: number;
         }>;
       };
     } | null;
@@ -214,7 +217,26 @@ export type BackendAgentProgressEvent =
       task_id: number;
       turn_id: string;
       task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
+    }
+  | {
+      kind: 'turn_failed';
+      task_id: number;
+      turn_id: string;
+      stage: 'context' | 'tool' | 'provider' | 'internal';
+      message: string;
+      retryable: boolean;
     };
+
+export type WorkspaceEntryView = {
+  path: string;
+  kind: 'file' | 'directory';
+};
+
+export type ProviderModelsView = {
+  current_model: string;
+  available_models: string[];
+  provider_cache_key: string;
+};
 
 export const mockWorkspace: WorkspaceView = {
   title: '默认任务',
@@ -224,6 +246,7 @@ export const mockWorkspace: WorkspaceView = {
     { id: 'task-3', name: '修复登录 bug', status: 'running', updatedAt: '09:41' },
   ] satisfies TaskItem[],
   activeTaskId: 'task-1',
+  selectedModel: 'claude-sonnet-4-6',
   chat: [
     {
       role: 'user',
@@ -310,6 +333,7 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       updatedAt: formatRelativeTime(task.last_active),
     })),
     activeTaskId,
+    selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
     chat: activeTask?.history.map((turn) => ({
       role: turn.role === 'User' ? 'user' : 'assistant',
       author: turn.role === 'User' ? 'User' : 'March',
@@ -384,7 +408,7 @@ function normalizePath(path: string) {
 function formatOpenFileTime(snapshot: BackendWorkspaceSnapshot['active_task'] extends infer T
   ? T extends { open_files: Array<infer OpenFile> }
     ? OpenFile extends { snapshot?: infer Snapshot }
-      ? Snapshot
+      ? Snapshot | undefined
       : never
     : never
   : never) {
@@ -421,18 +445,18 @@ function formatContextUsage(
 
   return {
     percent: usage.used_percent,
-    current: formatBytes(usage.used_bytes),
-    limit: formatBytes(usage.budget_bytes),
+    current: formatTokenCount(usage.used_tokens),
+    limit: formatTokenCount(usage.budget_tokens),
     sections: usage.sections.map((section) => ({
       name: section.name,
-      size: formatBytes(section.bytes),
+      size: formatTokenCount(section.tokens),
     })),
   };
 }
 
-function formatBytes(bytes: number) {
-  if (bytes >= 1000) {
-    return `${(bytes / 1000).toFixed(1)}k`;
+function formatTokenCount(tokens: number) {
+  if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(1)}k`;
   }
-  return `${bytes}`;
+  return `${tokens}`;
 }
