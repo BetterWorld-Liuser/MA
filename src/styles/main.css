@@ -160,7 +160,7 @@
 }
 
 @utility message-bubble {
-  @apply rounded-2xl px-4 py-2.5 text-[13px] leading-5;
+  @apply rounded-2xl px-4 py-2 text-[13px] leading-5;
 }
 
 @utility message-bubble-user {
@@ -172,7 +172,36 @@
 }
 
 @utility message-tools {
-  @apply mt-2 rounded-xl bg-bg-secondary px-3 py-2;
+  @apply mt-2;
+}
+
+@utility message-tools-summary {
+  @apply flex list-none items-center gap-2 text-[11px] text-text-dim;
+}
+
+@utility message-tools-summary-action {
+  @apply text-text-muted transition;
+}
+
+@utility message-tools-list {
+  @apply mt-2 space-y-1 border-l pl-3;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+@utility message-tools-item {
+  @apply flex items-baseline gap-1.5 text-[11px] leading-5;
+}
+
+@utility message-tools-item-label {
+  @apply shrink-0 font-mono text-text-muted;
+}
+
+@utility message-tools-item-separator {
+  @apply text-text-dim;
+}
+
+@utility message-tools-item-summary {
+  @apply min-w-0 text-text-dim;
 }
 
 @utility live-status-row {
@@ -689,6 +718,10 @@
 }
 
 @layer base {
+  .message-tools-summary::-webkit-details-marker {
+    display: none;
+  }
+
   html,
   body,
   #app {

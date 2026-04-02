@@ -42,13 +42,15 @@
             <p v-else class="whitespace-pre-wrap text-text">{{ message.content }}</p>
 
             <details v-if="message.tools?.length" class="message-tools">
-              <summary class="cursor-pointer list-none text-[11px] uppercase tracking-[0.18em] text-text-muted">
-                Tool summaries
+              <summary class="message-tools-summary">
+                <span>{{ formatToolSummaryLabel(message.tools.length) }}</span>
+                <span class="message-tools-summary-action">查看</span>
               </summary>
-              <ul class="mt-2 space-y-1">
-                <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="text-xs text-text-muted">
-                  <span class="text-text">{{ tool.label }}</span>
-                  <span class="text-text-dim"> - {{ tool.summary }}</span>
+              <ul class="message-tools-list">
+                <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
+                  <span class="message-tools-item-label">{{ tool.label }}</span>
+                  <span class="message-tools-item-separator">·</span>
+                  <span class="message-tools-item-summary">{{ tool.summary }}</span>
                 </li>
               </ul>
             </details>
@@ -803,6 +805,10 @@ function focusComposer() {
 
 function isModifierOnlyKey(key: string) {
   return key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta';
+}
+
+function formatToolSummaryLabel(count: number) {
+  return `${count} 个动作`;
 }
 
 defineExpose({
