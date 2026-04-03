@@ -2,8 +2,15 @@
   <aside class="panel task-column-divider flex min-h-0 flex-col overflow-hidden">
     <div class="panel-header flex items-center justify-between gap-3">
       <p class="truncate text-[11px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
-      <button class="pill px-1.5" type="button" :disabled="busy" title="新建任务" @click="$emit('create')">
-        + New Task
+      <button
+        class="task-header-icon-button"
+        type="button"
+        :disabled="busy"
+        aria-label="新建任务"
+        title="新建任务"
+        @click="$emit('create')"
+      >
+        <Icon :icon="plusIcon" class="h-4 w-4" />
       </button>
     </div>
 
@@ -22,10 +29,11 @@
             @click="$emit('select', task.id)"
           >
             <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[1.4]">{{ task.name }}</span>
-            <span class="task-item-meta group-hover:hidden">{{ task.updatedAt }}</span>
+            <span class="task-item-meta" :class="!busy ? 'group-hover:opacity-0' : ''">{{ task.updatedAt }}</span>
           </button>
           <button
-            class="task-item-delete hidden group-hover:inline-flex"
+            class="task-item-delete"
+            :class="busy ? 'invisible' : 'group-hover:opacity-100 group-hover:pointer-events-auto group-hover:text-text group-hover:visible'"
             type="button"
             :disabled="busy"
             :aria-label="`删除 ${task.name}`"
@@ -54,6 +62,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
+import plusIcon from '@iconify-icons/lucide/plus';
 import settingsIcon from '@iconify-icons/lucide/settings-2';
 import xIcon from '@iconify-icons/lucide/x';
 import type { TaskItem } from '../data/mock';

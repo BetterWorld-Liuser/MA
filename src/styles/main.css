@@ -128,15 +128,27 @@
 }
 
 @utility task-item-meta {
-  @apply shrink-0 text-[10px] text-text-dim;
+  @apply shrink-0 text-[10px] text-text-dim transition-opacity;
 }
 
 @utility task-item-delete {
-  @apply shrink-0 items-center justify-center rounded-md p-1 text-text-dim transition hover:bg-bg hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+  @apply shrink-0 inline-flex items-center justify-center rounded-md p-1 text-text-dim opacity-0 pointer-events-none invisible transition hover:bg-bg;
 }
 
 @utility task-settings-button {
   @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-text-muted transition hover:border-white/8 hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+@utility task-header-icon-button {
+  @apply inline-flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-text-dim transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+@utility chat-pane-header {
+  @apply flex items-center px-4 pb-1.5 pt-2.5;
+}
+
+@utility chat-pane-meta {
+  @apply text-[10px] text-text-dim;
 }
 
 @utility settings-shell {

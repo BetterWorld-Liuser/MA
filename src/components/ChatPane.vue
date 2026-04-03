@@ -1,7 +1,7 @@
 <template>
   <section class="panel flex min-h-0 overflow-visible flex-col">
-    <div class="panel-header flex items-center gap-3">
-      <div class="text-[10px] text-text-dim">
+    <div class="chat-pane-header">
+      <div class="chat-pane-meta">
         {{ chat.length ? `${chat.length} messages` : 'No messages yet' }}
       </div>
     </div>
