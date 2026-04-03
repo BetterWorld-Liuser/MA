@@ -208,6 +208,9 @@ impl AgentSession {
     ) -> Result<Self> {
         let mut watcher = FileWatcherService::new()?;
         for path in open_files {
+            if !path.exists() {
+                continue;
+            }
             watcher.watch_file(path)?;
         }
 
@@ -229,6 +232,7 @@ impl AgentSession {
         let open_paths = task
             .open_files
             .iter()
+            .filter(|entry| entry.path.exists())
             .map(|entry| entry.path.clone())
             .collect::<Vec<_>>();
         let mut session = Self::new(config, task.history, open_paths)?;
@@ -237,7 +241,7 @@ impl AgentSession {
         session.locked_files = task
             .open_files
             .into_iter()
-            .filter(|entry| entry.locked)
+            .filter(|entry| entry.locked && entry.path.exists())
             .map(|entry| entry.path)
             .collect();
         Ok(session)
@@ -404,16 +408,20 @@ impl AgentSession {
                         outcome
                     }
                     Err(error) => {
+                        let result_text = format_tool_error(&tool_call.name, &error);
                         on_event(
                             self,
                             AgentProgressEvent::ToolFinished {
                                 tool_call_id: tool_call.id.clone(),
                                 status: AgentToolStatus::Error,
                                 summary: tool_summary.clone(),
-                                preview: Some(error.to_string()),
+                                preview: preview_tool_result(&result_text),
                             },
                         )?;
-                        return Err(error);
+                        ToolOutcome {
+                            result_text,
+                            summary: None,
+                        }
                     }
                 };
                 transient_messages.push(RequestMessage::tool(
@@ -1028,6 +1036,10 @@ fn preview_tool_result(result_text: &str) -> Option<String> {
     }
 }
 
+fn format_tool_error(tool_name: &str, error: &anyhow::Error) -> String {
+    format!("Tool `{tool_name}` failed.\nError: {error:#}")
+}
+
 fn decode_command_output(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return String::new();
@@ -1475,6 +1487,7 @@ struct RemoveNoteArgs {
 
 #[cfg(test)]
 mod tests {
+    use indexmap::IndexMap;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1482,8 +1495,9 @@ mod tests {
         AgentConfig, AgentSession, CommandShell, append_assistant_tool_call_message,
         decode_command_output, default_system_core, resolve_shell_program_with,
     };
-    use crate::context::ConversationHistory;
+    use crate::context::{ConversationHistory, Hint, NoteEntry};
     use crate::provider::{ProviderToolCall, RequestMessage};
+    use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource};
 
     #[test]
     fn default_system_prompt_includes_chat_and_tool_guidance() {
@@ -1541,6 +1555,48 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn restore_skips_missing_open_files_from_persisted_state() {
+        let missing_path = std::env::current_dir()
+            .expect("current dir")
+            .join("definitely-missing-open-file.txt");
+        let existing_path = std::env::current_dir()
+            .expect("current dir")
+            .join("Cargo.toml");
+        let persisted = PersistedTask {
+            task: TaskRecord {
+                id: 1,
+                name: "test".to_string(),
+                title_source: TaskTitleSource::Default,
+                title_locked: false,
+                selected_model: None,
+                created_at: SystemTime::now(),
+                last_active: SystemTime::now(),
+            },
+            history: ConversationHistory::default(),
+            notes: IndexMap::<String, NoteEntry>::new(),
+            open_files: vec![
+                PersistedOpenFile {
+                    path: missing_path.clone(),
+                    locked: true,
+                },
+                PersistedOpenFile {
+                    path: existing_path.clone(),
+                    locked: false,
+                },
+            ],
+            hints: Vec::<Hint>::new(),
+        };
+
+        let session = AgentSession::restore(AgentConfig::default(), persisted)
+            .expect("restore should skip missing files");
+
+        let persisted = session.persisted_state();
+        assert_eq!(persisted.open_files.len(), 1);
+        assert_eq!(persisted.open_files[0].path, existing_path);
+        assert!(!persisted.open_files[0].locked);
     }
 
     #[test]
