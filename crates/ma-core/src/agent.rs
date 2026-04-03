@@ -48,7 +48,9 @@ pub struct AgentConfig {
     pub max_recent_turns: usize,
 }
 
-pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 24_000;
+// 当 provider 元数据和内置能力表都拿不到时，UI 与上下文压力估算统一回退到 128k。
+// 这样对现代通用模型更保守，也避免把未知模型默认压成过小的 24k。
+pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 128_000;
 
 impl Default for AgentConfig {
     fn default() -> Self {

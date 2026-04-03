@@ -6,126 +6,7 @@
       </div>
     </div>
 
-    <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-      <div v-if="!chat.length" class="empty-state">
-        <p class="text-sm text-text">No messages yet.</p>
-        <p class="mt-1 text-xs text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
-      </div>
-
-      <article
-        v-for="message in chat"
-        :key="`${message.role}-${message.time}-${message.author}`"
-        class="chat-row"
-        :class="message.role === 'assistant' ? 'chat-row-assistant' : 'chat-row-user'"
-      >
-        <span class="message-avatar shrink-0">{{ message.author.slice(0, 1) }}</span>
-
-        <div class="message-stack" :class="message.role === 'assistant' ? 'items-start' : 'items-end'">
-          <div class="message-meta" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-            <span class="text-[13px] font-semibold text-text">{{ message.author }}</span>
-            <time class="font-mono text-[11px] text-text-dim">{{ message.time }}</time>
-          </div>
-
-          <div
-            class="message-bubble"
-            :class="message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user'"
-          >
-            <MarkdownRender
-              v-if="message.role === 'assistant'"
-              custom-id="ma-chat-message"
-              :content="message.content"
-              :final="true"
-              :max-live-nodes="0"
-              :render-batch-size="16"
-              :render-batch-delay="8"
-            />
-            <p v-else class="whitespace-pre-wrap text-text">{{ message.content }}</p>
-
-            <details v-if="message.tools?.length" class="message-tools">
-              <summary class="message-tools-summary">
-                <span>{{ formatToolSummaryLabel(message.tools.length) }}</span>
-                <span class="message-tools-summary-action">查看</span>
-              </summary>
-              <ul class="message-tools-list">
-                <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
-                  <span class="message-tools-item-label">{{ tool.label }}</span>
-                  <span class="message-tools-item-separator">·</span>
-                  <span class="message-tools-item-summary">{{ tool.summary }}</span>
-                </li>
-              </ul>
-            </details>
-          </div>
-
-          <div class="message-actions" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-            <button
-              class="message-copy-button"
-              type="button"
-              :aria-label="getCopyButtonLabel(message.content)"
-              :title="getCopyButtonLabel(message.content)"
-              @click="copyMessage(message.content)"
-            >
-              <Icon :icon="copiedContent === normalizeCopyContent(message.content) ? checkIcon : copyIcon" class="message-copy-icon" />
-            </button>
-          </div>
-        </div>
-      </article>
-
-      <article v-if="liveTurn" class="chat-row chat-row-assistant">
-        <span class="message-avatar shrink-0">M</span>
-
-        <div class="message-stack items-start">
-          <div class="message-meta justify-start">
-            <span class="text-[13px] font-semibold text-text">March</span>
-            <time class="font-mono text-[11px] text-text-dim">...</time>
-          </div>
-
-          <div class="message-bubble message-bubble-assistant opacity-90">
-            <div class="live-status-row">
-              <span class="live-status-dots" aria-hidden="true">
-                <span></span>
-                <span></span>
-                <span></span>
-              </span>
-              <span class="live-status-label">{{ liveTurn.statusLabel }}</span>
-            </div>
-            <MarkdownRender
-              v-if="liveTurn.content"
-              custom-id="ma-chat-streaming"
-              :content="liveTurn.content"
-              :final="liveTurn.state !== 'streaming'"
-              :max-live-nodes="0"
-              :render-batch-size="16"
-              :render-batch-delay="8"
-            />
-            <p v-else class="mt-2 text-[13px] text-text-dim">
-              {{ liveTurn.state === 'error' ? '这轮没有成功完成。' : 'March 正在处理这一轮请求。' }}
-            </p>
-
-            <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">
-              <div v-for="tool in liveTurn.tools" :key="tool.id" class="live-tool-item">
-                <span class="live-tool-state" :class="`live-tool-state-${tool.state}`"></span>
-                <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="message-actions justify-start">
-            <button
-              class="message-copy-button"
-              type="button"
-              aria-label="拷贝当前回复内容"
-              title="拷贝当前回复内容"
-              :disabled="!liveTurn.content"
-              @click="copyMessage(liveTurn.content)"
-            >
-              <Icon :icon="copiedContent === normalizeCopyContent(liveTurn.content) && liveTurn.content ? checkIcon : copyIcon" class="message-copy-icon" />
-            </button>
-          </div>
-        </div>
-      </article>
-
-      <div ref="bottomAnchor" aria-hidden="true"></div>
-    </div>
+    <ChatMessageList :chat="chat" :live-turn="liveTurn" />
 
     <div class="shrink-0 p-3" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
       <div ref="composerRootRef" class="chat-composer-shell">
@@ -159,7 +40,7 @@
             @input="handleDraftInput"
             @click="updateMentionQueryFromCursor"
             @keyup="handleComposerKeyup"
-            @keydown="handleComposerKeydown"
+            @keydown="onComposerKeydown"
           ></textarea>
 
           <div class="chat-composer-toolbar">
@@ -276,20 +157,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
-import checkIcon from '@iconify-icons/lucide/check';
-import copyIcon from '@iconify-icons/lucide/copy';
 import pauseIcon from '@iconify-icons/lucide/pause';
-import MarkdownRender from 'markstream-vue';
-import type { ChatMessage, LiveTurn, ProviderModelsView, WorkspaceEntryView } from '../data/mock';
-
-type MentionKind = 'file' | 'directory';
-type MentionItem = {
-  path: string;
-  kind: MentionKind;
-};
+import ChatMessageList from '@/components/ChatMessageList.vue';
+import { useChatComposer } from '@/composables/useChatComposer';
+import type { ProviderModelsView } from '../data/mock';
 
 type CachedModelList = {
   providerKey: string;
@@ -303,8 +177,8 @@ const providerModelCache = new Map<string, CachedModelList>();
 const taskProviderCacheKey = new Map<number, string>();
 
 const props = defineProps<{
-  chat: ChatMessage[];
-  liveTurn?: LiveTurn;
+  chat: import('../data/mock').ChatMessage[];
+  liveTurn?: import('../data/mock').LiveTurn;
   disabled?: boolean;
   sending?: boolean;
   taskId?: number | null;
@@ -317,24 +191,45 @@ const emit = defineEmits<{
   setModel: [model: string];
 }>();
 
-const draft = ref('');
-const mentions = ref<MentionItem[]>([]);
-const scrollContainer = ref<HTMLElement | null>(null);
-const bottomAnchor = ref<HTMLElement | null>(null);
-const composerRef = ref<HTMLTextAreaElement | null>(null);
-const composerRootRef = ref<HTMLElement | null>(null);
+const disabledRef = computed(() => !!props.disabled);
+const sendingRef = computed(() => !!props.sending);
+const taskIdRef = toRef(props, 'taskId');
+
+const {
+  draft,
+  mentions,
+  composerRef,
+  composerRootRef,
+  activeSearchQuery,
+  searchResults,
+  searchLoading,
+  highlightedResultIndex,
+  searchPanelOpen,
+  plusMenuOpen,
+  composerIsEmpty,
+  searchPanelLabel,
+  handleDraftInput,
+  handleComposerKeyup,
+  handleComposerKeydown,
+  updateMentionQueryFromCursor,
+  openSearchFromMenu,
+  selectWorkspaceEntry,
+  removeMention,
+  togglePlusMenu,
+  handleDocumentPointerDown,
+  syncComposerHeight,
+  focusComposer,
+  resetComposer,
+} = useChatComposer({
+  disabled: disabledRef,
+  sending: sendingRef,
+  taskId: taskIdRef,
+  onOpenFiles: (paths) => emit('openFiles', paths),
+});
+
 const modelMenuAnchorRef = ref<HTMLElement | null>(null);
 const modelMenuPanelRef = ref<HTMLElement | null>(null);
 const modelSearchRef = ref<HTMLInputElement | null>(null);
-const composerMaxHeight = 160;
-const activeSearchQuery = ref('');
-const searchResults = ref<WorkspaceEntryView[]>([]);
-const searchLoading = ref(false);
-const highlightedResultIndex = ref(0);
-const searchPanelOpen = ref(false);
-const searchMode = ref<'smart' | 'file' | 'directory'>('smart');
-const mentionQueryRange = ref<{ start: number; end: number } | null>(null);
-const plusMenuOpen = ref(false);
 const modelMenuOpen = ref(false);
 const availableModels = ref<string[]>([]);
 const modelSearchQuery = ref('');
@@ -342,13 +237,8 @@ const modelsLoading = ref(false);
 const modelsRefreshing = ref(false);
 const resolvedCurrentModel = ref('');
 const modelMenuStyle = ref<Record<string, string>>({});
-const lastSearchQuery = ref('');
-const lastSearchMode = ref<'smart' | 'file' | 'directory' | null>(null);
-const copiedContent = ref('');
 let activeModelRequestId = 0;
-let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
-const composerIsEmpty = computed(() => !draft.value.trim() && mentions.value.length === 0);
 const effectiveSelectedModel = computed(() => props.selectedModel?.trim() || resolvedCurrentModel.value.trim());
 const modelButtonLabel = computed(() => effectiveSelectedModel.value || '选择模型');
 const filteredAvailableModels = computed(() => {
@@ -358,50 +248,6 @@ const filteredAvailableModels = computed(() => {
   }
   return availableModels.value.filter((model) => model.toLowerCase().includes(query));
 });
-const searchPanelLabel = computed(() => {
-  if (searchMode.value === 'file') {
-    return '选择文件';
-  }
-  if (searchMode.value === 'directory') {
-    return '选择目录';
-  }
-  return '@ 引用';
-});
-
-function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
-  if (bottomAnchor.value) {
-    bottomAnchor.value.scrollIntoView({ behavior, block: 'end' });
-    return;
-  }
-
-  if (scrollContainer.value) {
-    scrollContainer.value.scrollTo({
-      top: scrollContainer.value.scrollHeight,
-      behavior,
-    });
-  }
-}
-
-watch(
-  () => props.chat.length,
-  async () => {
-    await nextTick();
-    scrollToBottom('smooth');
-  },
-);
-
-watch(
-  () => props.liveTurn,
-  async (turn, previousTurn) => {
-    if (!turn) {
-      return;
-    }
-
-    await nextTick();
-    scrollToBottom(previousTurn ? 'auto' : 'smooth');
-  },
-  { deep: true },
-);
 
 watch(
   draft,
@@ -415,9 +261,7 @@ watch(
 watch(
   () => props.taskId,
   (taskId) => {
-    mentions.value = [];
-    draft.value = '';
-    closeAllMenus();
+    resetComposer();
     restoreModelStateFromCache(taskId);
     seedModelListFromCurrentSelection();
     void refreshModels();
@@ -456,167 +300,18 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', handleDocumentPointerDown);
   window.removeEventListener('resize', syncModelMenuPosition);
   window.removeEventListener('scroll', syncModelMenuPosition, true);
-  if (copyFeedbackTimer) {
-    clearTimeout(copyFeedbackTimer);
-    copyFeedbackTimer = null;
-  }
 });
 
-function handleDraftInput() {
-  syncComposerHeight();
-  updateMentionQueryFromCursor();
-}
-
-function handleComposerKeydown(event: KeyboardEvent) {
-  if (searchPanelOpen.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-    event.preventDefault();
-    if (!searchResults.value.length) {
-      return;
-    }
-    const delta = event.key === 'ArrowDown' ? 1 : -1;
-    highlightedResultIndex.value =
-      (highlightedResultIndex.value + delta + searchResults.value.length) % searchResults.value.length;
-    return;
-  }
-
-  if (searchPanelOpen.value && event.key === 'Enter' && !event.shiftKey) {
-    const entry = searchResults.value[highlightedResultIndex.value];
-    if (entry) {
-      event.preventDefault();
-      void selectWorkspaceEntry(entry);
-      return;
-    }
-  }
-
-  if (event.key === 'Escape') {
-    closeAllMenus();
-    return;
-  }
-
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    submit();
-  }
-}
-
-function handleComposerKeyup(event: KeyboardEvent) {
-  if (isModifierOnlyKey(event.key)) {
-    return;
-  }
-  void updateMentionQueryFromCursor();
-}
-
-async function updateMentionQueryFromCursor() {
-  const textarea = composerRef.value;
-  if (!textarea) {
-    return;
-  }
-
-  if (searchMode.value !== 'smart') {
-    return;
-  }
-
-  const cursor = textarea.selectionStart ?? draft.value.length;
-  const prefix = draft.value.slice(0, cursor);
-  const match = prefix.match(/(^|\s)@([^\s@]*)$/);
-  if (!match || typeof match.index !== 'number') {
-    searchPanelOpen.value = false;
-    mentionQueryRange.value = null;
-    activeSearchQuery.value = '';
-    lastSearchQuery.value = '';
-    lastSearchMode.value = null;
-    return;
-  }
-
-  const query = match[2] ?? '';
-  const atIndex = match.index + match[1].length;
-  mentionQueryRange.value = { start: atIndex, end: cursor };
-  activeSearchQuery.value = query;
-  await loadSearchResults(query, 'smart');
-}
-
-async function loadSearchResults(query: string, mode: 'smart' | 'file' | 'directory') {
-  if (props.disabled || !props.taskId) {
-    return;
-  }
-
-  if (
-    searchPanelOpen.value &&
-    lastSearchQuery.value === query &&
-    lastSearchMode.value === mode &&
-    searchResults.value.length > 0
-  ) {
-    return;
-  }
-
-  searchMode.value = mode;
-  searchPanelOpen.value = true;
-  plusMenuOpen.value = false;
-  modelMenuOpen.value = false;
-  searchLoading.value = true;
-  try {
-    searchResults.value = await invoke<WorkspaceEntryView[]>('search_workspace_entries', {
-      input: {
-        query,
-        kind: mode === 'smart' ? undefined : mode,
-        limit: 12,
-      },
-    });
-    lastSearchQuery.value = query;
-    lastSearchMode.value = mode;
-    highlightedResultIndex.value = 0;
-  } finally {
-    searchLoading.value = false;
-  }
-}
-
-function openSearchFromMenu(mode: 'file' | 'directory') {
-  activeSearchQuery.value = '';
-  mentionQueryRange.value = null;
-  void loadSearchResults('', mode);
-}
-
-async function selectWorkspaceEntry(entry: WorkspaceEntryView) {
-  if (mentions.value.some((item) => item.path === entry.path && item.kind === entry.kind)) {
-    closeSearchPanel();
-    return;
-  }
-
-  mentions.value = [
-    ...mentions.value,
-    {
-      path: entry.path,
-      kind: entry.kind,
-    },
-  ];
-
-  if (entry.kind === 'file') {
-    emit('openFiles', [entry.path]);
-  }
-
-  if (mentionQueryRange.value) {
-    const { start, end } = mentionQueryRange.value;
-    draft.value = `${draft.value.slice(0, start)}${draft.value.slice(end)}`.replace(/\s{2,}/g, ' ').trimStart();
-    await nextTick();
-    composerRef.value?.focus();
-    const nextCursor = start;
-    composerRef.value?.setSelectionRange(nextCursor, nextCursor);
-  }
-
-  closeSearchPanel();
-}
-
-function removeMention(path: string, kind: MentionKind) {
-  mentions.value = mentions.value.filter((item) => !(item.path === path && item.kind === kind));
+function onComposerKeydown(event: KeyboardEvent) {
+  handleComposerKeydown(event, submit);
 }
 
 async function toggleModelMenu() {
   if (!modelMenuOpen.value) {
     primeModelMenu();
     plusMenuOpen.value = false;
-    searchPanelOpen.value = false;
-    modelSearchQuery.value = '';
     modelMenuOpen.value = true;
+    modelSearchQuery.value = '';
     await nextTick();
     syncModelMenuPosition();
     modelSearchRef.value?.focus();
@@ -720,28 +415,6 @@ function selectModel(model: string) {
   modelMenuOpen.value = false;
 }
 
-function togglePlusMenu() {
-  plusMenuOpen.value = !plusMenuOpen.value;
-  if (plusMenuOpen.value) {
-    modelMenuOpen.value = false;
-    searchPanelOpen.value = false;
-  }
-}
-
-function closeSearchPanel() {
-  searchPanelOpen.value = false;
-  mentionQueryRange.value = null;
-  lastSearchQuery.value = '';
-  lastSearchMode.value = null;
-}
-
-function closeAllMenus() {
-  plusMenuOpen.value = false;
-  modelMenuOpen.value = false;
-  modelSearchQuery.value = '';
-  closeSearchPanel();
-}
-
 function syncModelMenuPosition() {
   if (!modelMenuOpen.value) {
     return;
@@ -770,37 +443,9 @@ function syncModelMenuPosition() {
   };
 }
 
-function handleDocumentPointerDown(event: MouseEvent) {
-  if (!(event.target instanceof Node)) {
-    return;
-  }
-
-  const root = composerRootRef.value;
-  const modelMenu = modelMenuPanelRef.value;
-  const modelAnchor = modelMenuAnchorRef.value;
-  const clickedInsideModelMenu = !!modelMenu?.contains(event.target);
-  const clickedOnModelAnchor = !!modelAnchor?.contains(event.target);
-
-  if (modelMenuOpen.value) {
-    if (!clickedInsideModelMenu && !clickedOnModelAnchor) {
-      modelMenuOpen.value = false;
-      modelSearchQuery.value = '';
-    }
-  }
-
-  if (clickedInsideModelMenu) {
-    return;
-  }
-
-  if (!root || root.contains(event.target)) {
-    return;
-  }
-  closeAllMenus();
-}
-
 function submit() {
   const content = draft.value.trim();
-  if (( !content && mentions.value.length === 0) || props.disabled || props.sending) {
+  if ((!content && mentions.value.length === 0) || props.disabled || props.sending) {
     return;
   }
 
@@ -809,67 +454,7 @@ function submit() {
     content,
     directories,
   });
-  draft.value = '';
-  mentions.value = [];
-  closeAllMenus();
-  syncComposerHeight(true);
-}
-
-async function copyMessage(content: string) {
-  const normalized = normalizeCopyContent(content);
-  if (!normalized) {
-    return;
-  }
-
-  await navigator.clipboard.writeText(normalized);
-  copiedContent.value = normalized;
-  if (copyFeedbackTimer) {
-    clearTimeout(copyFeedbackTimer);
-  }
-  copyFeedbackTimer = setTimeout(() => {
-    copiedContent.value = '';
-    copyFeedbackTimer = null;
-  }, 1600);
-}
-
-function getCopyButtonLabel(content: string) {
-  if (!normalizeCopyContent(content)) {
-    return '当前没有可拷贝内容';
-  }
-  return copiedContent.value === normalizeCopyContent(content) ? '已复制消息内容' : '拷贝消息内容';
-}
-
-function normalizeCopyContent(content: string) {
-  return content.trim();
-}
-
-function syncComposerHeight(reset = false) {
-  if (!composerRef.value) {
-    return;
-  }
-
-  if (reset) {
-    composerRef.value.style.height = 'auto';
-    composerRef.value.style.overflowY = 'hidden';
-    return;
-  }
-
-  composerRef.value.style.height = 'auto';
-  const nextHeight = Math.min(composerRef.value.scrollHeight, composerMaxHeight);
-  composerRef.value.style.height = `${nextHeight}px`;
-  composerRef.value.style.overflowY = composerRef.value.scrollHeight > composerMaxHeight ? 'auto' : 'hidden';
-}
-
-function focusComposer() {
-  composerRef.value?.focus();
-}
-
-function isModifierOnlyKey(key: string) {
-  return key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta';
-}
-
-function formatToolSummaryLabel(count: number) {
-  return `${count} 个动作`;
+  resetComposer();
 }
 
 defineExpose({

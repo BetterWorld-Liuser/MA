@@ -49,7 +49,7 @@ export const mockWorkspace = {
     contextUsage: {
         percent: 42,
         current: '10.2k',
-        limit: '24k',
+        limit: '128k',
         sections: [
             { name: '文件', size: '6.1k' },
             { name: '笔记', size: '0.8k' },
