@@ -54,7 +54,7 @@
               <p class="truncate font-mono text-[13px]" :class="freshnessClass(file.freshness)">
                 {{ fileName(file.path) }}
               </p>
-              <span class="shrink-0 font-mono text-[10px] text-text-dim">{{ file.time }}</span>
+              <span class="shrink-0 font-mono text-[10px] text-text-dim">{{ file.tokenUsage }} tok</span>
             </div>
 
             <button

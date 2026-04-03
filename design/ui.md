@@ -165,15 +165,16 @@ plan     1. 读现有结构 2. 拆接口层     [编辑] [×]
 
 ```
 [监控文件]
-  src/auth.rs        14:32  ← 高饱和
-  src/lib.rs         14:28  ← 高饱和
-  src/models.rs      11:05  ← 中饱和
-🔒 config/prod.toml  09:11  ← 低饱和
+  src/auth.rs        2.8k tok  ← 高饱和
+  src/lib.rs         1.9k tok  ← 高饱和
+  src/models.rs      0.9k tok  ← 中饱和
+🔒 config/prod.toml  0.3k tok  ← 低饱和
                      [+ 打开文件]
 ```
 
 - 顺序与 AI 实际收到的上下文顺序一致
-- 时间戳用颜色饱和度传达新旧感，越新越鲜艳
+- 次信息优先展示该文件的估算 token 消耗，而不是时间戳
+- 文件名的文字饱和度仍可作为轻量辅助视觉，用来区分 locked / 非 locked 或内容状态，但不单独渲染时间
 - 锁定图标表示 locked，close 操作被禁用
 - 右键菜单：关闭文件、锁定/解锁
 - `+ 打开文件` 弹出文件选择器

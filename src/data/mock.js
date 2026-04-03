@@ -37,10 +37,10 @@ export const mockWorkspace = {
         { id: 'plan', content: '1. 读现有结构 2. 拆接口层 3. 补测试' },
     ],
     openFiles: [
-        { path: 'src/auth.rs', time: '14:32', freshness: 'high', locked: false },
-        { path: 'src/lib.rs', time: '14:28', freshness: 'high', locked: false },
-        { path: 'src/models.rs', time: '11:05', freshness: 'medium', locked: false },
-        { path: 'config/prod.toml', time: '09:11', freshness: 'low', locked: true },
+        { path: 'src/auth.rs', tokenUsage: '2.8k', freshness: 'high', locked: false },
+        { path: 'src/lib.rs', tokenUsage: '1.9k', freshness: 'high', locked: false },
+        { path: 'src/models.rs', tokenUsage: '0.9k', freshness: 'medium', locked: false },
+        { path: 'config/prod.toml', tokenUsage: '0.3k', freshness: 'low', locked: true },
     ],
     hints: [
         { source: 'Telegram', content: 'foo: 部署好了吗？', timeLeft: '4m32s', turnsLeft: '3轮' },
@@ -105,7 +105,7 @@ export function toWorkspaceView(snapshot) {
         notes: activeTask?.notes ?? [],
         openFiles: activeTask?.open_files.map((file) => ({
             path: normalizePath(file.path),
-            time: formatOpenFileTime(file.snapshot),
+            tokenUsage: formatOpenFileTokenUsage(file.snapshot),
             freshness: file.locked ? 'low' : file.snapshot ? 'high' : 'medium',
             locked: file.locked,
         })) ?? [],
@@ -157,13 +157,14 @@ function formatRelativeTime(timestamp) {
 function normalizePath(path) {
     return path.replaceAll('\\', '/');
 }
-function formatOpenFileTime(snapshot) {
+function formatOpenFileTokenUsage(snapshot) {
     if (!snapshot) {
-        return 'untracked';
+        return '0';
     }
-    const entry = Object.values(snapshot)[0];
-    const timestamp = entry?.last_modified_at ?? entry?.last_seen_at;
-    return timestamp ? formatTime(timestamp) : 'unknown';
+    if ('Available' in snapshot) {
+        return formatTokenCount(estimateTokenCount(snapshot.Available.content));
+    }
+    return formatTokenCount(8);
 }
 function formatHintTime(expiresAt) {
     if (!expiresAt) {
@@ -193,4 +194,17 @@ function formatTokenCount(tokens) {
         return `${(tokens / 1000).toFixed(1)}k`;
     }
     return `${tokens}`;
+}
+function estimateTokenCount(text) {
+    let asciiChars = 0;
+    let nonAsciiChars = 0;
+    for (const char of text) {
+        if (char.charCodeAt(0) <= 0x7f) {
+            asciiChars += 1;
+        }
+        else {
+            nonAsciiChars += 1;
+        }
+    }
+    return Math.ceil(asciiChars / 4) + nonAsciiChars;
 }

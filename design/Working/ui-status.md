@@ -57,6 +57,7 @@
 - open files 已支持 `Lock / Unlock`
 - open files 已支持 `Close`
 - locked 文件会显示锁标记，且 `Close` 操作会被禁用
+- open files 次信息已切换为估算 token 消耗，不再显示时间
 - 已展示 hints 列表
 - 已展示 context usage 总量与分项
 - 已根据 context usage 百分比切换 warning / error 颜色
@@ -175,7 +176,7 @@
 - 聊天区顶部避免无信息增益的重复标题，例如 `Conversation` / `Chat`
 - 调试原始上下文、provider request/response、tool call/result 应放在独立 debug 视图中，不污染普通聊天气泡
 - open files 的状态应以“是否 locked”为核心，不应出现 `HIGH / MID / LOW` 这类缺乏明确语义的按钮式标签
-- open files 的“新旧感”更适合通过时间和文字饱和度表达，而不是额外加一个状态 chip
+- open files 的次信息优先服务于上下文管理，应优先显示估算 token 消耗，而不是时间
 - 标题栏控制按钮应使用明确的图标资源，而不是字符或手搓几何线条
 - 标题栏应保持紧凑，避免过高、过重，尽量接近桌面原生窗口的密度
 - 无衬线字体优先使用 `system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`
