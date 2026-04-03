@@ -37,11 +37,24 @@
         </div>
       </div>
     </div>
+
+    <div class="border-t border-white/8 p-2">
+      <button
+        class="task-settings-button"
+        type="button"
+        :disabled="busy"
+        title="打开设置"
+        @click="$emit('open-settings')"
+      >
+        <Icon :icon="settingsIcon" class="h-4 w-4" />
+      </button>
+    </div>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
+import settingsIcon from '@iconify-icons/lucide/settings-2';
 import xIcon from '@iconify-icons/lucide/x';
 import type { TaskItem } from '../data/mock';
 
@@ -56,5 +69,6 @@ defineEmits<{
   select: [taskId: string];
   create: [];
   delete: [taskId: string];
+  openSettings: [];
 }>();
 </script>

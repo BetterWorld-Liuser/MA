@@ -28,6 +28,8 @@ use crate::ui::{
 };
 use crate::watcher::FileWatcherService;
 
+const AGENTS_FILENAME: &str = "AGENTS.md";
+
 pub struct AgentSession {
     config: AgentConfig,
     watcher: FileWatcherService,
@@ -205,45 +207,70 @@ impl AgentSession {
         history: ConversationHistory,
         open_files: impl IntoIterator<Item = PathBuf>,
     ) -> Result<Self> {
+        let working_directory =
+            std::env::current_dir().context("failed to resolve current directory")?;
+        let normalized_open_files = normalize_open_files_for_workspace(
+            &working_directory,
+            open_files.into_iter().map(|path| PersistedOpenFile {
+                path,
+                locked: false,
+            }),
+        );
+        Self::create(
+            config,
+            history,
+            normalized_open_files,
+            working_directory,
+            IndexMap::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    pub fn restore(config: AgentConfig, task: PersistedTask) -> Result<Self> {
+        let working_directory =
+            std::env::current_dir().context("failed to resolve current directory")?;
+        let open_files = normalize_open_files_for_workspace(&working_directory, task.open_files);
+        Self::create(
+            config,
+            task.history,
+            open_files,
+            working_directory,
+            task.notes,
+            task.hints,
+            Vec::new(),
+        )
+    }
+
+    fn create(
+        config: AgentConfig,
+        history: ConversationHistory,
+        open_files: Vec<PersistedOpenFile>,
+        working_directory: PathBuf,
+        notes: IndexMap<String, NoteEntry>,
+        hints: Vec<Hint>,
+        injections: Vec<Injection>,
+    ) -> Result<Self> {
         let mut watcher = FileWatcherService::new()?;
-        for path in open_files {
-            if !path.exists() {
-                continue;
-            }
-            watcher.watch_file(path)?;
+        for open_file in &open_files {
+            watcher.watch_file(open_file.path.clone())?;
         }
 
         Ok(Self {
             config,
             watcher,
             history,
-            notes: IndexMap::new(),
-            locked_files: Vec::new(),
-            hints: Vec::new(),
-            injections: Vec::new(),
+            notes,
+            locked_files: open_files
+                .iter()
+                .filter(|entry| entry.locked)
+                .map(|entry| entry.path.clone())
+                .collect(),
+            hints,
+            injections,
             available_shells: detect_available_shells()?,
-            working_directory: std::env::current_dir()
-                .context("failed to resolve current directory")?,
+            working_directory,
         })
-    }
-
-    pub fn restore(config: AgentConfig, task: PersistedTask) -> Result<Self> {
-        let open_paths = task
-            .open_files
-            .iter()
-            .filter(|entry| entry.path.exists())
-            .map(|entry| entry.path.clone())
-            .collect::<Vec<_>>();
-        let mut session = Self::new(config, task.history, open_paths)?;
-        session.notes = task.notes;
-        session.hints = task.hints;
-        session.locked_files = task
-            .open_files
-            .into_iter()
-            .filter(|entry| entry.locked && entry.path.exists())
-            .map(|entry| entry.path)
-            .collect();
-        Ok(session)
     }
 
     pub async fn handle_user_message(
@@ -358,7 +385,10 @@ impl AgentSession {
                 on_event(
                     self,
                     AgentProgressEvent::RoundCompleted(
-                        debug_rounds.last().cloned().expect("debug round just pushed"),
+                        debug_rounds
+                            .last()
+                            .cloned()
+                            .expect("debug round just pushed"),
                     ),
                 )?;
                 return Ok(AgentRunResult {
@@ -747,7 +777,6 @@ impl AgentSession {
                             execution.command, execution.exit_code
                         ),
                     }),
-
                 })
             }
             "open_file" => {
@@ -984,7 +1013,6 @@ fn estimate_token_count(text: &str) -> usize {
     ascii_chars.div_ceil(4) + non_ascii_chars
 }
 
-
 fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
     let args = serde_json::from_str::<Value>(arguments_json).unwrap_or(Value::Null);
     match name {
@@ -1117,7 +1145,6 @@ fn workspace_entries(working_directory: &Path) -> Vec<String> {
 
     entries.into_iter().map(|(_, name)| name).collect()
 }
-
 
 fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome {
     ToolOutcome {
@@ -1426,6 +1453,46 @@ fn executable_extensions() -> Vec<OsString> {
     }
 }
 
+fn normalize_open_files_for_workspace(
+    working_directory: &Path,
+    open_files: impl IntoIterator<Item = PersistedOpenFile>,
+) -> Vec<PersistedOpenFile> {
+    let mut normalized = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for open_file in open_files {
+        let path = absolutize_workspace_path(working_directory, open_file.path);
+        if !path.exists() || !seen.insert(path.clone()) {
+            continue;
+        }
+        normalized.push(PersistedOpenFile {
+            path,
+            locked: open_file.locked,
+        });
+    }
+
+    let agents_path = working_directory.join(AGENTS_FILENAME);
+    if agents_path.exists() && seen.insert(agents_path.clone()) {
+        normalized.insert(
+            0,
+            PersistedOpenFile {
+                path: agents_path,
+                locked: true,
+            },
+        );
+    }
+
+    normalized
+}
+
+fn absolutize_workspace_path(working_directory: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        working_directory.join(path)
+    }
+}
+
 fn parse_shell(shell: &str) -> Result<CommandShell> {
     match shell {
         "sh" => Ok(CommandShell::Sh),
@@ -1519,7 +1586,6 @@ fn validate_line_range(lines: &[String], start_line: usize, end_line: usize) -> 
     Ok(())
 }
 
-
 #[derive(Debug, Deserialize)]
 struct RunCommandArgs {
     shell: String,
@@ -1573,12 +1639,14 @@ struct RemoveNoteArgs {
 #[cfg(test)]
 mod tests {
     use indexmap::IndexMap;
+    use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        AgentConfig, AgentSession, CommandShell, append_assistant_tool_call_message,
-        decode_command_output, default_system_core, resolve_shell_program_with,
+        AGENTS_FILENAME, AgentConfig, AgentSession, CommandShell,
+        append_assistant_tool_call_message, decode_command_output, default_system_core,
+        normalize_open_files_for_workspace, resolve_shell_program_with,
     };
     use crate::context::{ConversationHistory, Hint, NoteEntry};
     use crate::provider::{ProviderToolCall, RequestMessage};
@@ -1599,8 +1667,13 @@ mod tests {
                 "you must inspect the workspace with one or more tools before giving a substantive answer"
             )
         );
-        assert!(prompt.contains("A repository-dependent request answered without tool use is incomplete"));
-        assert!(prompt.contains("When all work is complete, output your final response as plain text"));
+        assert!(
+            prompt
+                .contains("A repository-dependent request answered without tool use is incomplete")
+        );
+        assert!(
+            prompt.contains("When all work is complete, output your final response as plain text")
+        );
     }
 
     #[test]
@@ -1682,6 +1755,58 @@ mod tests {
         assert_eq!(persisted.open_files.len(), 1);
         assert_eq!(persisted.open_files[0].path, existing_path);
         assert!(!persisted.open_files[0].locked);
+    }
+
+    #[test]
+    fn normalize_open_files_auto_adds_agents_file_as_locked_first() {
+        let workspace = temp_workspace_dir("ma-agent-open-files");
+        let regular_path = workspace.join("Cargo.toml");
+        fs::write(&regular_path, "[package]\nname = \"demo\"\n").expect("write cargo");
+        let agents_path = workspace.join(AGENTS_FILENAME);
+        fs::write(&agents_path, "# rules\n").expect("write agents");
+
+        let open_files = normalize_open_files_for_workspace(
+            &workspace,
+            vec![PersistedOpenFile {
+                path: regular_path.clone(),
+                locked: false,
+            }],
+        );
+
+        assert_eq!(open_files.len(), 2);
+        assert_eq!(open_files[0].path, agents_path);
+        assert!(open_files[0].locked);
+        assert_eq!(open_files[1].path, regular_path);
+        assert!(!open_files[1].locked);
+    }
+
+    #[test]
+    fn normalize_open_files_preserves_existing_agents_lock_state_and_position() {
+        let workspace = temp_workspace_dir("ma-agent-existing-agents");
+        let first_path = workspace.join("src").join("main.rs");
+        let agents_path = workspace.join(AGENTS_FILENAME);
+        fs::create_dir_all(first_path.parent().expect("main parent")).expect("create src");
+        fs::write(&first_path, "fn main() {}\n").expect("write main");
+        fs::write(&agents_path, "# rules\n").expect("write agents");
+
+        let open_files = normalize_open_files_for_workspace(
+            &workspace,
+            vec![
+                PersistedOpenFile {
+                    path: first_path.clone(),
+                    locked: false,
+                },
+                PersistedOpenFile {
+                    path: agents_path.clone(),
+                    locked: false,
+                },
+            ],
+        );
+
+        assert_eq!(open_files.len(), 2);
+        assert_eq!(open_files[0].path, first_path);
+        assert_eq!(open_files[1].path, agents_path);
+        assert!(!open_files[1].locked);
     }
 
     #[test]
@@ -1777,5 +1902,17 @@ mod tests {
         assert_eq!(messages[1]["tool_call_id"], "call_1");
         assert_eq!(messages[2]["role"], "assistant");
         assert_eq!(messages[2]["tool_calls"][0]["id"], "call_2");
+    }
+
+    fn temp_workspace_dir(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "{prefix}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create workspace");
+        root
     }
 }

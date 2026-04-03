@@ -239,6 +239,19 @@ export type ProviderModelsView = {
   provider_cache_key: string;
 };
 
+export type ProviderSettingsView = {
+  databasePath: string;
+  providers: Array<{
+    id: number;
+    name: string;
+    baseUrl: string;
+    apiKeyHint: string;
+    createdAt: number;
+  }>;
+  defaultProviderId?: number | null;
+  defaultModel?: string | null;
+};
+
 export const mockWorkspace: WorkspaceView = {
   title: '默认任务',
   tasks: [

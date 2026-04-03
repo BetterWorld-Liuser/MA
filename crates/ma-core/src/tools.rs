@@ -78,7 +78,6 @@ pub struct ToolParameter {
     pub description: &'static str,
 }
 
-
 fn run_command_tool(
     available_shells: &[AvailableShell],
     working_directory: &Path,
@@ -364,6 +363,5 @@ mod tests {
         assert!(prompt.contains("## replace_lines"));
         assert!(prompt.contains("## write_note"));
         assert!(prompt.contains("## remove_note"));
-
     }
 }

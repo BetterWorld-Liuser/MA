@@ -4,9 +4,12 @@ use tauri::Emitter;
 
 use ma::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteNoteRequest,
-    UiDeleteTaskRequest, UiOpenFilesRequest, UiProviderModelsView, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetTaskModelRequest, UiToggleOpenFileLockRequest,
-    UiUpsertNoteRequest, UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_provider_models,
+    UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest, UiProviderModelsView,
+    UiProviderSettingsView, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
+    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiToggleOpenFileLockRequest, UiUpsertNoteRequest, UiUpsertProviderRequest,
+    UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_provider_models,
+    fetch_provider_models_for_provider,
 };
 
 #[derive(Clone)]
@@ -154,6 +157,13 @@ async fn list_provider_models(
 }
 
 #[tauri::command]
+async fn list_provider_models_for_settings(provider_id: i64) -> Result<UiProviderModelsView, String> {
+    fetch_provider_models_for_provider(provider_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_task_model(
     state: tauri::State<'_, AppState>,
     input: UiSetTaskModelRequest,
@@ -162,6 +172,47 @@ fn set_task_model(
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
     backend
         .handle_set_task_model(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_provider_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend.provider_settings().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn upsert_provider(
+    state: tauri::State<'_, AppState>,
+    input: UiUpsertProviderRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_upsert_provider(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_provider(
+    state: tauri::State<'_, AppState>,
+    input: UiDeleteProviderRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_delete_provider(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_default_provider(
+    state: tauri::State<'_, AppState>,
+    input: UiSetDefaultProviderRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_set_default_provider(input)
         .map_err(|error| error.to_string())
 }
 
@@ -199,7 +250,12 @@ pub fn run() {
             close_open_file,
             open_files,
             list_provider_models,
+            list_provider_models_for_settings,
             set_task_model,
+            load_provider_settings,
+            upsert_provider,
+            delete_provider,
+            set_default_provider,
             search_workspace_entries
         ])
         .run(tauri::generate_context!())

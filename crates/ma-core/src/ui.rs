@@ -19,6 +19,7 @@ use crate::provider::{
     OpenAiCompatibleClient, OpenAiCompatibleConfig, fallback_task_title,
     format_provider_response_for_debug,
 };
+use crate::settings::{ProviderRecord, ProviderSettingsSnapshot, SettingsStorage};
 use crate::storage::{
     PersistedOpenFile, PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource,
 };
@@ -130,6 +131,47 @@ pub struct UiProviderModelsView {
     pub current_model: String,
     pub available_models: Vec<String>,
     pub provider_cache_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiProviderSettingsView {
+    pub database_path: PathBuf,
+    pub providers: Vec<UiProviderView>,
+    pub default_provider_id: Option<i64>,
+    pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiProviderView {
+    pub id: i64,
+    pub name: String,
+    pub base_url: String,
+    pub api_key_hint: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiUpsertProviderRequest {
+    pub id: Option<i64>,
+    pub name: String,
+    pub api_key: String,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiDeleteProviderRequest {
+    pub provider_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiSetDefaultProviderRequest {
+    pub provider_id: Option<i64>,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -499,8 +541,8 @@ impl UiAppBackend {
             .map(UiTaskSummary::from)
             .collect::<Vec<_>>();
         let persisted = self.storage.load_task(active_task_id)?;
-        let context_budget_tokens =
-            resolve_context_window_fallback(persisted.task.selected_model.as_deref());
+        let selected_model = self.selected_model_for_task(Some(active_task_id))?;
+        let context_budget_tokens = resolve_context_window_fallback(selected_model.as_deref());
         let runtime = self
             .load_session(active_task_id)
             .ok()
@@ -827,9 +869,16 @@ impl UiAppBackend {
     }
 
     pub fn selected_model_for_task(&self, task_id: Option<i64>) -> Result<Option<String>> {
-        Ok(task_id
+        let task_model = task_id
             .and_then(|id| self.storage.load_task(id).ok())
-            .and_then(|task| task.task.selected_model))
+            .and_then(|task| task.task.selected_model);
+
+        if task_model.is_some() {
+            return Ok(task_model);
+        }
+
+        let settings = SettingsStorage::open()?;
+        settings.default_model()
     }
 
     pub fn handle_set_task_model(
@@ -844,6 +893,50 @@ impl UiAppBackend {
         self.storage
             .update_task_model(task_id, Some(model.to_string()))?;
         self.workspace_snapshot(Some(task_id))
+    }
+
+    pub fn provider_settings(&self) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        Ok(UiProviderSettingsView::from_snapshot(
+            settings.database_path().to_path_buf(),
+            settings.snapshot()?,
+        ))
+    }
+
+    pub fn handle_upsert_provider(
+        &self,
+        request: UiUpsertProviderRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        settings.upsert_provider(request.id, request.name, request.api_key, request.base_url)?;
+        Ok(UiProviderSettingsView::from_snapshot(
+            settings.database_path().to_path_buf(),
+            settings.snapshot()?,
+        ))
+    }
+
+    pub fn handle_delete_provider(
+        &self,
+        request: UiDeleteProviderRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        settings.delete_provider(request.provider_id)?;
+        Ok(UiProviderSettingsView::from_snapshot(
+            settings.database_path().to_path_buf(),
+            settings.snapshot()?,
+        ))
+    }
+
+    pub fn handle_set_default_provider(
+        &self,
+        request: UiSetDefaultProviderRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        settings.set_default_provider(request.provider_id, request.model)?;
+        Ok(UiProviderSettingsView::from_snapshot(
+            settings.database_path().to_path_buf(),
+            settings.snapshot()?,
+        ))
     }
 
     pub fn search_workspace_entries(
@@ -972,6 +1065,17 @@ impl UiTaskSnapshot {
     }
 }
 
+impl UiProviderSettingsView {
+    pub fn from_snapshot(database_path: PathBuf, snapshot: ProviderSettingsSnapshot) -> Self {
+        Self {
+            database_path,
+            providers: snapshot.providers.into_iter().map(UiProviderView::from).collect(),
+            default_provider_id: snapshot.default_provider_id,
+            default_model: snapshot.default_model,
+        }
+    }
+}
+
 impl UiRuntimeSnapshot {
     pub fn new(
         working_directory: PathBuf,
@@ -1004,6 +1108,18 @@ impl UiTaskSummary {
     }
 }
 
+impl From<ProviderRecord> for UiProviderView {
+    fn from(provider: ProviderRecord) -> Self {
+        Self {
+            id: provider.id,
+            name: provider.name,
+            base_url: provider.base_url,
+            api_key_hint: mask_api_key(&provider.api_key),
+            created_at: system_time_to_unix(provider.created_at),
+        }
+    }
+}
+
 impl From<TaskRecord> for UiTaskSummary {
     fn from(task: TaskRecord) -> Self {
         Self {
@@ -1019,6 +1135,23 @@ impl From<TaskRecord> for UiTaskSummary {
 }
 
 fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
+    let settings = SettingsStorage::open()?;
+
+    if let Some(provider) = settings.default_provider()? {
+        let model = task
+            .selected_model
+            .clone()
+            .or(settings.default_model()?)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
+
+        return Ok(OpenAiCompatibleConfig {
+            base_url: provider.base_url,
+            api_key: provider.api_key,
+            model,
+        });
+    }
+
     let mut config = OpenAiCompatibleConfig::from_env()?;
     if let Some(model) = &task.selected_model {
         config.model = model.clone();
@@ -1027,14 +1160,37 @@ fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig>
 }
 
 pub async fn fetch_provider_models(selected_model: Option<String>) -> Result<UiProviderModelsView> {
-    let config = OpenAiCompatibleConfig::from_env()?;
-    let current_model = selected_model.unwrap_or_else(|| config.model.clone());
-    // UI 侧会按 provider 维度缓存模型列表。
-    // 目前运行时 provider 仍由环境变量驱动，因此用标准化 base_url 作为稳定缓存键。
+    let config = resolve_active_provider_config(selected_model)?;
+    let current_model = config.model.clone();
+    // UI 侧按 provider 维度缓存模型列表，因此 base_url 仍可作为稳定缓存键。
     let provider_cache_key = config.base_url.clone();
     let client = OpenAiCompatibleClient::new(config);
     let mut available_models = client.list_models().await.unwrap_or_default();
     if !available_models.iter().any(|model| model == &current_model) {
+        available_models.insert(0, current_model.clone());
+    }
+    available_models.sort();
+    available_models.dedup();
+
+    Ok(UiProviderModelsView {
+        current_model,
+        available_models,
+        provider_cache_key,
+    })
+}
+
+pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiProviderModelsView> {
+    let settings = SettingsStorage::open()?;
+    let provider = settings.load_provider(provider_id)?;
+    let current_model = settings.default_model()?.unwrap_or_default();
+    let provider_cache_key = provider.base_url.clone();
+    let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+        base_url: provider.base_url,
+        api_key: provider.api_key,
+        model: current_model.clone(),
+    });
+    let mut available_models = client.list_models().await.unwrap_or_default();
+    if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
         available_models.insert(0, current_model.clone());
     }
     available_models.sort();
@@ -1218,7 +1374,9 @@ impl From<DebugRound> for UiDebugRoundView {
             iteration: round.iteration,
             context_preview: round.context_preview,
             provider_request_json: pretty_json_or_original(&round.provider_request_json),
-            provider_response_json: format_provider_response_for_debug(&round.provider_raw_response),
+            provider_response_json: format_provider_response_for_debug(
+                &round.provider_raw_response,
+            ),
             provider_response_raw: pretty_json_or_original(&round.provider_raw_response),
             tool_calls: round
                 .tool_calls
@@ -1411,6 +1569,47 @@ impl UiAppBackend {
     pub fn workspace_path(&self) -> &Path {
         &self.workspace_path
     }
+}
+
+fn resolve_active_provider_config(selected_model: Option<String>) -> Result<OpenAiCompatibleConfig> {
+    let settings = SettingsStorage::open()?;
+    if let Some(provider) = settings.default_provider()? {
+        let model = selected_model
+            .or(settings.default_model()?)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
+        return Ok(OpenAiCompatibleConfig {
+            base_url: provider.base_url,
+            api_key: provider.api_key,
+            model,
+        });
+    }
+
+    let mut config = OpenAiCompatibleConfig::from_env()?;
+    if let Some(model) = selected_model.filter(|value| !value.trim().is_empty()) {
+        config.model = model;
+    }
+    Ok(config)
+}
+
+fn mask_api_key(api_key: &str) -> String {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return "未设置".to_string();
+    }
+
+    let chars = trimmed.chars().collect::<Vec<_>>();
+    let head = chars.iter().take(4).collect::<String>();
+    let tail = chars
+        .iter()
+        .rev()
+        .take(4)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{}••••{}", head, tail)
 }
 
 fn pretty_json_or_original(text: &str) -> String {

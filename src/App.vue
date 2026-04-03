@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen overflow-hidden bg-bg text-text">
+  <div class="relative h-screen overflow-hidden bg-bg text-text">
     <header data-tauri-drag-region class="flex h-10 items-center border-b border-border bg-bg-secondary/95 backdrop-blur-sm select-none">
       <div data-tauri-drag-region class="flex min-w-0 items-center gap-3 px-4">
         <span class="inline-flex h-5 w-5 items-center justify-center rounded-sm border border-accent/50 bg-accent-dim text-[11px] font-semibold text-accent">
@@ -38,6 +38,7 @@
           @select="selectTask"
           @create="createTask"
           @delete="deleteTask"
+          @open-settings="openSettings"
         />
         <ChatPane
           ref="chatPaneRef"
@@ -65,6 +66,20 @@
           @close-file="closeOpenFile"
         />
       </main>
+    </div>
+
+    <div v-if="settingsOpen" class="absolute inset-x-0 bottom-0 top-10 z-40 bg-[rgba(5,5,5,0.84)] backdrop-blur-md">
+      <SettingsPage
+        :settings="providerSettings"
+        :busy="busy"
+        :models-loading="providerModelsLoading"
+        :available-models="providerModels"
+        @close="closeSettings"
+        @save-provider="saveProvider"
+        @delete-provider="deleteProvider"
+        @save-default-provider="saveDefaultProvider"
+        @request-models="loadProviderModelsForSettings"
+      />
     </div>
 
     <Dialog :open="noteDialogOpen" @update:open="handleNoteDialogOpenChange">
@@ -151,6 +166,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/components/ui/textarea';
 import ChatPane from './components/ChatPane.vue';
 import ContextPanel from './components/ContextPanel.vue';
+import SettingsPage from './components/SettingsPage.vue';
 import TaskList from './components/TaskList.vue';
 import {
   mockWorkspace,
@@ -158,6 +174,8 @@ import {
   type BackendAgentProgressEvent,
   type BackendWorkspaceSnapshot,
   type LiveTurn,
+  type ProviderModelsView,
+  type ProviderSettingsView,
   type WorkspaceView,
 } from './data/mock';
 
@@ -184,6 +202,10 @@ const confirmDialogDescription = ref('');
 const confirmDialogBody = ref('');
 const confirmDialogLabel = ref('删除');
 const confirmDialogAction = ref<(() => Promise<void>) | null>(null);
+const settingsOpen = ref(false);
+const providerSettings = ref<ProviderSettingsView | null>(null);
+const providerModels = ref<string[]>([]);
+const providerModelsLoading = ref(false);
 
 const workspace = computed<WorkspaceView>(() => {
   const activeTaskId =
@@ -215,6 +237,7 @@ onMounted(async () => {
     applyAgentProgress(event.payload);
   });
   await refreshWorkspace();
+  await refreshProviderSettings();
   await appWindow.onResized(async () => {
     isMaximized.value = await appWindow.isMaximized();
   });
@@ -709,6 +732,92 @@ async function setTaskModel(model: string) {
       },
     });
   });
+}
+
+async function refreshProviderSettings() {
+  try {
+    providerSettings.value = await invoke<ProviderSettingsView>('load_provider_settings');
+    if (providerSettings.value?.defaultProviderId) {
+      await loadProviderModelsForSettings(providerSettings.value.defaultProviderId);
+    } else {
+      providerModels.value = [];
+    }
+  } catch (error) {
+    console.warn('Failed to load provider settings.', error);
+  }
+}
+
+async function openSettings() {
+  if (busy.value) {
+    return;
+  }
+  settingsOpen.value = true;
+  await refreshProviderSettings();
+}
+
+function closeSettings() {
+  settingsOpen.value = false;
+}
+
+async function saveProvider(input: { id?: number; name: string; baseUrl: string; apiKey: string }) {
+  await runWorkspaceAction(async () => {
+    providerSettings.value = await invoke<ProviderSettingsView>('upsert_provider', {
+      input,
+    });
+  });
+
+  if (providerSettings.value?.defaultProviderId) {
+    await loadProviderModelsForSettings(providerSettings.value.defaultProviderId);
+  }
+}
+
+async function deleteProvider(providerId: number) {
+  openConfirmDialog({
+    title: '删除 Provider',
+    description: '删除后，March 将无法继续使用这个 provider 发起模型请求。',
+    body: `确认删除这个 provider 吗？`,
+    confirmLabel: '删除 Provider',
+    action: async () => {
+      await runWorkspaceAction(async () => {
+        providerSettings.value = await invoke<ProviderSettingsView>('delete_provider', {
+          input: { providerId },
+        });
+      });
+      if (providerSettings.value?.defaultProviderId) {
+        await loadProviderModelsForSettings(providerSettings.value.defaultProviderId);
+      } else {
+        providerModels.value = [];
+      }
+      closeConfirmDialog();
+    },
+  });
+}
+
+async function saveDefaultProvider(input: { providerId: number; model: string }) {
+  await runWorkspaceAction(async () => {
+    providerSettings.value = await invoke<ProviderSettingsView>('set_default_provider', {
+      input: {
+        providerId: input.providerId,
+        model: input.model,
+      },
+    });
+  });
+  await loadProviderModelsForSettings(input.providerId);
+}
+
+async function loadProviderModelsForSettings(providerId: number) {
+  providerModelsLoading.value = true;
+  try {
+    const response = await invoke<ProviderModelsView>('list_provider_models_for_settings', {
+      providerId,
+    });
+    providerModels.value = response.available_models;
+  } catch (error) {
+    providerModels.value = [];
+    errorMessage.value = humanizeError(error);
+  } finally {
+    providerModelsLoading.value = false;
+  }
 }
 
 async function runWorkspaceAction(action: () => Promise<void>) {

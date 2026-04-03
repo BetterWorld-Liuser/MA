@@ -782,7 +782,6 @@ pub struct ApiToolFunctionCallRequest {
     pub arguments: String,
 }
 
-
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatChoice>,
@@ -1461,7 +1460,8 @@ mod tests {
         );
 
         let formatted = format_provider_response_for_debug(raw);
-        let payload: Value = serde_json::from_str(&formatted).expect("formatted debug response json");
+        let payload: Value =
+            serde_json::from_str(&formatted).expect("formatted debug response json");
 
         assert_eq!(payload["content"], "你好");
         assert_eq!(payload["tool_calls"].as_array().map(Vec::len), Some(0));

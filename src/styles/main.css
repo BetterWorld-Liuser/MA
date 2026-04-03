@@ -135,6 +135,107 @@
   @apply shrink-0 items-center justify-center rounded-md p-1 text-text-dim transition hover:bg-bg hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
 }
 
+@utility task-settings-button {
+  @apply inline-flex h-10 w-10 items-center justify-center rounded-xl border border-transparent text-text-muted transition hover:border-white/8 hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+@utility settings-shell {
+  @apply flex h-full flex-col overflow-hidden px-6 py-5;
+}
+
+@utility settings-header {
+  @apply flex items-start justify-between gap-4 border-b border-white/8 pb-5;
+}
+
+@utility settings-grid {
+  @apply mt-5 grid min-h-0 flex-1 gap-5 overflow-hidden lg:grid-cols-[minmax(340px,420px)_minmax(0,1fr)];
+}
+
+@utility settings-panel {
+  @apply min-h-0 overflow-y-auto rounded-2xl border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-5;
+}
+
+@utility settings-panel-header {
+  @apply mb-4 flex items-start justify-between gap-3;
+}
+
+@utility settings-section-title {
+  @apply text-[16px] font-semibold tracking-[-0.01em] text-text;
+}
+
+@utility settings-section-copy {
+  @apply mt-1 text-[12px] leading-5 text-text-muted;
+}
+
+@utility settings-provider-card {
+  @apply rounded-2xl border border-white/8 bg-[rgba(255,255,255,0.02)] p-4 transition;
+}
+
+@utility settings-provider-card-active {
+  border-color: rgba(212, 105, 42, 0.34);
+  background: rgba(212, 105, 42, 0.1);
+}
+
+@utility settings-default-badge {
+  @apply inline-flex items-center rounded-full border border-accent/30 bg-accent-dim px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-accent;
+}
+
+@utility settings-empty {
+  @apply rounded-2xl border border-dashed border-white/10 px-4 py-6 text-[13px] leading-6 text-text-muted;
+}
+
+@utility settings-divider {
+  @apply my-5 border-t border-white/8;
+}
+
+@utility settings-select {
+  @apply flex h-10 w-full appearance-none rounded-xl border border-border bg-[rgba(255,255,255,0.02)] px-3 text-[13px] text-text outline-hidden transition focus:border-border-focus;
+  color-scheme: dark;
+
+  & option {
+    background: #111111;
+    color: var(--color-text);
+  }
+
+  & optgroup {
+    background: #111111;
+    color: var(--color-text-muted);
+  }
+}
+
+@utility settings-select-anchor {
+  @apply relative;
+}
+
+@utility settings-select-button {
+  @apply inline-flex h-10 w-full items-center justify-between rounded-xl border border-border bg-[rgba(255,255,255,0.02)] px-3 text-left text-[13px] outline-hidden transition hover:bg-[rgba(255,255,255,0.03)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility settings-select-menu {
+  @apply fixed z-[90] overflow-y-auto rounded-2xl border border-white/8 bg-[rgba(10,10,10,0.98)] p-1 shadow-[0_20px_60px_rgba(0,0,0,0.55)];
+  backdrop-filter: blur(18px);
+}
+
+@utility settings-select-search-wrap {
+  @apply sticky top-0 z-[1] mb-1 bg-[rgba(10,10,10,0.98)] px-1 pb-1 pt-1;
+}
+
+@utility settings-select-search {
+  @apply h-9 w-full rounded-xl border border-white/8 bg-[rgba(255,255,255,0.03)] px-3 text-[13px] text-text outline-hidden placeholder:text-text-dim focus:border-border-focus;
+}
+
+@utility settings-select-option {
+  @apply flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-[13px] text-text-muted transition hover:bg-bg-hover hover:text-text;
+}
+
+@utility settings-select-option-active {
+  @apply bg-accent-dim text-text;
+}
+
+@utility settings-select-empty {
+  @apply px-3 py-3 text-[12px] text-text-dim;
+}
+
 @utility message-avatar {
   @apply inline-flex h-7 w-7 items-center justify-center rounded-md bg-bg-secondary text-[11px] uppercase text-text-muted;
 }

@@ -179,7 +179,10 @@ impl MaStorage {
             .execute("DELETE FROM notes WHERE task_id = ?1", params![task_id])
             .context("failed to delete task notes")?;
         transaction
-            .execute("DELETE FROM open_files WHERE task_id = ?1", params![task_id])
+            .execute(
+                "DELETE FROM open_files WHERE task_id = ?1",
+                params![task_id],
+            )
             .context("failed to delete task open files")?;
 
         let affected = transaction
@@ -949,7 +952,9 @@ mod tests {
         assert!(storage.list_tasks().expect("list tasks").is_empty());
         let verification = Connection::open(&db_path).expect("reopen db");
         let turn_count: i64 = verification
-            .query_row("SELECT COUNT(*) FROM conversation_turns", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM conversation_turns", [], |row| {
+                row.get(0)
+            })
             .expect("count turns");
         let note_count: i64 = verification
             .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))

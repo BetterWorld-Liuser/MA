@@ -287,11 +287,13 @@ CREATE TABLE hints (
 
 ### 自动 open 的触发场景
 
-除了 AI 主动调用 `open_file`，以下两种情况 Ma 会自动将文件加入 `open_files`：
+除了 AI 主动调用 `open_file`，以下三种情况 Ma 会自动将文件加入 `open_files`：
 
 **AI 写入文件**：AI 通过 `write_file` 落盘的文件，若不在 `open_files` 中，Ma 自动加入并开始追踪。逻辑是：AI 写完之后往往还需要确认效果、继续修改，文件理应留在上下文里反映最新状态。
 
 **用户 @ 引用文件**：用户在消息中以 `@path` 形式引用的文件，Ma 自动加入 `open_files`。这是明确的"我希望 AI 看到这个文件"的意图表达，无需 AI 再手动调用 `open_file`。
+
+**session 初始化自动加入 `AGENTS.md`**：如果工作目录根下存在 `AGENTS.md`，Ma 在 session 初始化时自动将其加入 `open_files`，并默认设为 locked。它的定位是项目级规则文件，应像其他被追踪文件一样由 watcher 提供真实内容，但不依赖 AI 主动打开。
 
 ### Prefix Cache 与文件顺序
 
@@ -378,6 +380,8 @@ CREATE TABLE hints (
 | `close_file` locked 文件 | 被 March 拒绝 |
 | AI 修改 locked 文件内容 | 允许 |
 | AI 通过命令删除 locked 文件 | 允许执行；watcher 收到 `Remove` 事件后向用户发出警告 |
+
+`AGENTS.md` 默认属于 locked 文件：它的 lock 只用于保证规则文件持续留在上下文中，不意味着禁止编辑。
 
 ---
 
