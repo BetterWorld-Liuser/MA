@@ -55,6 +55,18 @@
               </ul>
             </details>
           </div>
+
+          <div class="message-actions" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
+            <button
+              class="message-copy-button"
+              type="button"
+              :aria-label="getCopyButtonLabel(message.content)"
+              :title="getCopyButtonLabel(message.content)"
+              @click="copyMessage(message.content)"
+            >
+              <Icon :icon="copiedContent === normalizeCopyContent(message.content) ? checkIcon : copyIcon" class="message-copy-icon" />
+            </button>
+          </div>
         </div>
       </article>
 
@@ -95,6 +107,19 @@
                 <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
               </div>
             </div>
+          </div>
+
+          <div class="message-actions justify-start">
+            <button
+              class="message-copy-button"
+              type="button"
+              aria-label="拷贝当前回复内容"
+              title="拷贝当前回复内容"
+              :disabled="!liveTurn.content"
+              @click="copyMessage(liveTurn.content)"
+            >
+              <Icon :icon="copiedContent === normalizeCopyContent(liveTurn.content) && liveTurn.content ? checkIcon : copyIcon" class="message-copy-icon" />
+            </button>
           </div>
         </div>
       </article>
@@ -254,6 +279,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
+import checkIcon from '@iconify-icons/lucide/check';
+import copyIcon from '@iconify-icons/lucide/copy';
 import pauseIcon from '@iconify-icons/lucide/pause';
 import MarkdownRender from 'markstream-vue';
 import type { ChatMessage, LiveTurn, ProviderModelsView, WorkspaceEntryView } from '../data/mock';
@@ -317,7 +344,9 @@ const resolvedCurrentModel = ref('');
 const modelMenuStyle = ref<Record<string, string>>({});
 const lastSearchQuery = ref('');
 const lastSearchMode = ref<'smart' | 'file' | 'directory' | null>(null);
+const copiedContent = ref('');
 let activeModelRequestId = 0;
+let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 const composerIsEmpty = computed(() => !draft.value.trim() && mentions.value.length === 0);
 const effectiveSelectedModel = computed(() => props.selectedModel?.trim() || resolvedCurrentModel.value.trim());
@@ -427,6 +456,10 @@ onUnmounted(() => {
   document.removeEventListener('mousedown', handleDocumentPointerDown);
   window.removeEventListener('resize', syncModelMenuPosition);
   window.removeEventListener('scroll', syncModelMenuPosition, true);
+  if (copyFeedbackTimer) {
+    clearTimeout(copyFeedbackTimer);
+    copyFeedbackTimer = null;
+  }
 });
 
 function handleDraftInput() {
@@ -780,6 +813,34 @@ function submit() {
   mentions.value = [];
   closeAllMenus();
   syncComposerHeight(true);
+}
+
+async function copyMessage(content: string) {
+  const normalized = normalizeCopyContent(content);
+  if (!normalized) {
+    return;
+  }
+
+  await navigator.clipboard.writeText(normalized);
+  copiedContent.value = normalized;
+  if (copyFeedbackTimer) {
+    clearTimeout(copyFeedbackTimer);
+  }
+  copyFeedbackTimer = setTimeout(() => {
+    copiedContent.value = '';
+    copyFeedbackTimer = null;
+  }, 1600);
+}
+
+function getCopyButtonLabel(content: string) {
+  if (!normalizeCopyContent(content)) {
+    return '当前没有可拷贝内容';
+  }
+  return copiedContent.value === normalizeCopyContent(content) ? '已复制消息内容' : '拷贝消息内容';
+}
+
+function normalizeCopyContent(content: string) {
+  return content.trim();
 }
 
 function syncComposerHeight(reset = false) {

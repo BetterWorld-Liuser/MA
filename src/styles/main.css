@@ -204,6 +204,26 @@
   @apply min-w-0 text-text-dim;
 }
 
+@utility message-actions {
+  @apply flex px-1;
+}
+
+@utility message-copy-button {
+  @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-text-dim transition disabled:cursor-not-allowed disabled:opacity-35;
+  background: transparent;
+  border: 1px solid transparent;
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.06);
+    color: var(--color-text);
+  }
+}
+
+@utility message-copy-icon {
+  @apply h-3.5 w-3.5;
+}
+
 @utility live-status-row {
   @apply flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-muted;
 }
