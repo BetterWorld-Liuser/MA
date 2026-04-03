@@ -202,17 +202,16 @@ export type BackendAgentProgressEvent =
       preview?: string | null;
     }
   | {
-      kind: 'reply_preview';
+      kind: 'assistant_text_preview';
       task_id: number;
       turn_id: string;
       message: string;
     }
   | {
-      kind: 'reply';
+      kind: 'final_assistant_message';
       task_id: number;
       turn_id: string;
       task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
-      wait: boolean;
     }
   | {
       kind: 'round_complete';

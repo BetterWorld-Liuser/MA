@@ -124,7 +124,7 @@ export default {
 │  好的，先看一下现有结构……         │
 │  ┌─ open_file src/auth.rs       │
 │  ├─ replace_lines 12-30         │
-│  └─ reply ✓                     │
+│  └─ run_command cargo test      │
 │                                  │
 │  March                     14:33   │
 │  已完成，auth 模块拆成了三个文件  │

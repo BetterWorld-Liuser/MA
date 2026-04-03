@@ -24,7 +24,7 @@
 │ 好的，我先看一下现有结构……                     │
 │ ┌─ read_file src/auth.rs                    │
 │ ├─ replace_lines 12-30                      │
-│ └─ reply ✓                                  │
+│ └─ run_command cargo test                   │
 │                                              │
 │                           用户  14:32        │
 │           帮我把 auth 模块拆成更小的单元       │

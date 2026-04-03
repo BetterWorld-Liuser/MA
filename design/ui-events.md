@@ -396,8 +396,8 @@ type ToolItemViewModel = {
 本文定义的是“这些行为如何映射成用户能看到的事件”。例如：
 
 - `open_file` / `write_file` / `replace_lines` 这类工具，会映射成 `tool_started` / `tool_finished`
-- `reply(wait=false)` 更适合映射成 `assistant_stream_delta` 或阶段性文本更新
-- `reply(wait=true)` 通常意味着本轮即将走向 `turn_finished`
+- 轮内出现的阶段性 assistant 文本，更适合映射成 `assistant_stream_delta` 或中间文本更新
+- 本轮真正走向 `turn_finished` 的信号，是 provider 不再返回新的 tool calls
 
 UI 事件层不改变工具本身，只规定展示协议。
 

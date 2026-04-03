@@ -5,7 +5,7 @@
 | [DESIGN.md](DESIGN.md) | 项目目标、核心理念、架构总览、技术栈、开发顺序 |
 | [ui-task-naming.md](ui-task-naming.md) | 新建 task 的延迟命名与首轮自动命名规则 |
 | [context.md](context.md) | 上下文分层、数据结构、prefix cache、watcher 边界情况、任务切换、上下文压力管理 |
-| [tools.md](tools.md) | 工具分层、reply 通信、run_command、文件工具、行号编辑、错误处理 |
+| [tools.md](tools.md) | 工具分层、用户可见输出、run_command、文件工具、行号编辑、错误处理 |
 | [config.md](config.md) | UI 配置（provider）与文本配置（config.toml）的职责划分 |
 | [skills.md](skills.md) | skill 文件格式、发现路径、加载流程、与上下文的集成 |
 | [ui.md](ui.md) | UI 总览、设计原则、子文档边界 |

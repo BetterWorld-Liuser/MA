@@ -116,8 +116,8 @@ fn print_agent_result(
     debug_enabled: bool,
     debug_logs: &DebugLogs,
 ) -> Result<()> {
-    for reply in &result.replies {
-        println!("\n{}\n", reply.message);
+    for final_message in &result.final_messages {
+        println!("\n{}\n", final_message.message);
     }
 
     if debug_enabled {

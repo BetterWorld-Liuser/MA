@@ -129,7 +129,7 @@ pub struct CommandExecution {
 
 #[derive(Debug, Clone)]
 pub struct AgentRunResult {
-    pub replies: Vec<ReplyEvent>,
+    pub final_messages: Vec<FinalAssistantMessage>,
     pub debug_rounds: Vec<DebugRound>,
 }
 
@@ -150,10 +150,10 @@ pub enum AgentProgressEvent {
         summary: String,
         preview: Option<String>,
     },
-    ReplyPreview {
+    AssistantTextPreview {
         message: String,
     },
-    Reply(ReplyEvent),
+    FinalAssistantMessage(FinalAssistantMessage),
     RoundCompleted(DebugRound),
 }
 
@@ -172,9 +172,8 @@ pub enum AgentToolStatus {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReplyEvent {
+pub struct FinalAssistantMessage {
     pub message: String,
-    pub wait: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -267,7 +266,7 @@ impl AgentSession {
     {
         self.add_user_turn(content);
 
-        let mut replies = Vec::new();
+        let mut final_messages = Vec::new();
         let mut summaries = Vec::new();
         let mut debug_rounds = Vec::new();
         let mut transient_messages: Vec<RequestMessage> = Vec::new();
@@ -308,7 +307,7 @@ impl AgentSession {
                             )?;
                             on_event(
                                 self,
-                                AgentProgressEvent::ReplyPreview {
+                                AgentProgressEvent::AssistantTextPreview {
                                     message: content_preview.clone(),
                                 },
                             )?;
@@ -346,13 +345,15 @@ impl AgentSession {
                     Some(text) if !text.trim().is_empty() => text,
                     _ => bail!("provider returned no tool calls and no text; cannot end turn"),
                 };
-                let reply = ReplyEvent {
+                let final_message = FinalAssistantMessage {
                     message: final_message,
-                    wait: true,
                 };
-                self.add_assistant_turn(reply.message.clone(), summaries.clone());
-                on_event(self, AgentProgressEvent::Reply(reply.clone()))?;
-                replies.push(reply);
+                self.add_assistant_turn(final_message.message.clone(), summaries.clone());
+                on_event(
+                    self,
+                    AgentProgressEvent::FinalAssistantMessage(final_message.clone()),
+                )?;
+                final_messages.push(final_message);
                 debug_rounds.push(debug_round);
                 on_event(
                     self,
@@ -361,7 +362,7 @@ impl AgentSession {
                     ),
                 )?;
                 return Ok(AgentRunResult {
-                    replies,
+                    final_messages,
                     debug_rounds,
                 });
             }

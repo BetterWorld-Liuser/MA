@@ -428,7 +428,7 @@ function applyAgentProgress(event: BackendAgentProgressEvent) {
         ),
       });
       return;
-    case 'reply_preview':
+    case 'assistant_text_preview':
       ensureLiveTurn(event.task_id, event.turn_id);
       if (!liveTurns.value[event.task_id]) {
         return;
@@ -440,16 +440,14 @@ function applyAgentProgress(event: BackendAgentProgressEvent) {
         content: event.message,
       });
       return;
-    case 'reply':
+    case 'final_assistant_message':
       if (snapshot.value?.active_task?.task.id === event.task_id) {
         snapshot.value = {
           ...snapshot.value,
           active_task: event.task,
         };
       }
-      if (event.wait) {
-        clearLiveTurn(event.task_id);
-      }
+      clearLiveTurn(event.task_id);
       return;
     case 'round_complete':
       if (snapshot.value?.active_task?.task.id === event.task_id) {

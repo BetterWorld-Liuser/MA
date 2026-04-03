@@ -91,44 +91,40 @@ Only choose from the shells listed above.
 - 文件工具直接接入 watcher / snapshot / ModifiedBy 归因逻辑，是 Source of Truth 的一部分
 - 命令执行失败时往往混有环境因素；基础文件操作应该尽量确定、可预测、可审计
 
-### 3. 通信工具：`reply`
+### 3. 用户可见输出
 
-AI 通过 `reply` 向用户发送消息，这是 AI 与用户交互的唯一出口：
+用户最终看到的回复不是某个专门的 `reply` 工具调用，而是**本轮 agent loop 自然结束时产出的 assistant 自然语言文本**。
 
-```rust
-reply {
-    message: String,
-    wait: bool,
-}
-```
+这意味着：
 
-- `wait: true`：发送消息后暂停，等待用户下一次输入。这是 AI"完成了这一步"的信号。
-- `wait: false`：发送进度更新后继续执行，不等待用户。适合长任务中途汇报状态。
+- 中途出现的工具调用、执行结果、阶段性文本，都只是本轮推进过程的一部分
+- 只有当 provider 返回文本且不再包含新的 tool calls 时，这段文本才会被视为本轮最终输出
+- turn 的结束条件由 agent loop 是否继续产生 tool calls 决定，而不是由某个单独的“回复工具”决定
 
-**没有循环，只有决策**：March 不设外部循环控制器，不计数工具调用次数，不强制插入检查点。每次 API 返回后，March 执行 AI 请求的工具，把结果拼回上下文，然后再发一次 API 请求——如此持续，直到 AI 自己调用 `reply(wait=true)` 为止。"循环"是 AI 行为的自然结果，不是 March 强加的控制结构。
+**没有循环，只有决策**：March 不设外部循环控制器，不计数工具调用次数，不强制插入检查点。每次 API 返回后，March 执行 AI 请求的工具，把结果拼回上下文，然后再发一次 API 请求——如此持续，直到 provider 返回的结果里不再有新的 tool calls 为止。"循环"是 AI 行为的自然结果，不是 March 强加的控制结构。
 
 **用户中断**：用户点击取消时，March 立即断开当前 API 连接。上下文状态（open_files、notes、recent_chat）保持中断前的最新状态，AI 下一轮可以从这个状态继续。
 
-**AI 运行中用户发新消息**：如果 AI 尚未 `reply(wait=true)`，用户发来的新消息暂存。下一轮构建上下文时，新消息会被刷新到 `recent_chat`，AI 自然感知到。March 不打断当前正在进行的 API 请求，等它返回后再处理。
+**AI 运行中用户发新消息**：如果当前 turn 尚未自然结束，用户发来的新消息暂存。下一轮构建上下文时，新消息会被刷新到 `recent_chat`，AI 自然感知到。March 不打断当前正在进行的 API 请求，等它返回后再处理。
 
 ### 轮内消息历史与轮间清理
 
 **两个层次的"历史"需要区分清楚：**
 
-- **轮内消息历史**：从用户发消息到 AI 调用 `reply(wait=true)` 之间，agent loop 产生的所有 API 交互——中间 assistant 消息、tool_calls、tool_results——构成本轮的消息历史，每次 API 请求都带上完整的轮内历史以维持连贯性。
-- **recent_chat**（跨轮）：只记录外层对话：用户消息 + AI 通过 `reply` 发出的内容，最近 3 轮。轮内的中间过程不进入 `recent_chat`。
+- **轮内消息历史**：从用户发消息到本轮不再产生新的 tool calls、agent loop 自然结束之间，agent loop 产生的所有 API 交互——中间 assistant 消息、tool_calls、tool_results——构成本轮的消息历史，每次 API 请求都带上完整的轮内历史以维持连贯性。
+- **recent_chat**（跨轮）：只记录外层对话：用户消息 + 本轮最终 assistant 输出，最近 3 轮。轮内的中间过程不进入 `recent_chat`。
 
-**`finish_reason: stop` + `message.content` 的处理**：如果 API 返回了文本内容但没有工具调用，这是 AI 的中间思考过程，**不是向用户的回复**。Ma 的处理方式：
+**`tool_calls.is_empty()` + `message.content` 的处理**：如果 API 返回了文本内容且没有工具调用，当前实现会将这段文本视为**本轮最终回复**。Ma 的处理方式：
 
 1. 将该 assistant 消息追加到轮内消息历史
-2. 继续发起下一次 API 请求，AI 从这个思考状态接着往下走
-3. 不展示给用户，不终止 agent loop
+2. 将其作为对用户的最终输出持久化
+3. 结束当前 turn，不再继续 agent loop
 
-只有 `reply` 工具调用才是 AI 与用户交互的合法出口，`finish_reason: stop` 不是终止信号。
+这与早期“`reply` 是唯一出口”的设想不同。当前代码的真实语义是：**是否结束由 tool calls 是否继续出现决定**，最终 assistant 文本只是“自然结束时的产物”，不是一个独立控制信号。
 
-**`reply(wait=true)` 调用后的清理**：轮内消息历史整块丢弃——AI 的中间思考、工具调用记录、执行结果全部不保留。`recent_chat` 追加一条 `{ user: 用户消息, ai: reply 的内容 }`，下一轮从重新构建的 system prompt 上下文 + recent_chat 启动。
+**turn 自然结束后的清理**：轮内消息历史整块丢弃——AI 的中间思考、工具调用记录、执行结果全部不保留。`recent_chat` 追加一条外层对话记录，下一轮从重新构建的 system prompt 上下文 + recent_chat 启动。
 
-**轮内历史不做滚动窗口**：轮内连贯性不可截断——AI 刚 `open_file` 之后执行的 `replace_lines` 必须能看到之前的上下文。如果轮内 token 用量过高，上下文压力机制会提示 AI 主动收缩 `open_files` 和 Notes，但轮内历史本身不裁剪。轮内历史天然有生命周期：`reply(wait=true)` 一触发即整块丢弃，不会跨轮累积。
+**轮内历史不做滚动窗口**：轮内连贯性不可截断——AI 刚 `open_file` 之后执行的 `replace_lines` 必须能看到之前的上下文。如果轮内 token 用量过高，上下文压力机制会提示 AI 主动收缩 `open_files` 和 Notes，但轮内历史本身不裁剪。轮内历史天然有生命周期：本轮一旦自然结束即整块丢弃，不会跨轮累积。
 
 ---
 

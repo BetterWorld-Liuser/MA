@@ -218,16 +218,15 @@ pub enum UiAgentProgressEvent {
         summary: String,
         preview: Option<String>,
     },
-    ReplyPreview {
+    AssistantTextPreview {
         task_id: i64,
         turn_id: String,
         message: String,
     },
-    Reply {
+    FinalAssistantMessage {
         task_id: i64,
         turn_id: String,
         task: UiTaskSnapshot,
-        wait: bool,
     },
     RoundComplete {
         task_id: i64,
@@ -626,25 +625,24 @@ impl UiAppBackend {
                             preview,
                         })?;
                     }
-                    AgentProgressEvent::ReplyPreview { message } => {
-                        on_progress(UiAgentProgressEvent::ReplyPreview {
+                    AgentProgressEvent::AssistantTextPreview { message } => {
+                        on_progress(UiAgentProgressEvent::AssistantTextPreview {
                             task_id,
                             turn_id: turn_id.clone(),
                             message,
                         })?;
                     }
-                    AgentProgressEvent::Reply(reply) => {
+                    AgentProgressEvent::FinalAssistantMessage(_) => {
                         let task = Self::live_task_snapshot(
                             progress_task.clone(),
                             session,
                             &progress_rounds,
                             context_budget_tokens,
                         )?;
-                        on_progress(UiAgentProgressEvent::Reply {
+                        on_progress(UiAgentProgressEvent::FinalAssistantMessage {
                             task_id,
                             turn_id: turn_id.clone(),
                             task,
-                            wait: reply.wait,
                         })?;
                     }
                     AgentProgressEvent::RoundCompleted(round) => {
@@ -1381,7 +1379,6 @@ fn classify_turn_failure(error: &anyhow::Error) -> (UiAgentFailureStage, bool) {
         || message.contains("delete_lines")
         || message.contains("run_command")
         || message.contains("open_file")
-        || message.contains("reply(")
     {
         return (UiAgentFailureStage::Tool, true);
     }

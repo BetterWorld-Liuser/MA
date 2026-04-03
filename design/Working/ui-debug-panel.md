@@ -17,7 +17,7 @@
 
 - 为什么模型没看到某个文件
 - 为什么它选错了工具
-- 为什么它没有按预期调用 `reply`
+- 为什么它没有按预期自然结束或继续调用工具
 - 为什么 provider 行为和我们“想象中的 prompt”不一致
 
 因此需要在 UI 中加入一个开发者向的调试观测面板，但不能破坏日常聊天体验。
@@ -106,7 +106,7 @@
 
 各 tab 的职责如下：
 
-- `Overview`：展示最近一次消息的 round 摘要，例如轮次数、是否产生 tool call、是否已经 reply、每轮工具数量
+- `Overview`：展示最近一次消息的 round 摘要，例如轮次数、是否产生 tool call、是否已经自然结束、每轮工具数量
 - `Context`：只展示 `context_preview`
 - `Request`：只展示真实发给 provider 的请求 JSON
 - `Response`：只展示 provider 原始响应
@@ -134,7 +134,7 @@
 每一轮显示：
 
 - 是否产生 tool call
-- 是否产生最终 assistant reply
+- 是否产生最终 assistant 文本
 - 该轮包含多少个 tool calls
 
 如果 `Overview` 不单独成 tab，则这些信息应作为 `Debug` 面板顶部摘要区域保留。
@@ -211,7 +211,7 @@
 
 - command stdout / stderr
 - 文件编辑结果说明
-- reply 工具结果
+- 最终 assistant 文本或中间文本片段
 
 Tool result 要和 tool call 在视觉上对应，便于一眼看出“哪个调用产生了什么结果”。
 
