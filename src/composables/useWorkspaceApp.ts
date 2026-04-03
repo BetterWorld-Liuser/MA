@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useLiveTurns } from '@/composables/useLiveTurns';
 import { useNoteDialog } from '@/composables/useNoteDialog';
+import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
 import { useProviderSettings } from '@/composables/useProviderSettings';
 import {
   mockWorkspace,
@@ -65,6 +66,8 @@ export function useWorkspaceApp() {
     submitConfirmDialog,
   } = useConfirmDialog();
 
+  const { theme, setTheme } = useAppearanceSettings();
+
   const {
     settingsOpen,
     providerSettings,
@@ -107,7 +110,6 @@ export function useWorkspaceApp() {
     return raw ? Number(raw) : null;
   });
 
-  const currentTaskTitle = computed(() => workspace.value.title || appTitle);
   const hasPendingSend = computed(() => sendingTaskId.value !== null);
   const isActiveTaskSending = computed(() =>
     !!activeTaskIdNumber.value && sendingTaskId.value === activeTaskIdNumber.value,
@@ -506,11 +508,11 @@ export function useWorkspaceApp() {
     noteDialogRef,
     workspace,
     activeTaskIdNumber,
-    currentTaskTitle,
     hasPendingSend,
     isActiveTaskSending,
     isActiveTaskCancelling,
     settingsOpen,
+    theme,
     providerSettings,
     providerModels,
     providerSuggestedModels,
@@ -545,6 +547,7 @@ export function useWorkspaceApp() {
     setTaskModel,
     handleOpenSettings,
     closeSettings,
+    setTheme,
     saveProvider,
     testProviderConnection,
     confirmDeleteProvider,

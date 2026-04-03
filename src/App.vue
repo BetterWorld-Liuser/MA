@@ -1,7 +1,7 @@
 <template>
   <div class="relative h-screen overflow-hidden bg-bg text-text">
     <AppTitleBar
-      :title="currentTaskTitle"
+      :title="appTitle"
       :is-maximized="isMaximized"
       @minimize="minimizeWindow"
       @toggle-maximize="toggleMaximize"
@@ -19,7 +19,7 @@
 
       <main class="grid min-h-0 flex-1 overflow-hidden gap-0 lg:grid-cols-[256px_minmax(0,1fr)_332px]">
         <TaskList
-          :title="appTitle"
+          title="任务"
           :tasks="workspace.tasks"
           :active-task-id="workspace.activeTaskId"
           :busy="busy"
@@ -59,8 +59,13 @@
       </main>
     </div>
 
-    <div v-if="settingsOpen" class="absolute inset-x-0 bottom-0 top-10 z-40 bg-[rgba(5,5,5,0.84)] backdrop-blur-md">
+    <div
+      v-if="settingsOpen"
+      class="absolute inset-x-0 bottom-0 top-10 z-40 backdrop-blur-md"
+      style="background: var(--ma-settings-backdrop)"
+    >
       <SettingsPage
+        :theme="theme"
         :settings="providerSettings"
         :busy="busy"
         :models-loading="providerModelsLoading"
@@ -69,6 +74,7 @@
         :provider-test-message="providerTestMessage"
         :provider-test-success="providerTestSuccess"
         @close="closeSettings"
+        @update-theme="setTheme"
         @save-provider="saveProvider"
         @test-provider="testProviderConnection"
         @delete-provider="confirmDeleteProvider"
@@ -126,17 +132,17 @@ const {
   noteDialogRef,
   workspace,
   activeTaskIdNumber,
-  currentTaskTitle,
   hasPendingSend,
   isActiveTaskSending,
   isActiveTaskCancelling,
   settingsOpen,
-    providerSettings,
-    providerModels,
-    providerSuggestedModels,
-    providerModelsLoading,
-    providerTestMessage,
-    providerTestSuccess,
+  theme,
+  providerSettings,
+  providerModels,
+  providerSuggestedModels,
+  providerModelsLoading,
+  providerTestMessage,
+  providerTestSuccess,
   noteDialogOpen,
   noteDialogMode,
   noteDraftId,
@@ -165,9 +171,10 @@ const {
   setTaskModel,
   handleOpenSettings,
   closeSettings,
-    saveProvider,
-    testProviderConnection,
-    confirmDeleteProvider,
+  setTheme,
+  saveProvider,
+  testProviderConnection,
+  confirmDeleteProvider,
   saveDefaultProvider,
   loadProviderModelsForSettings,
   handleConfirmDialogOpenChange,
