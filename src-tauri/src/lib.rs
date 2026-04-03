@@ -1,4 +1,9 @@
 use std::path::PathBuf;
+use std::collections::HashMap;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use tauri::Emitter;
 
@@ -12,9 +17,9 @@ use ma::ui::{
     fetch_provider_models_for_provider,
 };
 
-#[derive(Clone)]
 struct AppState {
     workspace_path: PathBuf,
+    cancellations: Mutex<HashMap<i64, Arc<AtomicBool>>>,
 }
 
 #[tauri::command]
@@ -73,13 +78,59 @@ async fn send_message(
 ) -> Result<UiWorkspaceSnapshot, String> {
     let mut backend =
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    let task_id = backend
+        .resolve_or_create_task_id(input.task_id)
+        .map_err(|error| error.to_string())?;
+    let cancellation_flag = {
+        let mut cancellations = state
+            .cancellations
+            .lock()
+            .map_err(|_| "failed to acquire cancellation registry".to_string())?;
+        let flag = Arc::new(AtomicBool::new(false));
+        cancellations.insert(task_id, flag.clone());
+        flag
+    };
+    let request = UiSendMessageRequest {
+        task_id: Some(task_id),
+        content: input.content,
+    };
     backend
-        .handle_send_message_with_progress(input, |event| {
-            app.emit("ma://agent-progress", &event)
-                .map_err(|error| anyhow::anyhow!("failed to emit agent progress event: {}", error))
-        })
+        .handle_send_message_with_progress_and_cancel(
+            request,
+            |event| {
+                app.emit("ma://agent-progress", &event).map_err(|error| {
+                    anyhow::anyhow!("failed to emit agent progress event: {}", error)
+                })
+            },
+            || cancellation_flag.load(Ordering::SeqCst),
+        )
         .await
         .map_err(|error| error.to_string())
+        .inspect(|_| {
+            if let Ok(mut cancellations) = state.cancellations.lock() {
+                cancellations.remove(&task_id);
+            }
+        })
+        .inspect_err(|_| {
+            if let Ok(mut cancellations) = state.cancellations.lock() {
+                cancellations.remove(&task_id);
+            }
+        })
+}
+
+#[tauri::command]
+fn cancel_turn(
+    state: tauri::State<'_, AppState>,
+    task_id: i64,
+) -> Result<(), String> {
+    let cancellations = state
+        .cancellations
+        .lock()
+        .map_err(|_| "failed to acquire cancellation registry".to_string())?;
+    if let Some(flag) = cancellations.get(&task_id) {
+        flag.store(true, Ordering::SeqCst);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -237,13 +288,17 @@ pub fn run() {
     std::env::set_current_dir(&workspace_path).expect("failed to switch to workspace root");
 
     tauri::Builder::default()
-        .manage(AppState { workspace_path })
+        .manage(AppState {
+            workspace_path,
+            cancellations: Mutex::new(HashMap::new()),
+        })
         .invoke_handler(tauri::generate_handler![
             load_workspace_snapshot,
             create_task,
             select_task,
             delete_task,
             send_message,
+            cancel_turn,
             upsert_note,
             delete_note,
             toggle_open_file_lock,

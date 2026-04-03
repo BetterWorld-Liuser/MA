@@ -226,6 +226,12 @@ export type BackendAgentProgressEvent =
       stage: 'context' | 'tool' | 'provider' | 'internal';
       message: string;
       retryable: boolean;
+    }
+  | {
+      kind: 'turn_cancelled';
+      task_id: number;
+      turn_id: string;
+      task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
     };
 
 export type WorkspaceEntryView = {

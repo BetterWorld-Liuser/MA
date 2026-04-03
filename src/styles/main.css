@@ -449,9 +449,9 @@
 }
 
 @utility chat-composer-input {
-  @apply block w-full resize-none border-0 bg-transparent px-3 pb-2 pt-2.5 text-[12px] leading-[1.5] text-text outline-hidden;
-  min-height: 68px;
-  max-height: 160px;
+  @apply block w-full resize-none border-0 bg-transparent px-3 pb-3 pt-3 text-[12px] leading-[1.55] text-text outline-hidden;
+  min-height: 108px;
+  max-height: 220px;
 
   &::placeholder {
     color: rgba(232, 232, 232, 0.4);
@@ -459,7 +459,7 @@
 }
 
 @utility chat-composer-toolbar {
-  @apply flex items-center justify-between gap-2.5 border-t px-2.5 py-1.75;
+  @apply flex items-center justify-between gap-2.5 border-t px-2.5 py-2;
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.015);
 }
@@ -618,6 +618,22 @@
 
 @utility composer-send-button-paused {
   @apply min-w-10 px-3;
+}
+
+@utility composer-stop-button {
+  @apply inline-flex min-h-8 items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[10px] font-medium text-text-muted;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--color-text);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
 }
 
 @utility section-card {

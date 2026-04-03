@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use encoding_rs::GBK;
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -29,6 +29,7 @@ use crate::ui::{
 use crate::watcher::FileWatcherService;
 
 const AGENTS_FILENAME: &str = "AGENTS.md";
+const TURN_CANCELLED_ERROR_MESSAGE: &str = "turn cancelled";
 
 pub struct AgentSession {
     config: AgentConfig,
@@ -280,7 +281,7 @@ impl AgentSession {
         client: &OpenAiCompatibleClient,
         content: impl Into<String>,
     ) -> Result<AgentRunResult> {
-        self.handle_user_message_with_events(client, content, |_, _| Ok(()))
+        self.handle_user_message_with_events_and_cancel(client, content, || false, |_, _| Ok(()))
             .await
     }
 
@@ -288,10 +289,25 @@ impl AgentSession {
         &mut self,
         client: &OpenAiCompatibleClient,
         content: impl Into<String>,
+        on_event: F,
+    ) -> Result<AgentRunResult>
+    where
+        F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
+    {
+        self.handle_user_message_with_events_and_cancel(client, content, || false, on_event)
+            .await
+    }
+
+    pub async fn handle_user_message_with_events_and_cancel<F, C>(
+        &mut self,
+        client: &OpenAiCompatibleClient,
+        content: impl Into<String>,
+        is_cancelled: C,
         mut on_event: F,
     ) -> Result<AgentRunResult>
     where
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
+        C: Fn() -> bool,
     {
         self.add_user_turn(content);
 
@@ -302,6 +318,7 @@ impl AgentSession {
         let mut iteration = 0usize;
 
         loop {
+            ensure_turn_not_cancelled(&is_cancelled)?;
             iteration += 1;
             on_event(
                 self,
@@ -324,6 +341,7 @@ impl AgentSession {
             )?;
             let response = client
                 .complete_context_with_events(&context, conversation, |event| {
+                    ensure_turn_not_cancelled(&is_cancelled)?;
                     if let ProviderProgressEvent::ContentDelta(ref delta) = event {
                         if !delta.is_empty() {
                             content_preview.push_str(delta);
@@ -345,6 +363,7 @@ impl AgentSession {
                     Ok(())
                 })
                 .await?;
+            ensure_turn_not_cancelled(&is_cancelled)?;
             let assistant_text = response
                 .content
                 .as_deref()
@@ -406,6 +425,7 @@ impl AgentSession {
             );
 
             for tool_call in response.tool_calls {
+                ensure_turn_not_cancelled(&is_cancelled)?;
                 let tool_summary =
                     summarize_tool_call(tool_call.name.as_str(), &tool_call.arguments_json);
                 on_event(
@@ -457,6 +477,7 @@ impl AgentSession {
                         }
                     }
                 };
+                ensure_turn_not_cancelled(&is_cancelled)?;
                 transient_messages.push(RequestMessage::tool(
                     tool_call.id,
                     outcome.result_text.clone(),
@@ -1003,6 +1024,22 @@ impl AgentSession {
                     .to_string(),
         })
     }
+}
+
+fn ensure_turn_not_cancelled<C>(is_cancelled: &C) -> Result<()>
+where
+    C: Fn() -> bool,
+{
+    if is_cancelled() {
+        return Err(anyhow!(TURN_CANCELLED_ERROR_MESSAGE));
+    }
+    Ok(())
+}
+
+pub fn is_turn_cancelled_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains(TURN_CANCELLED_ERROR_MESSAGE))
 }
 
 /// 这里用轻量估算而不是 provider 专属 tokenizer：

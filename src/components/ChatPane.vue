@@ -6,7 +6,7 @@
       </div>
     </div>
 
-    <ChatMessageList :chat="chat" :live-turn="liveTurn" />
+    <ChatMessageList :chat="chat" :live-turn="liveTurn" :task-id="taskId" />
 
     <div class="shrink-0 p-2" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
       <div ref="composerRootRef" class="chat-composer-shell">
@@ -20,7 +20,7 @@
               class="mention-chip"
               :class="chip.kind === 'directory' ? 'mention-chip-directory' : ''"
               type="button"
-              :disabled="disabled || sending"
+              :disabled="disabled || interactionLocked"
               @click="removeMention(chip.path, chip.kind)"
             >
               <span class="mention-chip-kind">{{ chip.kind === 'directory' ? 'DIR' : 'FILE' }}</span>
@@ -35,7 +35,7 @@
             v-model="draft"
             class="chat-composer-input"
             placeholder="帮我重构认证逻辑，必要时 @ 文件或目录。"
-            :disabled="disabled || sending"
+            :disabled="disabled || interactionLocked"
             rows="1"
             @input="handleDraftInput"
             @click="updateMentionQueryFromCursor"
@@ -45,11 +45,11 @@
 
           <div class="chat-composer-toolbar">
             <div class="chat-composer-toolbar-group">
-              <button class="composer-action" type="button" :disabled="disabled || sending" title="选择文件或目录" @click="togglePlusMenu">
+              <button class="composer-action" type="button" :disabled="disabled || interactionLocked" title="选择文件或目录" @click="togglePlusMenu">
                 <span class="composer-action-icon">+</span>
               </button>
               <div ref="modelMenuAnchorRef" class="composer-model-anchor">
-                <button class="composer-model-button" type="button" :disabled="disabled || sending" title="模型选择器" @click="toggleModelMenu">
+                <button class="composer-model-button" type="button" :disabled="disabled || interactionLocked" title="模型选择器" @click="toggleModelMenu">
                   <span class="truncate">{{ modelButtonLabel }}</span>
                   <span aria-hidden="true">∨</span>
                 </button>
@@ -64,19 +64,21 @@
               </p>
               <button
                 v-if="sending"
-                class="composer-send-button composer-send-button-paused"
+                class="composer-stop-button"
                 type="button"
-                disabled
-                aria-label="Pause generation"
-                title="Pause generation"
+                :disabled="cancelling"
+                :aria-label="cancelling ? '正在中断生成' : '中断生成'"
+                :title="cancelling ? '正在中断生成' : '中断生成'"
+                @click="emit('cancelTurn')"
               >
                 <Icon :icon="pauseIcon" class="h-3.5 w-3.5" />
+                <span>{{ cancelling ? '中断中' : '中断' }}</span>
               </button>
               <button
                 v-else
                 class="composer-send-button"
                 type="button"
-                :disabled="disabled || composerIsEmpty"
+                :disabled="disabled || interactionLocked || composerIsEmpty"
                 @click="submit"
               >
                 ↵发送
@@ -181,6 +183,8 @@ const props = defineProps<{
   liveTurn?: import('../data/mock').LiveTurn;
   disabled?: boolean;
   sending?: boolean;
+  interactionLocked?: boolean;
+  cancelling?: boolean;
   taskId?: number | null;
   selectedModel?: string;
 }>();
@@ -189,10 +193,11 @@ const emit = defineEmits<{
   send: [payload: { content: string; directories: string[] }];
   openFiles: [paths: string[]];
   setModel: [model: string];
+  cancelTurn: [];
 }>();
 
 const disabledRef = computed(() => !!props.disabled);
-const sendingRef = computed(() => !!props.sending);
+const interactionLockedRef = computed(() => !!props.interactionLocked);
 const taskIdRef = toRef(props, 'taskId');
 
 const {
@@ -222,7 +227,7 @@ const {
   resetComposer,
 } = useChatComposer({
   disabled: disabledRef,
-  sending: sendingRef,
+  sending: interactionLockedRef,
   taskId: taskIdRef,
   onOpenFiles: (paths) => emit('openFiles', paths),
 });
@@ -445,7 +450,7 @@ function syncModelMenuPosition() {
 
 function submit() {
   const content = draft.value.trim();
-  if ((!content && mentions.value.length === 0) || props.disabled || props.sending) {
+  if ((!content && mentions.value.length === 0) || props.disabled || props.interactionLocked) {
     return;
   }
 

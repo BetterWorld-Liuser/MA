@@ -132,21 +132,42 @@ import type { ChatMessage, LiveTurn } from '@/data/mock';
 const props = defineProps<{
   chat: ChatMessage[];
   liveTurn?: LiveTurn;
+  taskId?: number | null;
 }>();
 
 const scrollContainer = ref<HTMLElement | null>(null);
 const bottomAnchor = ref<HTMLElement | null>(null);
 const copiedContent = ref('');
+const hasInitializedTaskPosition = ref(false);
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 
 const chatLength = computed(() => props.chat.length);
 
 watch(
   chatLength,
-  async () => {
+  async (length, previousLength) => {
+    if (!hasInitializedTaskPosition.value) {
+      return;
+    }
+
+    if ((previousLength ?? 0) >= length) {
+      return;
+    }
+
     await nextTick();
     scrollToBottom('smooth');
   },
+);
+
+watch(
+  () => props.taskId,
+  async () => {
+    hasInitializedTaskPosition.value = false;
+    await nextTick();
+    scrollToBottom('auto');
+    hasInitializedTaskPosition.value = true;
+  },
+  { immediate: true },
 );
 
 watch(

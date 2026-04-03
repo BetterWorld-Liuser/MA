@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::{
     AgentConfig, AgentProgressEvent, AgentSession, AgentStatusPhase, AgentToolStatus,
-    DEFAULT_CONTEXT_WINDOW_TOKENS, DebugRound, DebugToolCall,
+    DEFAULT_CONTEXT_WINDOW_TOKENS, DebugRound, DebugToolCall, is_turn_cancelled_error,
 };
 use crate::context::{
     ContextPressure, ConversationHistory, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role,
@@ -281,6 +281,11 @@ pub enum UiAgentProgressEvent {
         stage: UiAgentFailureStage,
         message: String,
         retryable: bool,
+    },
+    TurnCancelled {
+        task_id: i64,
+        turn_id: String,
+        task: UiTaskSnapshot,
     },
 }
 
@@ -582,17 +587,31 @@ impl UiAppBackend {
         &mut self,
         request: UiSendMessageRequest,
     ) -> Result<UiWorkspaceSnapshot> {
-        self.handle_send_message_with_progress(request, |_| Ok(()))
+        self.handle_send_message_with_progress_and_cancel(request, |_| Ok(()), || false)
             .await
     }
 
     pub async fn handle_send_message_with_progress<F>(
         &mut self,
         request: UiSendMessageRequest,
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<UiWorkspaceSnapshot>
     where
         F: FnMut(UiAgentProgressEvent) -> Result<()>,
+    {
+        self.handle_send_message_with_progress_and_cancel(request, on_progress, || false)
+            .await
+    }
+
+    pub async fn handle_send_message_with_progress_and_cancel<F, C>(
+        &mut self,
+        request: UiSendMessageRequest,
+        mut on_progress: F,
+        is_cancelled: C,
+    ) -> Result<UiWorkspaceSnapshot>
+    where
+        F: FnMut(UiAgentProgressEvent) -> Result<()>,
+        C: Fn() -> bool,
     {
         let task_id = self.resolve_or_create_task_id(request.task_id)?;
         let content = request.content.trim();
@@ -629,7 +648,7 @@ impl UiAppBackend {
             user_message: content.to_string(),
         })?;
         let result = session
-            .handle_user_message_with_events(&provider, content.to_string(), |session, event| {
+            .handle_user_message_with_events_and_cancel(&provider, content.to_string(), &is_cancelled, |session, event| {
                 match event {
                     AgentProgressEvent::Status { phase, label } => {
                         on_progress(UiAgentProgressEvent::Status {
@@ -707,6 +726,20 @@ impl UiAppBackend {
             .await;
         if let Err(error) = &result {
             self.save_session(task_id, &session)?;
+            if is_turn_cancelled_error(error) {
+                let task = Self::live_task_snapshot(
+                    progress_task.clone(),
+                    &session,
+                    &progress_rounds,
+                    context_budget_tokens,
+                )?;
+                on_progress(UiAgentProgressEvent::TurnCancelled {
+                    task_id,
+                    turn_id: turn_id.clone(),
+                    task,
+                })?;
+                return self.workspace_snapshot(Some(task_id));
+            }
             let (stage, retryable) = classify_turn_failure(error);
             on_progress(UiAgentProgressEvent::TurnFailed {
                 task_id,

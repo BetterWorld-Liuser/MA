@@ -35,8 +35,11 @@
           :task-id="activeTaskIdNumber"
           :selected-model="workspace.selectedModel"
           :disabled="!activeTaskIdNumber"
-          :sending="hasPendingSend"
+          :sending="isActiveTaskSending"
+          :interaction-locked="hasPendingSend"
+          :cancelling="isActiveTaskCancelling"
           @send="sendMessage"
+          @cancel-turn="cancelCurrentTurn"
           @open-files="openFilesFromComposer"
           @set-model="setTaskModel"
         />
@@ -121,6 +124,8 @@ const {
   activeTaskIdNumber,
   currentTaskTitle,
   hasPendingSend,
+  isActiveTaskSending,
+  isActiveTaskCancelling,
   settingsOpen,
   providerSettings,
   providerModels,
@@ -140,6 +145,7 @@ const {
   selectTask,
   deleteTask,
   sendMessage,
+  cancelCurrentTurn,
   addNote,
   editNote,
   handleSubmitNoteDialog,

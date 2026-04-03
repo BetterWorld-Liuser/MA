@@ -115,6 +115,19 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
           errorMessage.value = event.message;
         }
         return;
+      case 'turn_cancelled':
+        if (snapshot.value?.active_task?.task.id === event.task_id) {
+          snapshot.value = {
+            ...snapshot.value,
+            active_task: event.task,
+          };
+        }
+        clearLiveTurn(event.task_id);
+        if (sendingTaskId.value === event.task_id) {
+          sendingTaskId.value = null;
+        }
+        errorMessage.value = '';
+        return;
     }
   }
 

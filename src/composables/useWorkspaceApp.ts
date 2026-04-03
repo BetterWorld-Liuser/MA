@@ -26,6 +26,7 @@ export function useWorkspaceApp() {
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
   const busy = ref(false);
   const sendingTaskId = ref<number | null>(null);
+  const cancellingTaskId = ref<number | null>(null);
   const errorMessage = ref('');
   const isMaximized = ref(false);
   const chatPaneRef = ref<ChatPaneHandle | null>(null);
@@ -104,6 +105,12 @@ export function useWorkspaceApp() {
 
   const currentTaskTitle = computed(() => workspace.value.title || appTitle);
   const hasPendingSend = computed(() => sendingTaskId.value !== null);
+  const isActiveTaskSending = computed(() =>
+    !!activeTaskIdNumber.value && sendingTaskId.value === activeTaskIdNumber.value,
+  );
+  const isActiveTaskCancelling = computed(() =>
+    !!activeTaskIdNumber.value && cancellingTaskId.value === activeTaskIdNumber.value,
+  );
 
   async function initialize() {
     isMaximized.value = await appWindow.isMaximized();
@@ -237,6 +244,32 @@ export function useWorkspaceApp() {
       if (sendingTaskId.value === taskId) {
         sendingTaskId.value = null;
       }
+      if (cancellingTaskId.value === taskId) {
+        cancellingTaskId.value = null;
+      }
+    }
+  }
+
+  async function cancelCurrentTurn() {
+    if (!sendingTaskId.value || cancellingTaskId.value === sendingTaskId.value) {
+      return;
+    }
+
+    const taskId = sendingTaskId.value;
+    cancellingTaskId.value = taskId;
+    const currentLiveTurn = liveTurns.value[taskId];
+    if (currentLiveTurn) {
+      upsertLiveTurn(taskId, {
+        ...currentLiveTurn,
+        statusLabel: '正在中断…',
+      });
+    }
+
+    try {
+      await invoke('cancel_turn', { taskId });
+    } catch (error) {
+      cancellingTaskId.value = null;
+      errorMessage.value = humanizeError(error);
     }
   }
 
@@ -471,6 +504,8 @@ export function useWorkspaceApp() {
     activeTaskIdNumber,
     currentTaskTitle,
     hasPendingSend,
+    isActiveTaskSending,
+    isActiveTaskCancelling,
     settingsOpen,
     providerSettings,
     providerModels,
@@ -490,6 +525,7 @@ export function useWorkspaceApp() {
     selectTask,
     deleteTask,
     sendMessage,
+    cancelCurrentTurn,
     addNote,
     editNote,
     handleSubmitNoteDialog,
