@@ -14,9 +14,11 @@
   --ma-warning: #e6a817;
   --ma-error: #e05252;
   --ma-success: #4caf7d;
-  --ma-font-sans: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --ma-font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", "Cascadia Mono", "Cascadia Code",
-    Consolas, "SFMono-Regular", Menlo, Monaco, ui-monospace, monospace;
+  --ma-font-sans: "SF Pro Text", "Segoe UI Variable Text", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Noto Sans SC", "Source Han Sans SC", "Segoe UI", system-ui, sans-serif;
+  --ma-font-mono: "Maple Mono", "Berkeley Mono", "JetBrains Mono", "Cascadia Mono",
+    "Sarasa Mono SC", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, Monaco, ui-monospace,
+    monospace;
   --ma-radius-sm: 4px;
   --ma-radius-md: 6px;
   --ma-radius-lg: 10px;

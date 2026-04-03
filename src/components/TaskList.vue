@@ -1,13 +1,13 @@
 <template>
   <aside class="panel task-column-divider flex min-h-0 flex-col overflow-hidden">
     <div class="panel-header flex items-center justify-between gap-3">
-      <p class="truncate text-[13px] font-semibold text-text">{{ title }}</p>
+      <p class="truncate text-[11px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
       <button class="pill px-1.5" type="button" :disabled="busy" title="新建任务" @click="$emit('create')">
         + New Task
       </button>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto p-2">
+    <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
       <div class="space-y-1">
         <div
           v-for="task in tasks"
@@ -21,7 +21,7 @@
             :disabled="busy"
             @click="$emit('select', task.id)"
           >
-            <span class="min-w-0 flex-1 truncate text-[13px] font-medium leading-5">{{ task.name }}</span>
+            <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[1.4]">{{ task.name }}</span>
             <span class="task-item-meta group-hover:hidden">{{ task.updatedAt }}</span>
           </button>
           <button
@@ -38,7 +38,7 @@
       </div>
     </div>
 
-    <div class="border-t border-white/8 p-2">
+    <div class="border-t border-white/8 p-1.5">
       <button
         class="task-settings-button"
         type="button"

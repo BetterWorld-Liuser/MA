@@ -1,14 +1,14 @@
 <template>
   <section class="panel flex min-h-0 overflow-visible flex-col">
     <div class="panel-header flex items-center gap-3">
-      <div class="text-[12px] text-text-dim">
+      <div class="text-[10px] text-text-dim">
         {{ chat.length ? `${chat.length} messages` : 'No messages yet' }}
       </div>
     </div>
 
     <ChatMessageList :chat="chat" :live-turn="liveTurn" />
 
-    <div class="shrink-0 p-3" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
+    <div class="shrink-0 p-2" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
       <div ref="composerRootRef" class="chat-composer-shell">
         <label class="sr-only" for="message-input">Reply</label>
 

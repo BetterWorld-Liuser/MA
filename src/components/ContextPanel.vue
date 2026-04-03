@@ -4,13 +4,13 @@
       <span class="text-accent">
         <Icon :icon="panelRightIcon" class="h-4 w-4" />
       </span>
-      <p class="truncate text-[13px] font-semibold text-text">Context</p>
+      <p class="truncate text-[12px] font-semibold tracking-[0.01em] text-text">Context</p>
     </div>
 
-    <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-2">
+    <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-2">
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title mb-0">Notes</h3>
+          <h3 class="section-title mb-0 !text-[9px]">Notes</h3>
           <button class="pill px-1.5" type="button" :disabled="busy" @click="$emit('add-note')">
             <Icon :icon="plusIcon" class="h-3.5 w-3.5" />
           </button>
@@ -18,8 +18,8 @@
         <div v-if="orderedNotes.length" class="space-y-0.5">
           <div v-for="note in orderedNotes" :key="note.id" class="group compact-row">
             <div class="min-w-0 flex flex-1 items-baseline gap-2 overflow-hidden">
-              <span class="shrink-0 font-mono text-[10px] uppercase tracking-widest text-text-dim">{{ note.id }}</span>
-              <p class="truncate text-[12px] text-text">{{ note.content }}</p>
+              <span class="shrink-0 font-mono text-[9px] uppercase tracking-widest text-text-dim">{{ note.id }}</span>
+              <p class="truncate text-[11px] text-text">{{ note.content }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
               <button class="context-icon-button" type="button" :disabled="busy" :title="`Edit ${note.id}`" @click="$emit('edit-note', note.id)">
@@ -35,7 +35,7 @@
       </section>
 
       <section class="space-y-1.5">
-        <h3 class="section-title">Open files</h3>
+        <h3 class="section-title !text-[9px]">Open files</h3>
         <div class="space-y-0.5">
           <div v-for="file in openFiles" :key="file.path" class="group compact-row">
             <button
@@ -51,10 +51,10 @@
             </button>
 
             <div class="min-w-0 flex flex-1 items-center gap-2" :title="file.path">
-              <p class="truncate font-mono text-[13px]" :class="freshnessClass(file.freshness)">
+              <p class="truncate font-mono text-[12px]" :class="freshnessClass(file.freshness)">
                 {{ fileName(file.path) }}
               </p>
-              <span class="shrink-0 font-mono text-[10px] text-text-dim">{{ file.tokenUsage }} tok</span>
+              <span class="shrink-0 font-mono text-[9px] text-text-dim">{{ file.tokenUsage }} tok</span>
             </div>
 
             <button
@@ -73,15 +73,15 @@
       </section>
 
       <section v-if="hints.length" class="space-y-1.5">
-        <h3 class="section-title">Hints</h3>
+        <h3 class="section-title !text-[9px]">Hints</h3>
         <div class="space-y-0.5">
           <div v-for="hint in hints" :key="`${hint.source}-${hint.content}`" class="compact-row">
             <div class="min-w-0 flex-1">
-              <p class="truncate text-[12px] text-text">
-                <span class="mr-2 text-[10px] uppercase tracking-widest text-text-dim">{{ hint.source }}</span>{{ hint.content }}
+              <p class="truncate text-[11px] text-text">
+                <span class="mr-2 text-[9px] uppercase tracking-widest text-text-dim">{{ hint.source }}</span>{{ hint.content }}
               </p>
             </div>
-            <div class="shrink-0 text-right text-[10px] text-text-dim">
+            <div class="shrink-0 text-right text-[9px] text-text-dim">
               <p class="font-mono">{{ hint.timeLeft }}</p>
               <p>{{ hint.turnsLeft }}</p>
             </div>
@@ -91,8 +91,8 @@
 
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title mb-0">Context usage (est.)</h3>
-          <div class="flex items-center gap-2 text-[10px] text-text-dim">
+          <h3 class="section-title mb-0 !text-[9px]">Context usage (est.)</h3>
+          <div class="flex items-center gap-2 text-[9px] text-text-dim">
             <span class="font-mono">{{ usage.percent }}%</span>
             <span class="font-mono text-text-muted">{{ usage.current }} / {{ usage.limit }}</span>
           </div>
@@ -106,7 +106,7 @@
           ></div>
         </div>
 
-        <ul class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+        <ul class="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
           <li v-for="section in usage.sections" :key="section.name" class="flex items-center justify-between gap-2">
             <span class="truncate text-text-dim">{{ section.name }}</span>
             <span class="font-mono text-text">{{ section.size }}</span>
@@ -116,8 +116,8 @@
 
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title mb-0">Debug</h3>
-          <span class="text-[10px] text-text-dim">{{ debugRounds.length ? `${debugRounds.length} rounds` : 'No trace yet' }}</span>
+          <h3 class="section-title mb-0 !text-[9px]">Debug</h3>
+          <span class="text-[9px] text-text-dim">{{ debugRounds.length ? `${debugRounds.length} rounds` : 'No trace yet' }}</span>
         </div>
 
         <div v-if="debugRounds.length" class="space-y-2">
@@ -137,10 +137,10 @@
           <div v-if="activeDebugTab === 'Overview'" class="debug-panel space-y-2">
             <div v-for="round in debugRounds" :key="round.iteration" class="debug-round-summary">
               <div class="flex items-center justify-between gap-2">
-                <span class="font-mono text-[11px] text-text">Round {{ round.iteration }}</span>
-                <span class="text-[10px] text-text-dim">{{ round.toolCalls.length ? `${round.toolCalls.length} tools` : 'no tools' }}</span>
+                <span class="font-mono text-[10px] text-text">Round {{ round.iteration }}</span>
+                <span class="text-[9px] text-text-dim">{{ round.toolCalls.length ? `${round.toolCalls.length} tools` : 'no tools' }}</span>
               </div>
-              <p class="text-[11px] text-text-dim">{{ summarizeRound(round) }}</p>
+              <p class="text-[10px] text-text-dim">{{ summarizeRound(round) }}</p>
             </div>
           </div>
 
@@ -253,7 +253,7 @@
                   <div v-if="round.toolCalls.length" class="space-y-1">
                     <div v-for="toolCall in round.toolCalls" :key="`${round.iteration}-${toolCall.id}`" class="debug-inline-card">
                       <div class="flex items-center justify-between gap-2">
-                        <p class="text-[11px] text-text">
+                        <p class="text-[10px] text-text">
                           <span class="font-mono">{{ toolCall.name }}</span>
                           <span class="ml-2 text-text-dim">{{ toolCall.id }}</span>
                         </p>
@@ -277,7 +277,7 @@
                       <pre class="debug-pre debug-pre-inline">{{ toolCall.argumentsJson }}</pre>
                     </div>
                   </div>
-                  <p v-else class="text-[11px] text-text-dim">(none)</p>
+                  <p v-else class="text-[10px] text-text-dim">(none)</p>
                 </div>
 
                 <div>
@@ -285,7 +285,7 @@
                   <div v-if="round.toolResults.length" class="space-y-1">
                     <div v-for="(result, index) in round.toolResults" :key="`${round.iteration}-result-${index}`" class="debug-inline-card">
                       <div class="mb-1 flex items-center justify-between gap-2">
-                        <p class="text-[11px] text-text-dim">Result {{ index + 1 }}</p>
+                        <p class="text-[10px] text-text-dim">Result {{ index + 1 }}</p>
                         <div class="flex items-center gap-1">
                           <button
                             class="debug-copy-button"
@@ -303,7 +303,7 @@
                       <pre class="debug-pre debug-pre-inline">{{ result }}</pre>
                     </div>
                   </div>
-                  <p v-else class="text-[11px] text-text-dim">(none)</p>
+                  <p v-else class="text-[10px] text-text-dim">(none)</p>
                 </div>
               </div>
             </div>
@@ -321,7 +321,7 @@
     >
       <div class="flex h-full min-h-0 flex-col">
         <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-          <DialogTitle class="text-[13px] font-semibold text-text">{{ previewTitle }}</DialogTitle>
+          <DialogTitle class="text-[12px] font-semibold text-text">{{ previewTitle }}</DialogTitle>
           <DialogClose class="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-dim transition hover:bg-bg-hover hover:text-text">
             <Icon :icon="xIcon" class="h-4 w-4" />
             <span class="sr-only">Close</span>

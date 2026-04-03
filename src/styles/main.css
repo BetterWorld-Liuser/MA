@@ -95,12 +95,12 @@
 }
 
 @utility panel-header {
-  @apply px-3 py-2.5;
+  @apply px-3 py-1.5;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 @utility pill {
-  @apply inline-flex items-center gap-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-text-muted transition hover:bg-bg-hover hover:text-text;
+  @apply inline-flex items-center gap-1 rounded-md border border-transparent bg-transparent px-2 py-0.75 text-[9px] uppercase tracking-[0.12em] text-text-muted transition hover:bg-bg-hover hover:text-text;
 }
 
 @utility pill-primary {
@@ -120,7 +120,7 @@
 }
 
 @utility task-item {
-  @apply flex w-full items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-[13px] text-text-muted transition hover:bg-bg-secondary hover:text-text;
+  @apply flex w-full items-center gap-1.5 rounded-xl border border-transparent px-2.5 py-1.25 text-[12px] text-text-muted transition hover:bg-bg-secondary hover:text-text;
 }
 
 @utility task-item-active {
@@ -128,7 +128,7 @@
 }
 
 @utility task-item-meta {
-  @apply shrink-0 text-[12px] text-text-dim;
+  @apply shrink-0 text-[10px] text-text-dim;
 }
 
 @utility task-item-delete {
@@ -136,7 +136,7 @@
 }
 
 @utility task-settings-button {
-  @apply inline-flex h-10 w-10 items-center justify-center rounded-xl border border-transparent text-text-muted transition hover:border-white/8 hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+  @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border border-transparent text-text-muted transition hover:border-white/8 hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
 }
 
 @utility settings-shell {
@@ -237,11 +237,11 @@
 }
 
 @utility message-avatar {
-  @apply inline-flex h-7 w-7 items-center justify-center rounded-md bg-bg-secondary text-[11px] uppercase text-text-muted;
+  @apply inline-flex h-6 w-6 items-center justify-center rounded-md bg-bg-secondary text-[9px] uppercase text-text-muted;
 }
 
 @utility chat-row {
-  @apply mb-3 flex items-start gap-2.5;
+  @apply mb-2 flex items-start gap-1.5;
 }
 
 @utility chat-row-user {
@@ -253,15 +253,15 @@
 }
 
 @utility message-stack {
-  @apply flex min-w-0 max-w-[85%] flex-col gap-1.5;
+  @apply flex min-w-0 max-w-[83%] flex-col gap-0.75;
 }
 
 @utility message-meta {
-  @apply flex items-center gap-2 px-1;
+  @apply flex items-center gap-1.25 px-0.5;
 }
 
 @utility message-bubble {
-  @apply rounded-2xl px-4 py-2 text-[13px] leading-5;
+  @apply rounded-[16px] px-3 py-1.25 text-[12px] leading-[1.5];
 }
 
 @utility message-bubble-user {
@@ -273,11 +273,11 @@
 }
 
 @utility message-tools {
-  @apply mt-2;
+  @apply mt-1;
 }
 
 @utility message-tools-summary {
-  @apply flex list-none items-center gap-2 text-[11px] text-text-dim;
+  @apply flex list-none items-center gap-1.5 text-[9px] text-text-dim;
 }
 
 @utility message-tools-summary-action {
@@ -285,12 +285,12 @@
 }
 
 @utility message-tools-list {
-  @apply mt-2 space-y-1 border-l pl-3;
+  @apply mt-1 space-y-0.5 border-l pl-2;
   border-color: rgba(255, 255, 255, 0.08);
 }
 
 @utility message-tools-item {
-  @apply flex items-baseline gap-1.5 text-[11px] leading-5;
+  @apply flex items-baseline gap-1.25 text-[9px] leading-4;
 }
 
 @utility message-tools-item-label {
@@ -310,7 +310,7 @@
 }
 
 @utility message-copy-button {
-  @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-text-dim transition disabled:cursor-not-allowed disabled:opacity-35;
+  @apply inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim transition disabled:cursor-not-allowed disabled:opacity-35;
   background: transparent;
   border: 1px solid transparent;
 
@@ -322,11 +322,11 @@
 }
 
 @utility message-copy-icon {
-  @apply h-3.5 w-3.5;
+  @apply h-3 w-3;
 }
 
 @utility live-status-row {
-  @apply flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-text-muted;
+  @apply flex items-center gap-1.5 text-[9px] uppercase tracking-[0.14em] text-text-muted;
 }
 
 @utility live-status-dots {
@@ -355,7 +355,7 @@
 }
 
 @utility live-tools {
-  @apply mt-3 space-y-1.5;
+  @apply mt-2 space-y-0.75;
 }
 
 @utility live-tool-item {
@@ -386,7 +386,7 @@
 }
 
 @utility live-tool-text {
-  @apply truncate font-mono text-[11px] text-text-dim;
+  @apply truncate font-mono text-[9px] text-text-dim;
 }
 
 @utility chat-composer-shell {
@@ -394,7 +394,7 @@
 }
 
 @utility chat-composer {
-  @apply relative overflow-hidden rounded-[22px] border;
+  @apply relative overflow-hidden rounded-[18px] border;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
     rgba(10, 10, 10, 0.92);
@@ -405,11 +405,11 @@
 }
 
 @utility chat-composer-chips {
-  @apply flex flex-wrap gap-2 px-4 pt-4;
+  @apply flex flex-wrap gap-1 px-3 pt-2.5;
 }
 
 @utility mention-chip {
-  @apply inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] text-text transition disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex items-center gap-1 rounded-full border px-2.25 py-0.5 text-[9px] text-text transition disabled:cursor-not-allowed disabled:opacity-50;
   background: rgba(212, 105, 42, 0.12);
   border-color: rgba(212, 105, 42, 0.26);
 
@@ -425,20 +425,20 @@
 }
 
 @utility mention-chip-kind {
-  @apply rounded-full bg-black/30 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-text-dim;
+  @apply rounded-full bg-black/30 px-1.25 py-0.5 text-[7px] font-semibold uppercase tracking-[0.14em] text-text-dim;
 }
 
 @utility mention-chip-label {
-  @apply max-w-56 truncate font-mono text-[11px];
+  @apply max-w-56 truncate font-mono text-[9px];
 }
 
 @utility mention-chip-remove {
-  @apply text-[14px] leading-none text-text-dim;
+  @apply text-[12px] leading-none text-text-dim;
 }
 
 @utility chat-composer-input {
-  @apply block w-full resize-none border-0 bg-transparent px-4 pb-3 pt-4 text-[14px] leading-6 text-text outline-hidden;
-  min-height: 88px;
+  @apply block w-full resize-none border-0 bg-transparent px-3 pb-2 pt-2.5 text-[12px] leading-[1.5] text-text outline-hidden;
+  min-height: 68px;
   max-height: 160px;
 
   &::placeholder {
@@ -447,7 +447,7 @@
 }
 
 @utility chat-composer-toolbar {
-  @apply flex items-center justify-between gap-3 border-t px-3 py-2.5;
+  @apply flex items-center justify-between gap-2.5 border-t px-2.5 py-1.75;
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.015);
 }
@@ -461,7 +461,7 @@
 }
 
 @utility composer-popover-header {
-  @apply flex items-center justify-between gap-3 border-b px-4 py-2 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+  @apply flex items-center justify-between gap-3 border-b px-3 py-1.75 text-[8px] uppercase tracking-[0.16em] text-text-dim;
   border-color: rgba(255, 255, 255, 0.08);
 }
 
@@ -470,11 +470,11 @@
 }
 
 @utility composer-popover-list {
-  @apply max-h-64 overflow-y-auto p-1.5;
+  @apply max-h-64 overflow-y-auto p-1;
 }
 
 @utility composer-popover-item {
-  @apply flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition;
+  @apply flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.25 text-left transition;
 
   &:hover {
     background: rgba(255, 255, 255, 0.04);
@@ -486,15 +486,15 @@
 }
 
 @utility composer-popover-item-kind {
-  @apply shrink-0 text-[10px] uppercase tracking-[0.14em] text-text-dim;
+  @apply shrink-0 text-[8px] uppercase tracking-[0.14em] text-text-dim;
 }
 
 @utility composer-popover-item-path {
-  @apply truncate font-mono text-[12px] text-text;
+  @apply truncate font-mono text-[10px] text-text;
 }
 
 @utility composer-popover-empty {
-  @apply px-4 py-3 text-[12px] text-text-dim;
+  @apply px-3 py-2.5 text-[11px] text-text-dim;
 }
 
 @utility composer-menu {
@@ -517,7 +517,7 @@
 }
 
 @utility composer-menu-header {
-  @apply flex items-center justify-between gap-3 px-3 py-2 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+  @apply flex items-center justify-between gap-3 px-3 py-1.75 text-[8px] uppercase tracking-[0.16em] text-text-dim;
 }
 
 @utility composer-menu-search-shell {
@@ -525,7 +525,7 @@
 }
 
 @utility composer-menu-search-input {
-  @apply h-9 rounded-lg px-3 py-2 text-[12px];
+  @apply h-8 rounded-lg px-3 py-1.5 text-[11px];
 }
 
 @utility composer-menu-list {
@@ -533,7 +533,7 @@
 }
 
 @utility composer-menu-item {
-  @apply flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[12px] text-text transition;
+  @apply flex w-full items-center justify-between gap-3 px-3 py-1.25 text-left text-[11px] text-text transition;
 
   &:hover {
     background: rgba(255, 255, 255, 0.04);
@@ -549,7 +549,7 @@
 }
 
 @utility composer-menu-empty {
-  @apply px-3 py-2 text-[12px] text-text-dim;
+  @apply px-3 py-2 text-[11px] text-text-dim;
 }
 
 @utility composer-menu-status {
@@ -557,7 +557,7 @@
 }
 
 @utility chat-composer-toolbar-group {
-  @apply flex min-w-0 items-center gap-2;
+  @apply flex min-w-0 items-center gap-1.5;
 }
 
 @utility composer-model-anchor {
@@ -565,7 +565,7 @@
 }
 
 @utility composer-action {
-  @apply inline-flex h-9 w-9 items-center justify-center rounded-xl border text-text transition disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-xl border text-text transition disabled:cursor-not-allowed disabled:opacity-50;
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
 
@@ -575,11 +575,11 @@
 }
 
 @utility composer-action-icon {
-  @apply text-[18px] leading-none;
+  @apply text-[16px] leading-none;
 }
 
 @utility composer-model-button {
-  @apply inline-flex max-w-[220px] items-center gap-2 rounded-xl border px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-text-muted transition disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex max-w-[220px] items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[9px] uppercase tracking-[0.12em] text-text-muted transition disabled:cursor-not-allowed disabled:opacity-50;
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
 
@@ -590,11 +590,11 @@
 }
 
 @utility composer-shortcut-hint {
-  @apply hidden text-[11px] text-text-dim md:block;
+  @apply hidden text-[9px] text-text-dim md:block;
 }
 
 @utility composer-send-button {
-  @apply inline-flex min-h-9 items-center justify-center rounded-xl border px-3.5 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-45;
+  @apply inline-flex min-h-8 items-center justify-center rounded-xl border px-3 py-1.5 text-[10px] font-medium transition disabled:cursor-not-allowed disabled:opacity-45;
   border-color: rgba(212, 105, 42, 0.2);
   background: var(--color-accent);
   color: #16110d;
@@ -618,23 +618,23 @@
 }
 
 @utility section-title {
-  @apply mb-2 text-[10px] uppercase tracking-[0.18em] text-text-dim;
+  @apply mb-1 text-[8px] uppercase tracking-[0.18em] text-text-dim;
 }
 
 @utility context-row {
-  @apply flex items-start justify-between gap-3 rounded-md px-3 py-2;
+  @apply flex items-start justify-between gap-2.5 rounded-md px-2.5 py-1.25;
 }
 
 @utility context-row-quiet {
-  @apply flex items-start justify-between gap-3 rounded-md px-2 py-2 transition hover:bg-bg-secondary;
+  @apply flex items-start justify-between gap-2.5 rounded-md px-2 py-1.25 transition hover:bg-bg-secondary;
 }
 
 @utility compact-row {
-  @apply flex min-h-8 items-center gap-2 rounded-md px-2 py-1.5 transition hover:bg-bg-secondary;
+  @apply flex min-h-7 items-center gap-1.5 rounded-md px-2 py-0.75 transition hover:bg-bg-secondary;
 }
 
 @utility compact-empty {
-  @apply px-1 py-0.5 text-[11px] text-text-dim;
+  @apply px-1 py-0.5 text-[9px] text-text-dim;
 }
 
 @utility context-icon-button {
@@ -667,7 +667,7 @@
 }
 
 @utility debug-tab {
-  @apply rounded-md px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-text-dim transition hover:bg-bg-hover hover:text-text;
+  @apply rounded-md px-1.75 py-0.75 text-[8px] uppercase tracking-[0.14em] text-text-dim transition hover:bg-bg-hover hover:text-text;
 }
 
 @utility debug-tab-active {
@@ -679,7 +679,7 @@
 }
 
 @utility debug-round-summary {
-  @apply rounded-md bg-bg-secondary px-2 py-1.5;
+  @apply rounded-md bg-bg-secondary px-2 py-1;
 }
 
 @utility debug-block {
@@ -687,11 +687,11 @@
 }
 
 @utility debug-block-header {
-  @apply mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+  @apply mb-1 flex items-center justify-between gap-2 text-[8px] uppercase tracking-[0.16em] text-text-dim;
 }
 
 @utility debug-subtitle {
-  @apply mb-1 text-[10px] uppercase tracking-[0.16em] text-text-dim;
+  @apply mb-1 text-[8px] uppercase tracking-[0.16em] text-text-dim;
 }
 
 @utility debug-inline-card {
@@ -703,7 +703,7 @@
 }
 
 @utility debug-pre {
-  @apply max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md bg-bg-secondary p-2 font-mono text-[11px] leading-5 text-text;
+  @apply max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md bg-bg-secondary p-2 font-mono text-[9px] leading-4 text-text;
 }
 
 @utility debug-pre-inline {
@@ -711,7 +711,7 @@
 }
 
 @utility debug-pre-modal {
-  @apply h-full min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-bg-secondary p-2.5 font-mono text-[12px] leading-6 text-text;
+  @apply h-full min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-bg-secondary p-2.5 font-mono text-[10px] leading-4.5 text-text;
 }
 
 @utility app-button {
@@ -861,6 +861,80 @@
 
   .message-bubble-assistant .markstream-vue code:not(pre code) .inline-code-stream-delta {
     color: inherit !important;
+  }
+
+  .message-bubble-assistant .markstream-vue,
+  .message-bubble-assistant .markstream-vue p,
+  .message-bubble-assistant .markstream-vue li,
+  .message-bubble-assistant .markstream-vue blockquote {
+    line-height: 1.5 !important;
+  }
+
+  .message-bubble-assistant .markstream-vue {
+    font-size: 12px;
+    letter-spacing: 0.006em;
+  }
+
+  .message-bubble-assistant .markstream-vue h1,
+  .message-bubble-assistant .markstream-vue h2,
+  .message-bubble-assistant .markstream-vue h3,
+  .message-bubble-assistant .markstream-vue h4 {
+    font-weight: 700 !important;
+    letter-spacing: -0.01em !important;
+    line-height: 1.24 !important;
+    margin-top: 0.42rem !important;
+    margin-bottom: 0.18rem !important;
+  }
+
+  .message-bubble-assistant .markstream-vue h1 {
+    font-size: 1.34em !important;
+  }
+
+  .message-bubble-assistant .markstream-vue h2 {
+    font-size: 1.18em !important;
+  }
+
+  .message-bubble-assistant .markstream-vue h3,
+  .message-bubble-assistant .markstream-vue h4 {
+    font-size: 1.06em !important;
+  }
+
+  .message-bubble-assistant .markstream-vue p,
+  .message-bubble-assistant .markstream-vue ul,
+  .message-bubble-assistant .markstream-vue ol,
+  .message-bubble-assistant .markstream-vue pre,
+  .message-bubble-assistant .markstream-vue blockquote {
+    margin-top: 0.22rem !important;
+    margin-bottom: 0.22rem !important;
+  }
+
+  .message-bubble-assistant .markstream-vue ul,
+  .message-bubble-assistant .markstream-vue ol {
+    padding-left: 0.95rem !important;
+  }
+
+  .message-bubble-assistant .markstream-vue > :first-child {
+    margin-top: 0 !important;
+  }
+
+  .message-bubble-assistant .markstream-vue > :last-child {
+    margin-bottom: 0 !important;
+  }
+
+  .message-bubble-assistant .markstream-vue ul + h1,
+  .message-bubble-assistant .markstream-vue ul + h2,
+  .message-bubble-assistant .markstream-vue ul + h3,
+  .message-bubble-assistant .markstream-vue ol + h1,
+  .message-bubble-assistant .markstream-vue ol + h2,
+  .message-bubble-assistant .markstream-vue ol + h3,
+  .message-bubble-assistant .markstream-vue p + h1,
+  .message-bubble-assistant .markstream-vue p + h2,
+  .message-bubble-assistant .markstream-vue p + h3 {
+    margin-top: 0.34rem !important;
+  }
+
+  .message-bubble-assistant .markstream-vue li + li {
+    margin-top: 0.08rem !important;
   }
 
   html,

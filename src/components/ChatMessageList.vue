@@ -1,8 +1,8 @@
 <template>
-  <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+  <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
     <div v-if="!chat.length" class="empty-state">
-      <p class="text-sm text-text">No messages yet.</p>
-      <p class="mt-1 text-xs text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
+      <p class="text-[12px] text-text">No messages yet.</p>
+      <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
     </div>
 
     <article
@@ -15,8 +15,8 @@
 
       <div class="message-stack" :class="message.role === 'assistant' ? 'items-start' : 'items-end'">
         <div class="message-meta" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-          <span class="text-[13px] font-semibold text-text">{{ message.author }}</span>
-          <time class="font-mono text-[11px] text-text-dim">{{ message.time }}</time>
+          <span class="text-[11px] font-semibold text-text">{{ message.author }}</span>
+          <time class="font-mono text-[9px] text-text-dim">{{ message.time }}</time>
         </div>
 
         <div
@@ -32,7 +32,7 @@
             :render-batch-size="16"
             :render-batch-delay="8"
           />
-          <p v-else class="whitespace-pre-wrap text-text">{{ message.content }}</p>
+          <p v-else class="whitespace-pre-wrap text-[12px] leading-[1.5] text-text">{{ message.content }}</p>
 
           <details v-if="message.tools?.length" class="message-tools">
             <summary class="message-tools-summary">
@@ -68,8 +68,8 @@
 
       <div class="message-stack items-start">
         <div class="message-meta justify-start">
-          <span class="text-[13px] font-semibold text-text">March</span>
-          <time class="font-mono text-[11px] text-text-dim">...</time>
+          <span class="text-[11px] font-semibold text-text">March</span>
+          <time class="font-mono text-[9px] text-text-dim">...</time>
         </div>
 
         <div class="message-bubble message-bubble-assistant opacity-90">
@@ -90,7 +90,7 @@
             :render-batch-size="16"
             :render-batch-delay="8"
           />
-          <p v-else class="mt-2 text-[13px] text-text-dim">
+          <p v-else class="mt-1 text-[11px] text-text-dim">
             {{ liveTurn.state === 'error' ? '这轮没有成功完成。' : 'March 正在处理这一轮请求。' }}
           </p>
 
