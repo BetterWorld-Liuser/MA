@@ -566,7 +566,37 @@ fn render_injections(context: &AgentContext) -> String {
 
 fn render_context_body(context: &AgentContext) -> String {
     let mut output = String::new();
-    output.push_str("# Open Files\n");
+    output.push_str("# Session Status\n");
+    if context.session_status.is_empty() {
+        output.push_str("(none)\n");
+    } else {
+        output.push_str(&format!(
+            "workspace_root: {}\nplatform: {}\ndefault_shell: {}\n",
+            context.session_status.workspace_root.display(),
+            context.session_status.platform,
+            context.session_status.shell
+        ));
+
+        if context.session_status.available_shells.is_empty() {
+            output.push_str("available_shells: (none)\n");
+        } else {
+            output.push_str(&format!(
+                "available_shells: {}\n",
+                context.session_status.available_shells.join(", ")
+            ));
+        }
+
+        if context.session_status.workspace_entries.is_empty() {
+            output.push_str("workspace_entries: (none)\n");
+        } else {
+            output.push_str("workspace_entries:\n");
+            for entry in &context.session_status.workspace_entries {
+                output.push_str(&format!("- {entry}\n"));
+            }
+        }
+    }
+
+    output.push_str("\n# Open Files\n");
     if context.open_files.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -588,20 +618,20 @@ fn render_context_body(context: &AgentContext) -> String {
         }
     }
 
-    output.push_str("\n# System Status\n");
-    if context.system_status.is_empty() {
+    output.push_str("\n# Runtime Status\n");
+    if context.runtime_status.is_empty() {
         output.push_str("(none)\n");
     } else {
-        if context.system_status.locked_files.is_empty() {
+        if context.runtime_status.locked_files.is_empty() {
             output.push_str("locked_files: (none)\n");
         } else {
             output.push_str("locked_files:\n");
-            for path in &context.system_status.locked_files {
+            for path in &context.runtime_status.locked_files {
                 output.push_str(&format!("- {}\n", path.display()));
             }
         }
 
-        if let Some(pressure) = &context.system_status.context_pressure {
+        if let Some(pressure) = &context.runtime_status.context_pressure {
             output.push_str(&format!(
                 "context_pressure: {}% - {}\n",
                 pressure.used_percent, pressure.message
@@ -1175,7 +1205,8 @@ fn parse_human_token_limit(text: &str) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::context::{
-        AgentContext, ChatTurn, FileSnapshot, Injection, ModifiedBy, NoteEntry, Role, SystemStatus,
+        AgentContext, ChatTurn, FileSnapshot, Injection, ModifiedBy, NoteEntry, Role,
+        SessionStatus, SystemStatus,
     };
     use indexmap::IndexMap;
 
@@ -1204,7 +1235,14 @@ mod tests {
             tools: Vec::new(),
             open_files,
             notes,
-            system_status: SystemStatus::default(),
+            session_status: SessionStatus {
+                workspace_root: "D:/playground/MA".into(),
+                platform: "Windows".to_string(),
+                shell: "powershell".to_string(),
+                available_shells: vec!["powershell".to_string(), "cmd".to_string()],
+                workspace_entries: vec!["design/".to_string(), "src/".to_string()],
+            },
+            runtime_status: SystemStatus::default(),
             hints: Vec::new(),
             recent_chat: vec![ChatTurn {
                 role: Role::User,
@@ -1224,6 +1262,20 @@ mod tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("skill:test")
+        );
+        assert!(
+            messages[2]
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("# Session Status")
+        );
+        assert!(
+            messages[2]
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("workspace_root: D:/playground/MA")
         );
         assert!(
             messages[2]
@@ -1251,7 +1303,7 @@ mod tests {
                 .content
                 .as_deref()
                 .unwrap_or_default()
-                .contains("# System Status")
+                .contains("# Runtime Status")
         );
         assert!(
             messages[2]

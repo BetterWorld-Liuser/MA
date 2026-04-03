@@ -16,7 +16,8 @@ pub struct AgentContext {
     pub tools: Vec<ToolDefinition>,
     pub open_files: IndexMap<PathBuf, FileSnapshot>,
     pub notes: IndexMap<String, NoteEntry>,
-    pub system_status: SystemStatus,
+    pub session_status: SessionStatus,
+    pub runtime_status: RuntimeStatus,
     pub hints: Vec<Hint>,
     pub recent_chat: Vec<ChatTurn>,
 }
@@ -165,6 +166,27 @@ impl NoteEntry {
     }
 }
 
+/// Session 级环境信息。
+/// 这层变化较少，适合放在 prompt 靠前位置，帮助模型先建立工作区方位感。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionStatus {
+    pub workspace_root: PathBuf,
+    pub platform: String,
+    pub shell: String,
+    pub available_shells: Vec<String>,
+    pub workspace_entries: Vec<String>,
+}
+
+impl SessionStatus {
+    pub fn is_empty(&self) -> bool {
+        self.workspace_root.as_os_str().is_empty()
+            && self.platform.is_empty()
+            && self.shell.is_empty()
+            && self.available_shells.is_empty()
+            && self.workspace_entries.is_empty()
+    }
+}
+
 /// Ma 维护、AI 只读的运行时状态区。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SystemStatus {
@@ -177,6 +199,8 @@ impl SystemStatus {
         self.locked_files.is_empty() && self.context_pressure.is_none()
     }
 }
+
+pub type RuntimeStatus = SystemStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextPressure {
@@ -281,7 +305,8 @@ pub struct AgentContextBuilder {
     tools: Vec<ToolDefinition>,
     open_files: IndexMap<PathBuf, FileSnapshot>,
     notes: IndexMap<String, NoteEntry>,
-    system_status: SystemStatus,
+    session_status: SessionStatus,
+    runtime_status: RuntimeStatus,
     hints: Vec<Hint>,
     history: ConversationHistory,
     config: ContextBuildConfig,
@@ -296,7 +321,8 @@ impl AgentContextBuilder {
             tools: Vec::new(),
             open_files: IndexMap::new(),
             notes: IndexMap::new(),
-            system_status: SystemStatus::default(),
+            session_status: SessionStatus::default(),
+            runtime_status: RuntimeStatus::default(),
             hints: Vec::new(),
             history: ConversationHistory::default(),
             config: ContextBuildConfig::default(),
@@ -337,8 +363,13 @@ impl AgentContextBuilder {
         self
     }
 
-    pub fn system_status(mut self, system_status: SystemStatus) -> Self {
-        self.system_status = system_status;
+    pub fn session_status(mut self, session_status: SessionStatus) -> Self {
+        self.session_status = session_status;
+        self
+    }
+
+    pub fn runtime_status(mut self, runtime_status: RuntimeStatus) -> Self {
+        self.runtime_status = runtime_status;
         self
     }
 
@@ -372,7 +403,8 @@ impl AgentContextBuilder {
             tools: self.tools,
             open_files: self.open_files,
             notes: self.notes,
-            system_status: self.system_status,
+            session_status: self.session_status,
+            runtime_status: self.runtime_status,
             hints: self.hints,
             recent_chat,
         }

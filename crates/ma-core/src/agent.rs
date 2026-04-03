@@ -13,8 +13,8 @@ use serde_json::Value;
 
 use crate::context::{
     AgentContext, AgentContextBuilder, ContextBuildConfig, ContextPressure, ConversationHistory,
-    DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SystemStatus, ToolSummary,
-    render_file_snapshot_for_prompt,
+    DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SessionStatus, SystemStatus,
+    ToolSummary, render_file_snapshot_for_prompt,
 };
 use crate::provider::{
     ApiToolCallRequest, ApiToolFunctionCallRequest, OpenAiCompatibleClient, ProviderProgressEvent,
@@ -533,7 +533,8 @@ impl AgentSession {
             .injections(self.injections.clone())
             .tools(tools)
             .notes(self.notes.clone())
-            .system_status(SystemStatus {
+            .session_status(self.session_status())
+            .runtime_status(SystemStatus {
                 locked_files: self.locked_files.clone(),
                 context_pressure: self.estimate_context_pressure(DEFAULT_CONTEXT_WINDOW_TOKENS),
             })
@@ -701,6 +702,24 @@ impl AgentSession {
             self.ui_system_status(context_budget_tokens),
             self.ui_context_usage(context_budget_tokens),
         )
+    }
+
+    fn session_status(&self) -> SessionStatus {
+        SessionStatus {
+            workspace_root: self.working_directory.clone(),
+            platform: platform_label().to_string(),
+            shell: self
+                .available_shells
+                .first()
+                .map(|shell| shell.kind.label().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            available_shells: self
+                .available_shells
+                .iter()
+                .map(|shell| shell.kind.label().to_string())
+                .collect(),
+            workspace_entries: workspace_entries(&self.working_directory),
+        }
     }
 
     fn execute_tool_call(&mut self, tool_call: &ProviderToolCall) -> Result<ToolOutcome> {
@@ -1061,6 +1080,44 @@ fn decode_command_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
+fn platform_label() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
+fn workspace_entries(working_directory: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(working_directory) else {
+        return Vec::new();
+    };
+
+    let mut entries = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let file_type = entry.file_type().ok()?;
+            let mut name = entry.file_name().to_string_lossy().to_string();
+            if file_type.is_dir() {
+                name.push('/');
+            }
+            Some((file_type.is_dir(), name))
+        })
+        .collect::<Vec<_>>();
+
+    // 目录优先，再按名称排序，保证 session 级目录摘要稳定。
+    entries.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    entries.into_iter().map(|(_, name)| name).collect()
+}
+
 
 fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome {
     ToolOutcome {
@@ -1113,7 +1170,34 @@ fn render_prompt(context: &AgentContext) -> String {
         }
         .render_prompt_section(),
     );
-    output.push_str("\n\n# Open Files\n");
+    output.push_str("\n\n# Session Status\n");
+    if context.session_status.is_empty() {
+        output.push_str("(none)\n");
+    } else {
+        output.push_str(&format!(
+            "workspace_root: {}\nplatform: {}\ndefault_shell: {}\n",
+            context.session_status.workspace_root.display(),
+            context.session_status.platform,
+            context.session_status.shell
+        ));
+        if context.session_status.available_shells.is_empty() {
+            output.push_str("available_shells: (none)\n");
+        } else {
+            output.push_str(&format!(
+                "available_shells: {}\n",
+                context.session_status.available_shells.join(", ")
+            ));
+        }
+        if context.session_status.workspace_entries.is_empty() {
+            output.push_str("workspace_entries: (none)\n");
+        } else {
+            output.push_str("workspace_entries:\n");
+            for entry in &context.session_status.workspace_entries {
+                output.push_str(&format!("- {entry}\n"));
+            }
+        }
+    }
+    output.push_str("\n# Open Files\n");
     for snapshot in context.open_files_in_prompt_order() {
         output.push_str(&render_file_snapshot_for_prompt(snapshot));
         output.push('\n');
@@ -1126,17 +1210,17 @@ fn render_prompt(context: &AgentContext) -> String {
             output.push_str(&format!("{id}: {}\n", note.content));
         }
     }
-    output.push_str("\n# System Status\n");
-    if context.system_status.is_empty() {
+    output.push_str("\n# Runtime Status\n");
+    if context.runtime_status.is_empty() {
         output.push_str("(none)\n");
     } else {
-        if !context.system_status.locked_files.is_empty() {
+        if !context.runtime_status.locked_files.is_empty() {
             output.push_str("locked_files:\n");
-            for path in &context.system_status.locked_files {
+            for path in &context.runtime_status.locked_files {
                 output.push_str(&format!("- {}\n", path.display()));
             }
         }
-        if let Some(pressure) = &context.system_status.context_pressure {
+        if let Some(pressure) = &context.runtime_status.context_pressure {
             output.push_str(&format!(
                 "context_pressure: {}% - {}\n",
                 pressure.used_percent, pressure.message
