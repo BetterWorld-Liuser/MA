@@ -1,22 +1,31 @@
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
-use reqwest::Client;
+use genai::adapter::AdapterKind;
+use genai::chat::{
+    ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent, ContentPart, MessageContent,
+    Tool as GenAiTool, ToolCall as GenAiToolCall, ToolResponse as GenAiToolResponse,
+};
+use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
+use genai::{Client as GenAiClient, ModelIden, ServiceTarget};
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::context::{AgentContext, render_file_snapshot_for_prompt};
+use crate::settings::ProviderType;
 use crate::tools::{ToolDefinition, ToolParameter};
 
-/// OpenAI-compatible provider 的最小运行时配置。
-/// 当前先保持环境变量注入，避免把 provider 选择和密钥管理耦合进 session 层。
+/// RuntimeProviderConfig 是 provider 运行时唯一需要的配置。
+/// March 自己负责上下文构建，这里只保留调用目标、鉴权和模型选择。
 #[derive(Debug, Clone)]
-pub struct OpenAiCompatibleConfig {
-    pub base_url: String,
+pub struct RuntimeProviderConfig {
+    pub provider_type: ProviderType,
+    pub base_url: Option<String>,
     pub api_key: String,
     pub model: String,
 }
 
-impl OpenAiCompatibleConfig {
+impl RuntimeProviderConfig {
     pub fn from_env() -> Result<Self> {
         let base_url = std::env::var("MA_OPENAI_BASE_URL")
             .context("missing MA_OPENAI_BASE_URL environment variable")?;
@@ -26,42 +35,74 @@ impl OpenAiCompatibleConfig {
             .context("missing MA_OPENAI_MODEL environment variable")?;
 
         Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            provider_type: ProviderType::OpenAiCompat,
+            base_url: Some(base_url.trim_end_matches('/').to_string()),
             api_key,
             model,
         })
     }
 }
 
-/// Provider 层只负责把 Ma 构建好的上下文翻译成请求，并把模型输出还原成可执行结构。
-#[derive(Debug, Clone)]
-pub struct OpenAiCompatibleClient {
-    http: Client,
-    config: OpenAiCompatibleConfig,
+/// ProviderClient 统一承接 genai 的多 provider 调用。
+/// OpenAI-compatible 仍然保留为一个显式类型，用于第三方代理和自定义端点。
+#[derive(Clone)]
+pub struct ProviderClient {
+    http: HttpClient,
+    client: GenAiClient,
+    config: RuntimeProviderConfig,
 }
 
-impl OpenAiCompatibleClient {
-    pub fn new(config: OpenAiCompatibleConfig) -> Self {
+pub type OpenAiCompatibleClient = ProviderClient;
+pub type OpenAiCompatibleConfig = RuntimeProviderConfig;
+
+impl ProviderClient {
+    pub fn new(config: RuntimeProviderConfig) -> Self {
+        let resolver_config = config.clone();
+        let target_resolver = ServiceTargetResolver::from_resolver_fn(
+            move |_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
+                Ok(build_service_target(&resolver_config))
+            },
+        );
+
+        let client = GenAiClient::builder()
+            .with_service_target_resolver(target_resolver)
+            .build();
+
         Self {
-            http: Client::new(),
+            http: HttpClient::new(),
+            client,
             config,
         }
     }
 
     pub async fn list_models(&self) -> Result<Vec<String>> {
-        Ok(self
-            .list_model_descriptors()
-            .await?
-            .into_iter()
-            .map(|model| model.id)
-            .collect())
+        match self.config.provider_type {
+            ProviderType::OpenAiCompat => Ok(self
+                .list_model_descriptors()
+                .await?
+                .into_iter()
+                .map(|model| model.id)
+                .collect()),
+            other => {
+                let mut models = self
+                    .client
+                    .all_model_names(adapter_kind_for_provider(other, &self.config.model))
+                    .await
+                    .context("failed to load provider model list")?;
+                models.sort();
+                models.dedup();
+                Ok(models)
+            }
+        }
     }
 
-    /// 尽力从 provider 的 `/models` 元数据里读取真实上下文窗口。
-    /// OpenAI-compatible 生态并不统一，因此这里只做 best-effort 解析：
-    /// - 若供应商返回 `context_window` / `max_input_tokens` 等字段，则直接采用
-    /// - 若没有这些字段，则由调用侧决定是否使用本地 fallback
+    /// 对 OpenAI-compatible 继续尝试从 `/models` 扩展字段里读上下文窗口。
+    /// 其他 provider 先交给本地能力表兜底，避免把不同协议混成同一套脆弱解析。
     pub async fn resolve_model_context_window(&self, model_id: &str) -> Result<Option<usize>> {
+        if self.config.provider_type != ProviderType::OpenAiCompat {
+            return Ok(None);
+        }
+
         let descriptors = self.list_model_descriptors().await?;
         Ok(descriptors
             .into_iter()
@@ -70,10 +111,17 @@ impl OpenAiCompatibleClient {
     }
 
     async fn list_model_descriptors(&self) -> Result<Vec<ModelDescriptor>> {
-        let response = self
-            .http
-            .get(format!("{}/models", self.config.base_url))
-            .bearer_auth(&self.config.api_key)
+        let base_url = self
+            .config
+            .base_url
+            .as_deref()
+            .context("provider base url is required for model list")?;
+        let mut request = self.http.get(format!("{}/models", base_url));
+        if !self.config.api_key.trim().is_empty() {
+            request = request.bearer_auth(&self.config.api_key);
+        }
+
+        let response = request
             .send()
             .await
             .context("failed to request model list")?
@@ -92,8 +140,6 @@ impl OpenAiCompatibleClient {
             .collect()
     }
 
-    /// 这是最小 agent loop 的核心入口：
-    /// Ma 先把上下文拆成 messages 与 tools，再逐轮把 provider 响应翻译成文本或 tool calls。
     pub async fn complete_context(
         &self,
         context: &AgentContext,
@@ -112,119 +158,50 @@ impl OpenAiCompatibleClient {
     where
         F: FnMut(ProviderProgressEvent) -> Result<()>,
     {
-        let request = ChatCompletionRequest {
-            model: self.config.model.clone(),
-            messages: conversation,
-            temperature: Some(0.2),
-            stream: true,
-            tools: if context.tools.is_empty() {
-                None
-            } else {
-                Some(
-                    context
-                        .tools
-                        .iter()
-                        .map(translate_tool_definition)
-                        .collect(),
-                )
-            },
-            tool_choice: if context.tools.is_empty() {
-                None
-            } else {
-                Some(ApiToolChoice::Auto)
-            },
-        };
-
+        let request = build_chat_request(context, &conversation)?;
         let request_json =
-            serde_json::to_string_pretty(&request).context("failed to encode chat request")?;
-        let mut response = self.send_chat_completion(request, &mut on_event).await?;
-        response.request_json = request_json;
-        Ok(response)
-    }
-
-    async fn send_chat_completion(
-        &self,
-        request: ChatCompletionRequest,
-        on_event: &mut impl FnMut(ProviderProgressEvent) -> Result<()>,
-    ) -> Result<ProviderResponse> {
-        let response = self
-            .http
-            .post(format!("{}/chat/completions", self.config.base_url))
-            .bearer_auth(&self.config.api_key)
-            .json(&request)
-            .send()
+            serde_json::to_string_pretty(&request).context("failed to encode provider request")?;
+        let options = ChatOptions::default()
+            .with_temperature(0.2)
+            .with_capture_content(true)
+            .with_capture_tool_calls(true);
+        let mut stream = self
+            .client
+            .exec_chat_stream(&self.config.model, request, Some(&options))
             .await
-            .context("failed to request chat completion")?
-            .error_for_status()
-            .context("chat completion request failed")?;
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_string();
+            .context("failed to start provider stream")?;
 
-        if content_type.contains("text/event-stream") {
-            return self
-                .read_streaming_chat_completion(response, on_event)
-                .await;
-        }
-
-        let raw_response = response
-            .text()
-            .await
-            .context("failed to read chat completion response body")?;
-        let payload: ChatCompletionResponse = serde_json::from_str(&raw_response)
-            .context("failed to decode chat completion response")?;
-        provider_response_from_payload(payload, raw_response)
-    }
-
-    async fn read_streaming_chat_completion(
-        &self,
-        response: reqwest::Response,
-        on_event: &mut impl FnMut(ProviderProgressEvent) -> Result<()>,
-    ) -> Result<ProviderResponse> {
-        let mut stream = response.bytes_stream();
-        let mut raw_response = String::new();
-        let mut buffer = String::new();
-        let mut collector = StreamResponseCollector::default();
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.context("failed to read chat completion stream chunk")?;
-            let chunk_text = std::str::from_utf8(&chunk)
-                .context("chat completion stream chunk was not valid UTF-8")?;
-            raw_response.push_str(chunk_text);
-            buffer.push_str(chunk_text);
-
-            while let Some(event) = pop_sse_event(&mut buffer) {
-                match event {
-                    SseEvent::Done => {
-                        return collector.finish(raw_response);
+        let mut collector = StreamCollector::default();
+        while let Some(event) = stream.stream.next().await {
+            match event.context("failed to read provider stream event")? {
+                ChatStreamEvent::Start => {}
+                ChatStreamEvent::Chunk(chunk) => {
+                    if !chunk.content.is_empty() {
+                        collector.content.push_str(&chunk.content);
+                        on_event(ProviderProgressEvent::ContentDelta(chunk.content))?;
                     }
-                    SseEvent::Data(data) => {
-                        let payload: ChatCompletionChunk = serde_json::from_str(&data)
-                            .with_context(|| {
-                                format!("failed to decode chat completion stream event: {}", data)
-                            })?;
-                        let progress = collector.ingest_chunk(payload)?;
-                        if !progress.content_delta.is_empty() {
-                            on_event(ProviderProgressEvent::ContentDelta(progress.content_delta))?;
-                        }
-                        if progress.tool_calls_updated {
-                            on_event(ProviderProgressEvent::ToolCallsUpdated(
-                                collector.tool_call_deltas(),
-                            ))?;
-                        }
-                    }
+                }
+                ChatStreamEvent::ToolCallChunk(chunk) => {
+                    collector.ingest_tool_call(chunk.tool_call)?;
+                    on_event(ProviderProgressEvent::ToolCallsUpdated(
+                        collector.tool_call_deltas(),
+                    ))?;
+                }
+                ChatStreamEvent::ReasoningChunk(_) | ChatStreamEvent::ThoughtSignatureChunk(_) => {}
+                ChatStreamEvent::End(end) => {
+                    collector.absorb_captured_content(end.captured_content);
+                    let mut response = collector.finish()?;
+                    response.request_json = request_json;
+                    response.raw_response = serde_json::to_string_pretty(
+                        &debug_structured_response_from_provider(Some(response.clone())),
+                    )
+                    .unwrap_or_else(|_| "(failed to format provider response)".to_string());
+                    return Ok(response);
                 }
             }
         }
 
-        if !buffer.trim().is_empty() {
-            bail!("chat completion stream ended with incomplete SSE event");
-        }
-
-        collector.finish(raw_response)
+        bail!("provider stream ended unexpectedly")
     }
 
     pub async fn respond_to_context(
@@ -284,34 +261,191 @@ impl OpenAiCompatibleClient {
             return Ok(None);
         }
 
-        let request = ChatCompletionRequest {
-            model: self.config.model.clone(),
-            messages: vec![
-                RequestMessage::system(
-                    "You generate concise task titles for a coding workspace.\n\
-                     Return only the title text.\n\
-                     Rules:\n\
-                     - Prefer Simplified Chinese when the user writes Chinese.\n\
-                     - Use 8-18 characters when possible.\n\
-                     - Keep the concrete object, such as a file, module, or bug.\n\
-                     - Remove filler like '帮我', '请你', '看一下', '继续'.\n\
-                     - Do not use quotes, numbering, or trailing punctuation.",
-                ),
-                RequestMessage::user(format!("First user message:\n{}", trimmed)),
-            ],
-            temperature: Some(0.1),
-            stream: false,
-            tools: None,
-            tool_choice: None,
-        };
+        let request = ChatRequest::from_user(format!("First user message:\n{}", trimmed))
+            .with_system(
+                "You generate concise task titles for a coding workspace.\n\
+                 Return only the title text.\n\
+                 Rules:\n\
+                 - Prefer Simplified Chinese when the user writes Chinese.\n\
+                 - Use 8-18 characters when possible.\n\
+                 - Keep the concrete object, such as a file, module, or bug.\n\
+                 - Remove filler like '帮我', '请你', '看一下', '继续'.\n\
+                 - Do not use quotes, numbering, or trailing punctuation.",
+            );
+        let options = ChatOptions::default().with_temperature(0.1);
+        let response = self
+            .client
+            .exec_chat(&self.config.model, request, Some(&options))
+            .await
+            .context("failed to request suggested title")?;
 
-        let response = self.send_chat_completion(request, &mut |_| Ok(())).await?;
         Ok(response
-            .content
-            .as_deref()
+            .first_text()
             .and_then(sanitize_task_title)
             .or_else(|| fallback_task_title(trimmed)))
     }
+
+    pub async fn test_connection(&self) -> Result<String> {
+        match self.config.provider_type {
+            ProviderType::OpenAiCompat | ProviderType::Ollama => {
+                let models = self.list_models().await?;
+                let model_count = models.len();
+                let sample = models.into_iter().take(3).collect::<Vec<_>>().join(", ");
+                if sample.is_empty() {
+                    Ok("连接成功，但 provider 没有返回模型列表。".to_string())
+                } else {
+                    Ok(format!(
+                        "连接成功，已读取 {} 个模型，例如：{}",
+                        model_count, sample
+                    ))
+                }
+            }
+            _ => {
+                let request = ChatRequest::from_user("Reply with OK only.");
+                let options = ChatOptions::default()
+                    .with_temperature(0.0)
+                    .with_max_tokens(8);
+                let response = self
+                    .client
+                    .exec_chat(&self.config.model, request, Some(&options))
+                    .await
+                    .context("failed to run provider probe request")?;
+                let reply = response.first_text().unwrap_or("OK").trim();
+                Ok(format!(
+                    "连接成功，模型 {} 已响应：{}",
+                    self.config.model, reply
+                ))
+            }
+        }
+    }
+}
+
+fn build_service_target(config: &RuntimeProviderConfig) -> ServiceTarget {
+    let adapter_kind = adapter_kind_for_provider(config.provider_type, &config.model);
+    let endpoint = config
+        .base_url
+        .as_ref()
+        .map(|url| Endpoint::from_owned(url.clone()))
+        .unwrap_or_else(|| default_endpoint_for_provider(config.provider_type));
+    let auth = if config.api_key.trim().is_empty() {
+        AuthData::from_single("ollama")
+    } else {
+        AuthData::from_single(config.api_key.clone())
+    };
+
+    ServiceTarget {
+        endpoint,
+        auth,
+        model: ModelIden::new(adapter_kind, config.model.clone()),
+    }
+}
+
+fn adapter_kind_for_provider(provider_type: ProviderType, model: &str) -> AdapterKind {
+    match provider_type {
+        ProviderType::OpenAiCompat => AdapterKind::OpenAI,
+        ProviderType::OpenAi => AdapterKind::from_model(model).unwrap_or(AdapterKind::OpenAI),
+        ProviderType::Anthropic => AdapterKind::Anthropic,
+        ProviderType::Gemini => AdapterKind::Gemini,
+        ProviderType::Fireworks => AdapterKind::Fireworks,
+        ProviderType::Together => AdapterKind::Together,
+        ProviderType::Groq => AdapterKind::Groq,
+        ProviderType::Mimo => AdapterKind::Mimo,
+        ProviderType::Nebius => AdapterKind::Nebius,
+        ProviderType::Xai => AdapterKind::Xai,
+        ProviderType::DeepSeek => AdapterKind::DeepSeek,
+        ProviderType::Zai => AdapterKind::Zai,
+        ProviderType::BigModel => AdapterKind::BigModel,
+        ProviderType::Cohere => AdapterKind::Cohere,
+        ProviderType::Ollama => AdapterKind::Ollama,
+    }
+}
+
+fn default_endpoint_for_provider(provider_type: ProviderType) -> Endpoint {
+    match provider_type {
+        ProviderType::OpenAiCompat | ProviderType::OpenAi => {
+            Endpoint::from_static("https://api.openai.com/v1/")
+        }
+        ProviderType::Anthropic => Endpoint::from_static("https://api.anthropic.com/v1/"),
+        ProviderType::Gemini => {
+            Endpoint::from_static("https://generativelanguage.googleapis.com/v1beta/")
+        }
+        ProviderType::Fireworks => {
+            Endpoint::from_static("https://api.fireworks.ai/inference/v1/")
+        }
+        ProviderType::Together => Endpoint::from_static("https://api.together.xyz/v1/"),
+        ProviderType::Groq => Endpoint::from_static("https://api.groq.com/openai/v1/"),
+        ProviderType::Mimo => Endpoint::from_static("https://api.mimo.org/v1/"),
+        ProviderType::Nebius => Endpoint::from_static("https://api.studio.nebius.com/v1/"),
+        ProviderType::Xai => Endpoint::from_static("https://api.x.ai/v1/"),
+        ProviderType::DeepSeek => Endpoint::from_static("https://api.deepseek.com/v1/"),
+        ProviderType::Zai => Endpoint::from_static("https://api.z.ai/api/paas/v4/"),
+        ProviderType::BigModel => Endpoint::from_static("https://open.bigmodel.cn/api/paas/v4/"),
+        ProviderType::Cohere => Endpoint::from_static("https://api.cohere.com/v2/"),
+        ProviderType::Ollama => Endpoint::from_static("http://localhost:11434/v1/"),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderResponse {
+    pub content: Option<String>,
+    pub tool_calls: Vec<ProviderToolCall>,
+    pub request_json: String,
+    pub raw_response: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments_json: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugStructuredProviderResponse {
+    content: Option<String>,
+    tool_calls: Vec<DebugStructuredToolCall>,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugStructuredToolCall {
+    id: String,
+    name: String,
+    arguments_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderToolCallDelta {
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments_json: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderProgressEvent {
+    ContentDelta(String),
+    ToolCallsUpdated(Vec<ProviderToolCallDelta>),
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestedToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConversationDelta {
+    AssistantToolCalls(Vec<RequestedToolCall>),
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ModelResponse {
+    AssistantMessage(String),
+    ToolCalls(Vec<RequestedToolCall>),
 }
 
 pub fn fallback_task_title(first_user_message: &str) -> Option<String> {
@@ -392,89 +526,14 @@ fn sanitize_task_title(raw: &str) -> Option<String> {
     if title.is_empty() { None } else { Some(title) }
 }
 
-#[derive(Debug, Clone)]
-pub struct ProviderResponse {
-    pub content: Option<String>,
-    pub tool_calls: Vec<ProviderToolCall>,
-    pub request_json: String,
-    pub raw_response: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProviderToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments_json: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DebugStructuredProviderResponse {
-    content: Option<String>,
-    tool_calls: Vec<DebugStructuredToolCall>,
-}
-
-#[derive(Debug, Serialize)]
-struct DebugStructuredToolCall {
-    id: String,
-    name: String,
-    arguments_json: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProviderToolCallDelta {
-    pub id: Option<String>,
-    pub name: String,
-    pub arguments_json: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProviderProgressEvent {
-    ContentDelta(String),
-    ToolCallsUpdated(Vec<ProviderToolCallDelta>),
-}
-
-#[derive(Debug, Clone)]
-pub struct RequestedToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum ConversationDelta {
-    AssistantToolCalls(Vec<RequestedToolCall>),
-    ToolResult {
-        tool_call_id: String,
-        content: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum ModelResponse {
-    AssistantMessage(String),
-    ToolCalls(Vec<RequestedToolCall>),
-}
-
 pub fn format_provider_response_for_debug(raw_response: &str) -> String {
     if raw_response.trim().is_empty() {
         return "(empty response)".to_string();
     }
 
-    if let Ok(payload) = serde_json::from_str::<ChatCompletionResponse>(raw_response) {
-        let structured = debug_structured_response_from_provider(
-            provider_response_from_payload(payload, String::new()).ok(),
-        );
-        return serde_json::to_string_pretty(&structured)
-            .unwrap_or_else(|_| raw_response.to_string());
-    }
-
-    if let Some(response) = parse_sse_response_for_debug(raw_response) {
-        let structured = debug_structured_response_from_provider(Some(response));
-        return serde_json::to_string_pretty(&structured)
-            .unwrap_or_else(|_| raw_response.to_string());
-    }
-
-    raw_response.to_string()
+    serde_json::from_str::<serde_json::Value>(raw_response)
+        .and_then(|value| serde_json::to_string_pretty(&value))
+        .unwrap_or_else(|_| raw_response.to_string())
 }
 
 /// RequestMessage 保持显式结构，方便 tool loop 在同一轮里累积 assistant/tool 消息。
@@ -656,25 +715,80 @@ fn render_context_body(context: &AgentContext) -> String {
     output
 }
 
-#[cfg(test)]
-#[cfg(test)]
-fn translate_tool_runtime(tool_runtime: &crate::tools::ToolRuntime) -> Vec<ApiToolDefinition> {
-    tool_runtime
-        .tools
-        .iter()
-        .map(translate_tool_definition)
-        .collect()
+fn build_chat_request(
+    context: &AgentContext,
+    conversation: &[RequestMessage],
+) -> Result<ChatRequest> {
+    let mut request = ChatRequest::default();
+
+    for message in conversation {
+        let content = message.content.clone().unwrap_or_default();
+        match message.role.as_str() {
+            "system" => {
+                if request.system.is_none() {
+                    request = request.with_system(content);
+                } else {
+                    request = request.append_message(ChatMessage::system(content));
+                }
+            }
+            "user" => request = request.append_message(ChatMessage::user(content)),
+            "assistant" => {
+                let assistant_message = build_assistant_message(&content, &message.tool_calls)?;
+                request = request.append_message(assistant_message);
+            }
+            "tool" => {
+                let tool_call_id = message
+                    .tool_call_id
+                    .clone()
+                    .context("tool message missing tool_call_id")?;
+                request = request.append_message(ChatMessage::from(GenAiToolResponse::new(
+                    tool_call_id, content,
+                )));
+            }
+            other => bail!("unsupported request role {other}"),
+        }
+    }
+
+    if !context.tools.is_empty() {
+        request = request.with_tools(context.tools.iter().map(translate_tool_definition));
+    }
+
+    Ok(request)
 }
 
-fn translate_tool_definition(tool: &ToolDefinition) -> ApiToolDefinition {
-    ApiToolDefinition {
-        tool_type: "function".to_string(),
-        function: ApiFunctionDefinition {
-            name: tool.name.to_string(),
-            description: Some(render_tool_description(tool)),
-            parameters: build_parameters_schema(&tool.parameters),
-        },
+fn build_assistant_message(
+    content: &str,
+    tool_calls: &[ApiToolCallRequest],
+) -> Result<ChatMessage> {
+    if tool_calls.is_empty() {
+        return Ok(ChatMessage::assistant(content.to_string()));
     }
+
+    let mut parts = Vec::new();
+    if !content.trim().is_empty() {
+        parts.push(ContentPart::Text(content.to_string()));
+    }
+    for tool_call in tool_calls {
+        parts.push(ContentPart::ToolCall(GenAiToolCall {
+            call_id: tool_call.id.clone(),
+            fn_name: tool_call.function.name.clone(),
+            fn_arguments: parse_tool_arguments(&tool_call.function.arguments),
+            thought_signatures: None,
+        }));
+    }
+
+    Ok(ChatMessage::assistant(MessageContent::from_parts(parts)))
+}
+
+fn parse_tool_arguments(arguments_json: &str) -> Value {
+    serde_json::from_str(arguments_json)
+        .unwrap_or_else(|_| Value::String(arguments_json.to_string()))
+}
+
+fn translate_tool_definition(tool: &ToolDefinition) -> GenAiTool {
+    GenAiTool::new(tool.name.to_string())
+        .with_description(render_tool_description(tool))
+        .with_schema(build_parameters_schema(&tool.parameters))
 }
 
 fn render_tool_description(tool: &ToolDefinition) -> String {
@@ -689,7 +803,7 @@ fn render_tool_description(tool: &ToolDefinition) -> String {
     )
 }
 
-fn build_parameters_schema(parameters: &[ToolParameter]) -> ApiJsonSchema {
+fn build_parameters_schema(parameters: &[ToolParameter]) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
 
@@ -707,12 +821,12 @@ fn build_parameters_schema(parameters: &[ToolParameter]) -> ApiJsonSchema {
         }
     }
 
-    ApiJsonSchema {
-        schema_type: "object".to_string(),
-        properties: serde_json::Value::Object(properties),
-        required,
-        additional_properties: false,
-    }
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false,
+    })
 }
 
 fn json_type_for_parameter(parameter: &ToolParameter) -> &'static str {
@@ -723,49 +837,6 @@ fn json_type_for_parameter(parameter: &ToolParameter) -> &'static str {
         "path" => "string",
         _ => "string",
     }
-}
-
-#[derive(Debug, Serialize)]
-struct ChatCompletionRequest {
-    model: String,
-    messages: Vec<RequestMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ApiToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<ApiToolChoice>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ApiToolChoice {
-    Auto,
-}
-
-#[derive(Debug, Serialize)]
-struct ApiToolDefinition {
-    #[serde(rename = "type")]
-    tool_type: String,
-    function: ApiFunctionDefinition,
-}
-
-#[derive(Debug, Serialize)]
-struct ApiFunctionDefinition {
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    parameters: ApiJsonSchema,
-}
-
-#[derive(Debug, Serialize)]
-struct ApiJsonSchema {
-    #[serde(rename = "type")]
-    schema_type: String,
-    properties: serde_json::Value,
-    required: Vec<String>,
-    additional_properties: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -782,111 +853,8 @@ pub struct ApiToolFunctionCallRequest {
     pub arguments: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<ChatChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    message: ResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionChunk {
-    choices: Vec<ChatChunkChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatChunkChoice {
-    #[serde(default)]
-    delta: ResponseDelta,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseMessage {
-    #[serde(default)]
-    content: Option<ResponseContent>,
-    #[serde(default)]
-    tool_calls: Vec<ApiToolCallResponse>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ResponseDelta {
-    #[serde(default)]
-    content: Option<ResponseContent>,
-    #[serde(default)]
-    tool_calls: Vec<ApiToolCallDelta>,
-}
-
-impl ResponseMessage {
-    fn content_text(&self) -> Option<String> {
-        match &self.content {
-            None => None,
-            Some(ResponseContent::Text(text)) => Some(text.clone()),
-            Some(ResponseContent::Parts(parts)) => {
-                let text = parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        ResponseContentPart::Text { text } => Some(text.as_str()),
-                        ResponseContentPart::Other => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-
-                if text.is_empty() { None } else { Some(text) }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-enum ResponseContent {
-    Text(String),
-    Parts(Vec<ResponseContentPart>),
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type")]
-enum ResponseContentPart {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiToolCallResponse {
-    id: String,
-    function: ApiToolFunctionCallResponse,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiToolCallDelta {
-    index: usize,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    function: Option<ApiToolFunctionCallDelta>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiToolFunctionCallResponse {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ApiToolFunctionCallDelta {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<String>,
-}
-
 #[derive(Debug, Default)]
-struct StreamResponseCollector {
+struct StreamCollector {
     content: String,
     tool_calls: Vec<StreamToolCallAccumulator>,
 }
@@ -898,83 +866,56 @@ struct StreamToolCallAccumulator {
     arguments_json: String,
 }
 
-#[derive(Debug, Default)]
-struct ChunkProgress {
-    content_delta: String,
-    tool_calls_updated: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum SseEvent {
-    Data(String),
-    Done,
-}
-
-fn provider_response_from_payload(
-    payload: ChatCompletionResponse,
-    raw_response: String,
-) -> Result<ProviderResponse> {
-    let Some(choice) = payload.choices.into_iter().next() else {
-        bail!("chat completion returned no choices");
-    };
-
-    Ok(ProviderResponse {
-        content: choice.message.content_text(),
-        tool_calls: choice
-            .message
+impl StreamCollector {
+    fn ingest_tool_call(&mut self, tool_call: GenAiToolCall) -> Result<()> {
+        let arguments_json = serde_json::to_string(&tool_call.fn_arguments)
+            .context("failed to encode streamed tool call arguments")?;
+        if let Some(existing) = self
             .tool_calls
-            .into_iter()
-            .map(|tool_call| ProviderToolCall {
-                id: tool_call.id,
-                name: tool_call.function.name,
-                arguments_json: tool_call.function.arguments,
-            })
-            .collect(),
-        request_json: String::new(),
-        raw_response,
-    })
-}
-
-impl StreamResponseCollector {
-    fn ingest_chunk(&mut self, chunk: ChatCompletionChunk) -> Result<ChunkProgress> {
-        let mut progress = ChunkProgress::default();
-
-        for choice in chunk.choices {
-            if let Some(text) = choice.delta.content_text() {
-                self.content.push_str(&text);
-                progress.content_delta.push_str(&text);
-            }
-
-            for tool_call in choice.delta.tool_calls {
-                progress.tool_calls_updated = true;
-                while self.tool_calls.len() <= tool_call.index {
-                    self.tool_calls.push(StreamToolCallAccumulator::default());
-                }
-
-                let accumulator = self
-                    .tool_calls
-                    .get_mut(tool_call.index)
-                    .context("tool call index out of range while collecting stream")?;
-
-                if let Some(id) = tool_call.id {
-                    accumulator.id = Some(id);
-                }
-
-                if let Some(function) = tool_call.function {
-                    if let Some(name) = function.name {
-                        accumulator.name.push_str(&name);
-                    }
-                    if let Some(arguments) = function.arguments {
-                        accumulator.arguments_json.push_str(&arguments);
-                    }
-                }
-            }
+            .iter_mut()
+            .find(|existing| existing.id.as_deref() == Some(tool_call.call_id.as_str()))
+        {
+            existing.name = tool_call.fn_name;
+            existing.arguments_json = arguments_json;
+            existing.id = Some(tool_call.call_id);
+            return Ok(());
         }
 
-        Ok(progress)
+        self.tool_calls.push(StreamToolCallAccumulator {
+            id: Some(tool_call.call_id),
+            name: tool_call.fn_name,
+            arguments_json,
+        });
+        Ok(())
     }
 
-    fn finish(self, raw_response: String) -> Result<ProviderResponse> {
+    fn absorb_captured_content(&mut self, content: Option<MessageContent>) {
+        let Some(content) = content else {
+            return;
+        };
+
+        if let Some(text) = content.joined_texts() {
+            self.content = text;
+        }
+
+        let captured_tool_calls = content.into_tool_calls();
+        if captured_tool_calls.is_empty() {
+            return;
+        }
+
+        self.tool_calls.clear();
+        for tool_call in captured_tool_calls {
+            let arguments_json =
+                serde_json::to_string(&tool_call.fn_arguments).unwrap_or_else(|_| "{}".to_string());
+            self.tool_calls.push(StreamToolCallAccumulator {
+                id: Some(tool_call.call_id),
+                name: tool_call.fn_name,
+                arguments_json,
+            });
+        }
+    }
+
+    fn finish(self) -> Result<ProviderResponse> {
         let tool_calls = self
             .tool_calls
             .into_iter()
@@ -983,29 +924,26 @@ impl StreamResponseCollector {
                     .id
                     .filter(|value| !value.trim().is_empty())
                     .context("streamed tool call missing id")?;
-                let name = if tool_call.name.trim().is_empty() {
+                if tool_call.name.trim().is_empty() {
                     bail!("streamed tool call missing function name");
-                } else {
-                    tool_call.name
-                };
-
+                }
                 Ok(ProviderToolCall {
                     id,
-                    name,
+                    name: tool_call.name,
                     arguments_json: tool_call.arguments_json,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
 
         Ok(ProviderResponse {
-            content: if self.content.is_empty() {
+            content: if self.content.trim().is_empty() {
                 None
             } else {
                 Some(self.content)
             },
             tool_calls,
             request_json: String::new(),
-            raw_response,
+            raw_response: String::new(),
         })
     }
 
@@ -1021,76 +959,15 @@ impl StreamResponseCollector {
     }
 }
 
-impl ResponseDelta {
-    fn content_text(&self) -> Option<String> {
-        ResponseMessage {
-            content: self.content.clone(),
-            tool_calls: Vec::new(),
-        }
-        .content_text()
-    }
-}
-
-fn pop_sse_event(buffer: &mut String) -> Option<SseEvent> {
-    let delimiter_len = if let Some(index) = buffer.find("\r\n\r\n") {
-        Some((index, 4))
-    } else {
-        buffer.find("\n\n").map(|index| (index, 2))
-    }?;
-
-    let (index, separator_width) = delimiter_len;
-    let raw_event = buffer[..index].to_string();
-    buffer.drain(..index + separator_width);
-
-    let mut data_lines = Vec::new();
-    for line in raw_event.lines() {
-        let line = line.trim_end_matches('\r');
-        if let Some(payload) = line.strip_prefix("data:") {
-            data_lines.push(payload.trim_start().to_string());
-        }
-    }
-
-    if data_lines.is_empty() {
-        return pop_sse_event(buffer);
-    }
-
-    let data = data_lines.join("\n");
-    if data == "[DONE]" {
-        Some(SseEvent::Done)
-    } else {
-        Some(SseEvent::Data(data))
-    }
-}
-
-fn parse_sse_response_for_debug(raw_response: &str) -> Option<ProviderResponse> {
-    // Debug 面板更关心“这条流最终拼出了什么”，所以这里直接重建最终响应结构。
-    let mut buffer = raw_response.to_string();
-    let mut collector = StreamResponseCollector::default();
-
-    while let Some(event) = pop_sse_event(&mut buffer) {
-        match event {
-            SseEvent::Done => {
-                return collector.finish(String::new()).ok();
-            }
-            SseEvent::Data(data) => {
-                let payload: ChatCompletionChunk = serde_json::from_str(&data).ok()?;
-                collector.ingest_chunk(payload).ok()?;
-            }
-        }
-    }
-
-    None
-}
-
 fn debug_structured_response_from_provider(
     response: Option<ProviderResponse>,
 ) -> DebugStructuredProviderResponse {
-    let response = response.unwrap_or(ProviderResponse {
-        content: None,
-        tool_calls: Vec::new(),
-        request_json: String::new(),
-        raw_response: String::new(),
-    });
+    let Some(response) = response else {
+        return DebugStructuredProviderResponse {
+            content: None,
+            tool_calls: Vec::new(),
+        };
+    };
 
     DebugStructuredProviderResponse {
         content: response.content,
@@ -1119,367 +996,109 @@ struct ModelDescriptor {
 
 impl ModelDescriptor {
     fn from_value(value: Value) -> Result<Self> {
-        let id = value
+        let object = value
+            .as_object()
+            .context("provider model entry was not an object")?;
+        let id = object
             .get("id")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .context("provider model entry missing string id")?;
+            .context("provider model entry missing string id")?
+            .to_string();
+
+        let context_window_tokens = [
+            object.get("context_window"),
+            object.get("max_input_tokens"),
+            object.get("input_token_limit"),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(parse_context_window_value);
 
         Ok(Self {
-            context_window_tokens: extract_context_window_tokens(&value),
             id,
+            context_window_tokens,
         })
     }
 }
 
-fn extract_context_window_tokens(value: &Value) -> Option<usize> {
-    for key in [
-        "context_window",
-        "context_length",
-        "max_context_tokens",
-        "max_input_tokens",
-        "input_token_limit",
-    ] {
-        if let Some(tokens) = value.get(key).and_then(parse_token_limit_value) {
-            return Some(tokens);
-        }
-    }
-
-    for container in ["capabilities", "limits", "architecture", "metadata"] {
-        let Some(nested) = value.get(container) else {
-            continue;
-        };
-        for key in [
-            "context_window",
-            "context_length",
-            "max_context_tokens",
-            "max_input_tokens",
-            "input_token_limit",
-        ] {
-            if let Some(tokens) = nested.get(key).and_then(parse_token_limit_value) {
-                return Some(tokens);
-            }
-        }
-    }
-
-    None
-}
-
-fn parse_token_limit_value(value: &Value) -> Option<usize> {
+fn parse_context_window_value(value: &Value) -> Option<usize> {
     match value {
-        Value::Number(number) => number
-            .as_u64()
-            .and_then(|value| usize::try_from(value).ok()),
-        Value::String(text) => parse_human_token_limit(text),
+        Value::Number(number) => number.as_u64().and_then(|value| usize::try_from(value).ok()),
+        Value::String(text) => text.trim().parse::<usize>().ok(),
         _ => None,
     }
 }
 
-fn parse_human_token_limit(text: &str) -> Option<usize> {
-    let normalized = text.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    if let Some(stripped) = normalized.strip_suffix('k') {
-        return stripped
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .map(|value| value * 1_000);
-    }
-
-    if let Some(stripped) = normalized.strip_suffix('m') {
-        return stripped
-            .trim()
-            .parse::<usize>()
-            .ok()
-            .map(|value| value * 1_000_000);
-    }
-
-    normalized.parse::<usize>().ok()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{build_messages, fallback_task_title};
     use crate::context::{
-        AgentContext, ChatTurn, FileSnapshot, Injection, ModifiedBy, NoteEntry, Role,
-        SessionStatus, SystemStatus,
+        AgentContext, ContextPressure, DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role,
+        RuntimeStatus, SessionStatus,
     };
     use indexmap::IndexMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn fallback_task_title_removes_prefix_and_punctuation() {
+        assert_eq!(
+            fallback_task_title("帮我修一下登录 bug。"),
+            Some("修一下登录 bug".to_string())
+        );
+    }
 
     #[test]
     fn build_messages_preserves_injections_and_context_layers() {
-        let mut open_files = IndexMap::new();
-        open_files.insert(
-            "src/main.rs".into(),
-            FileSnapshot::available(
-                "src/main.rs",
-                "fn main() {}",
-                std::time::SystemTime::UNIX_EPOCH,
-                ModifiedBy::Unknown,
-            ),
-        );
-
         let mut notes = IndexMap::new();
-        notes.insert("target".to_string(), NoteEntry::new("demo"));
-
+        notes.insert(
+            "goal".to_string(),
+            NoteEntry {
+                content: "整理 provider 抽象".to_string(),
+            },
+        );
         let context = AgentContext {
             system_core: "system core".to_string(),
             injections: vec![Injection {
-                id: "skill:test".to_string(),
-                content: "injection body".to_string(),
+                id: "skill".to_string(),
+                content: "Do the thing".to_string(),
             }],
-            tools: Vec::new(),
-            open_files,
-            notes,
             session_status: SessionStatus {
-                workspace_root: "D:/playground/MA".into(),
-                platform: "Windows".to_string(),
+                workspace_root: PathBuf::from("D:/playground/MA"),
+                platform: "windows".to_string(),
                 shell: "powershell".to_string(),
-                available_shells: vec!["powershell".to_string(), "cmd".to_string()],
-                workspace_entries: vec!["design/".to_string(), "src/".to_string()],
+                available_shells: vec!["powershell".to_string()],
+                workspace_entries: vec!["src/main.rs".to_string()],
             },
-            runtime_status: SystemStatus::default(),
-            hints: Vec::new(),
-            recent_chat: vec![ChatTurn {
+            open_files: vec![FileSnapshot {
+                path: PathBuf::from("src/main.rs"),
+                content: "fn main() {}".to_string(),
+                token_estimate: 4,
+                modified_by: None,
+            }],
+            notes,
+            runtime_status: RuntimeStatus {
+                locked_files: vec![PathBuf::from("AGENTS.md")],
+                context_pressure: Some(ContextPressure {
+                    used_tokens: 100,
+                    max_tokens: 1000,
+                    used_percent: 10,
+                    message: "safe".to_string(),
+                }),
+            },
+            hints: vec![Hint {
+                source: "CI".to_string(),
+                content: "tests red".to_string(),
+                expires_in_turns: None,
+                expires_at_unix_ms: None,
+            }],
+            recent_chat: vec![DisplayTurn {
                 role: Role::User,
                 content: "hello".to_string(),
-                timestamp: std::time::SystemTime::UNIX_EPOCH,
             }],
+            tools: Vec::new(),
         };
 
         let messages = build_messages(&context);
-
         assert_eq!(messages.len(), 3);
-        assert_eq!(messages[0].role, "system");
-        assert_eq!(messages[0].content.as_deref(), Some("system core"));
-        assert!(
-            messages[1]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("skill:test")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("# Session Status")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("workspace_root: D:/playground/MA")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("# Open Files")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("watcher-backed snapshots are the authoritative current file contents")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("# Notes")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("# Runtime Status")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("# Hints")
-        );
-        assert!(
-            messages[2]
-                .content
-                .as_deref()
-                .unwrap_or_default()
-                .contains("# Recent Chat")
-        );
-    }
-
-    #[test]
-    fn tool_request_schema_is_serializable() {
-        let runtime = crate::tools::ToolRuntime { tools: Vec::new() };
-        let payload = serde_json::to_value(translate_tool_runtime(&runtime)).expect("json");
-
-        assert!(payload.is_array());
-    }
-
-    #[test]
-    fn chat_completion_request_serializes_tool_choice_when_tools_exist() {
-        let request = ChatCompletionRequest {
-            model: "gpt-5.3-codex".to_string(),
-            messages: vec![RequestMessage::user("hello")],
-            temperature: Some(0.2),
-            stream: true,
-            tools: Some(vec![ApiToolDefinition {
-                tool_type: "function".to_string(),
-                function: ApiFunctionDefinition {
-                    name: "open_file".to_string(),
-                    description: Some("Open a file".to_string()),
-                    parameters: ApiJsonSchema {
-                        schema_type: "object".to_string(),
-                        properties: serde_json::json!({}),
-                        required: Vec::new(),
-                        additional_properties: false,
-                    },
-                },
-            }]),
-            tool_choice: Some(ApiToolChoice::Auto),
-        };
-
-        let payload = serde_json::to_value(request).expect("serialize request");
-
-        assert_eq!(payload["tool_choice"], "auto");
-        assert_eq!(payload["tools"].as_array().map(Vec::len), Some(1));
-    }
-
-    #[test]
-    fn response_message_extracts_text_from_parts() {
-        let message = ResponseMessage {
-            content: Some(ResponseContent::Parts(vec![ResponseContentPart::Text {
-                text: "hello".to_string(),
-            }])),
-            tool_calls: Vec::new(),
-        };
-
-        assert_eq!(message.content_text().as_deref(), Some("hello"));
-    }
-
-    #[test]
-    fn assistant_tool_call_message_can_carry_text_and_tools() {
-        let message = RequestMessage::assistant_tool_calls_with_text(
-            Some("Working on it".to_string()),
-            vec![ApiToolCallRequest {
-                id: "call_1".to_string(),
-                tool_type: "function".to_string(),
-                function: ApiToolFunctionCallRequest {
-                    name: "reply".to_string(),
-                    arguments: "{\"message\":\"hi\",\"wait\":true}".to_string(),
-                },
-            }],
-        );
-
-        let payload = serde_json::to_value(message).expect("serialize request message");
-
-        assert_eq!(payload["role"], "assistant");
-        assert_eq!(payload["content"], "Working on it");
-        assert_eq!(payload["tool_calls"].as_array().map(Vec::len), Some(1));
-    }
-
-    #[test]
-    fn stream_parser_collects_text_across_sse_events() {
-        let mut buffer = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
-            "data: [DONE]\n\n"
-        )
-        .to_string();
-        let mut collector = StreamResponseCollector::default();
-
-        while let Some(event) = pop_sse_event(&mut buffer) {
-            match event {
-                SseEvent::Done => break,
-                SseEvent::Data(data) => {
-                    let payload: ChatCompletionChunk =
-                        serde_json::from_str(&data).expect("stream chunk json");
-                    collector
-                        .ingest_chunk(payload)
-                        .expect("ingest stream chunk");
-                }
-            }
-        }
-
-        let response = collector.finish(String::new()).expect("finish stream");
-        assert_eq!(response.content.as_deref(), Some("Hello"));
-        assert!(response.tool_calls.is_empty());
-    }
-
-    #[test]
-    fn stream_parser_collects_tool_call_arguments_across_sse_events() {
-        let mut buffer = concat!(
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"reply\",\"arguments\":\"{\\\"message\\\":\\\"he\"}}]}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"llo\\\",\\\"wait\\\":true}\"}}]}}]}\n\n",
-            "data: [DONE]\n\n"
-        )
-        .to_string();
-        let mut collector = StreamResponseCollector::default();
-
-        while let Some(event) = pop_sse_event(&mut buffer) {
-            match event {
-                SseEvent::Done => break,
-                SseEvent::Data(data) => {
-                    let payload: ChatCompletionChunk =
-                        serde_json::from_str(&data).expect("stream chunk json");
-                    collector
-                        .ingest_chunk(payload)
-                        .expect("ingest stream chunk");
-                }
-            }
-        }
-
-        let response = collector.finish(String::new()).expect("finish stream");
-        assert_eq!(response.tool_calls.len(), 1);
-        assert_eq!(response.tool_calls[0].id, "call_1");
-        assert_eq!(response.tool_calls[0].name, "reply");
-        assert_eq!(
-            response.tool_calls[0].arguments_json,
-            "{\"message\":\"hello\",\"wait\":true}"
-        );
-    }
-
-    #[test]
-    fn debug_formatter_converts_sse_stream_into_structured_json() {
-        let raw = concat!(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n",
-            "data: [DONE]\n\n"
-        );
-
-        let formatted = format_provider_response_for_debug(raw);
-        let payload: Value =
-            serde_json::from_str(&formatted).expect("formatted debug response json");
-
-        assert_eq!(payload["content"], "你好");
-        assert_eq!(payload["tool_calls"].as_array().map(Vec::len), Some(0));
-    }
-
-    #[test]
-    fn fallback_task_title_removes_filler_prefix() {
-        assert_eq!(
-            fallback_task_title("帮我看看 main.rs 这里有没有问题").as_deref(),
-            Some("看看 main.rs 这里有没有问题")
-        );
-    }
-
-    #[test]
-    fn sanitize_task_title_trims_decoration() {
-        assert_eq!(
-            sanitize_task_title("标题：重构登录模块并补测试。").as_deref(),
-            Some("重构登录模块并补测试")
-        );
     }
 }

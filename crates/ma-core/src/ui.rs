@@ -19,7 +19,7 @@ use crate::provider::{
     OpenAiCompatibleClient, OpenAiCompatibleConfig, fallback_task_title,
     format_provider_response_for_debug,
 };
-use crate::settings::{ProviderRecord, ProviderSettingsSnapshot, SettingsStorage};
+use crate::settings::{ProviderRecord, ProviderSettingsSnapshot, ProviderType, SettingsStorage};
 use crate::storage::{
     PersistedOpenFile, PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource,
 };
@@ -130,6 +130,7 @@ pub struct UiTaskSummary {
 pub struct UiProviderModelsView {
     pub current_model: String,
     pub available_models: Vec<String>,
+    pub suggested_models: Vec<String>,
     pub provider_cache_key: String,
 }
 
@@ -147,7 +148,8 @@ pub struct UiProviderSettingsView {
 pub struct UiProviderView {
     pub id: i64,
     pub name: String,
-    pub base_url: String,
+    pub provider_type: String,
+    pub base_url: Option<String>,
     pub api_key_hint: String,
     pub created_at: i64,
 }
@@ -156,6 +158,7 @@ pub struct UiProviderView {
 #[serde(rename_all = "camelCase")]
 pub struct UiUpsertProviderRequest {
     pub id: Option<i64>,
+    pub provider_type: String,
     pub name: String,
     pub api_key: String,
     pub base_url: String,
@@ -172,6 +175,24 @@ pub struct UiDeleteProviderRequest {
 pub struct UiSetDefaultProviderRequest {
     pub provider_id: Option<i64>,
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiTestProviderConnectionRequest {
+    pub id: Option<i64>,
+    pub provider_type: String,
+    pub name: String,
+    pub api_key: String,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiTestProviderConnectionResult {
+    pub success: bool,
+    pub message: String,
+    pub suggested_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -941,7 +962,15 @@ impl UiAppBackend {
         request: UiUpsertProviderRequest,
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
-        settings.upsert_provider(request.id, request.name, request.api_key, request.base_url)?;
+        let provider_type = ProviderType::from_db_value(&request.provider_type)
+            .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
+        settings.upsert_provider(
+            request.id,
+            provider_type,
+            request.name,
+            request.api_key,
+            request.base_url,
+        )?;
         Ok(UiProviderSettingsView::from_snapshot(
             settings.database_path().to_path_buf(),
             settings.snapshot()?,
@@ -1146,6 +1175,7 @@ impl From<ProviderRecord> for UiProviderView {
         Self {
             id: provider.id,
             name: provider.name,
+            provider_type: provider.provider_type.as_db_value().to_string(),
             base_url: provider.base_url,
             api_key_hint: mask_api_key(&provider.api_key),
             created_at: system_time_to_unix(provider.created_at),
@@ -1179,6 +1209,7 @@ fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig>
             .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
 
         return Ok(OpenAiCompatibleConfig {
+            provider_type: provider.provider_type,
             base_url: provider.base_url,
             api_key: provider.api_key,
             model,
@@ -1195,8 +1226,9 @@ fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig>
 pub async fn fetch_provider_models(selected_model: Option<String>) -> Result<UiProviderModelsView> {
     let config = resolve_active_provider_config(selected_model)?;
     let current_model = config.model.clone();
+    let suggested_models = suggested_models_for_provider_type(config.provider_type);
     // UI 侧按 provider 维度缓存模型列表，因此 base_url 仍可作为稳定缓存键。
-    let provider_cache_key = config.base_url.clone();
+    let provider_cache_key = provider_cache_key(&config.provider_type, config.base_url.as_deref());
     let client = OpenAiCompatibleClient::new(config);
     let mut available_models = client.list_models().await.unwrap_or_default();
     if !available_models.iter().any(|model| model == &current_model) {
@@ -1208,6 +1240,7 @@ pub async fn fetch_provider_models(selected_model: Option<String>) -> Result<UiP
     Ok(UiProviderModelsView {
         current_model,
         available_models,
+        suggested_models,
         provider_cache_key,
     })
 }
@@ -1216,8 +1249,10 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
     let settings = SettingsStorage::open()?;
     let provider = settings.load_provider(provider_id)?;
     let current_model = settings.default_model()?.unwrap_or_default();
-    let provider_cache_key = provider.base_url.clone();
+    let suggested_models = suggested_models_for_provider_type(provider.provider_type);
+    let provider_cache_key = provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
     let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+        provider_type: provider.provider_type,
         base_url: provider.base_url,
         api_key: provider.api_key,
         model: current_model.clone(),
@@ -1232,7 +1267,44 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
     Ok(UiProviderModelsView {
         current_model,
         available_models,
+        suggested_models,
         provider_cache_key,
+    })
+}
+
+pub async fn test_provider_connection(
+    request: UiTestProviderConnectionRequest,
+) -> Result<UiTestProviderConnectionResult> {
+    let provider_type = ProviderType::from_db_value(&request.provider_type)
+        .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
+    let settings = SettingsStorage::open()?;
+    let suggested_model = suggested_models_for_provider_type(provider_type)
+        .into_iter()
+        .next();
+    let persisted_api_key = match request.id {
+        Some(id) => settings.load_provider(id)?.api_key,
+        None => String::new(),
+    };
+    let api_key = if request.api_key.trim().is_empty() {
+        persisted_api_key
+    } else {
+        request.api_key.trim().to_string()
+    };
+    let model = suggested_model
+        .clone()
+        .or(settings.default_model()?)
+        .unwrap_or_else(|| default_probe_model(provider_type).to_string());
+    let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+        provider_type,
+        base_url: normalize_ui_optional_string(request.base_url),
+        api_key,
+        model: model.clone(),
+    });
+    let message = provider.test_connection().await?;
+    Ok(UiTestProviderConnectionResult {
+        success: true,
+        message,
+        suggested_model: Some(model),
     })
 }
 
@@ -1612,6 +1684,7 @@ fn resolve_active_provider_config(selected_model: Option<String>) -> Result<Open
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
         return Ok(OpenAiCompatibleConfig {
+            provider_type: provider.provider_type,
             base_url: provider.base_url,
             api_key: provider.api_key,
             model,
@@ -1623,6 +1696,92 @@ fn resolve_active_provider_config(selected_model: Option<String>) -> Result<Open
         config.model = model;
     }
     Ok(config)
+}
+
+fn provider_cache_key(provider_type: &ProviderType, base_url: Option<&str>) -> String {
+    match base_url {
+        Some(base_url) if !base_url.trim().is_empty() => {
+            format!("{}::{}", provider_type.as_db_value(), base_url.trim())
+        }
+        _ => provider_type.as_db_value().to_string(),
+    }
+}
+
+fn suggested_models_for_provider_type(provider_type: ProviderType) -> Vec<String> {
+    match provider_type {
+        ProviderType::OpenAiCompat => vec![],
+        ProviderType::OpenAi => vec![
+            "gpt-5.4".to_string(),
+            "gpt-5".to_string(),
+            "gpt-5-mini".to_string(),
+        ],
+        ProviderType::Anthropic => vec![
+            "claude-sonnet-4-5".to_string(),
+            "claude-3-7-sonnet-latest".to_string(),
+            "claude-3-5-haiku-latest".to_string(),
+        ],
+        ProviderType::Gemini => vec![
+            "gemini-2.5-pro".to_string(),
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.0-flash".to_string(),
+        ],
+        ProviderType::Fireworks => vec![
+            "accounts/fireworks/models/deepseek-v3".to_string(),
+            "accounts/fireworks/models/llama-v3p1-70b-instruct".to_string(),
+        ],
+        ProviderType::Together => vec![
+            "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo".to_string(),
+            "deepseek-ai/DeepSeek-V3".to_string(),
+        ],
+        ProviderType::Groq => vec![
+            "llama-3.3-70b-versatile".to_string(),
+            "deepseek-r1-distill-llama-70b".to_string(),
+        ],
+        ProviderType::Mimo => vec!["moonshot-v1-8k".to_string(), "moonshot-v1-32k".to_string()],
+        ProviderType::Nebius => vec![
+            "nebius::Qwen/Qwen2.5-Coder-32B-Instruct".to_string(),
+            "nebius::meta-llama/Meta-Llama-3.1-70B-Instruct".to_string(),
+        ],
+        ProviderType::Xai => vec!["grok-3-mini".to_string(), "grok-3".to_string()],
+        ProviderType::DeepSeek => vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
+        ProviderType::Zai => vec!["glm-4.6".to_string(), "coding::glm-4.6".to_string()],
+        ProviderType::BigModel => vec!["glm-4-plus".to_string(), "glm-4-air".to_string()],
+        ProviderType::Cohere => vec!["command-r-plus".to_string(), "command-r".to_string()],
+        ProviderType::Ollama => vec![
+            "qwen2.5-coder:32b".to_string(),
+            "llama3.3:70b".to_string(),
+            "deepseek-r1:32b".to_string(),
+        ],
+    }
+}
+
+fn default_probe_model(provider_type: ProviderType) -> &'static str {
+    match provider_type {
+        ProviderType::OpenAiCompat => "gpt-4o-mini",
+        ProviderType::OpenAi => "gpt-5-mini",
+        ProviderType::Anthropic => "claude-3-5-haiku-latest",
+        ProviderType::Gemini => "gemini-2.0-flash",
+        ProviderType::Fireworks => "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        ProviderType::Together => "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        ProviderType::Groq => "llama-3.3-70b-versatile",
+        ProviderType::Mimo => "moonshot-v1-8k",
+        ProviderType::Nebius => "nebius::Qwen/Qwen2.5-Coder-32B-Instruct",
+        ProviderType::Xai => "grok-3-mini",
+        ProviderType::DeepSeek => "deepseek-chat",
+        ProviderType::Zai => "glm-4.6",
+        ProviderType::BigModel => "glm-4-air",
+        ProviderType::Cohere => "command-r",
+        ProviderType::Ollama => "qwen2.5-coder:32b",
+    }
+}
+
+fn normalize_ui_optional_string(raw: String) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/').to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn mask_api_key(api_key: &str) -> String {

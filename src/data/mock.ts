@@ -242,7 +242,14 @@ export type WorkspaceEntryView = {
 export type ProviderModelsView = {
   current_model: string;
   available_models: string[];
+  suggested_models: string[];
   provider_cache_key: string;
+};
+
+export type ProviderConnectionTestResult = {
+  success: boolean;
+  message: string;
+  suggestedModel?: string | null;
 };
 
 export type ProviderSettingsView = {
@@ -250,7 +257,8 @@ export type ProviderSettingsView = {
   providers: Array<{
     id: number;
     name: string;
-    baseUrl: string;
+    providerType: string;
+    baseUrl?: string | null;
     apiKeyHint: string;
     createdAt: number;
   }>;

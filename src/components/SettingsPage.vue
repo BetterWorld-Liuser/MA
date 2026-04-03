@@ -36,7 +36,8 @@
                   <h4 class="truncate text-[14px] font-medium text-text">{{ provider.name }}</h4>
                   <span v-if="provider.id === settings.defaultProviderId" class="settings-default-badge">默认</span>
                 </div>
-                <p class="mt-1 truncate font-mono text-[11px] text-text-dim">{{ provider.baseUrl }}</p>
+                <p class="mt-1 text-[11px] uppercase tracking-[0.12em] text-text-dim">{{ providerTypeLabel(provider.providerType) }}</p>
+                <p v-if="provider.baseUrl" class="mt-1 truncate font-mono text-[11px] text-text-dim">{{ provider.baseUrl }}</p>
                 <p class="mt-2 text-[12px] text-text-muted">Key: {{ provider.apiKeyHint }}</p>
               </div>
               <div class="flex shrink-0 items-center gap-1">
@@ -50,7 +51,7 @@
         </div>
 
         <div v-else class="settings-empty">
-          还没有配置 provider。先新增一个 base URL 和 API key，后面模型选择器就能接上它。
+          还没有配置 provider。先新增一个 provider 类型和凭据，后面模型选择器就能接上它。
         </div>
       </section>
 
@@ -58,18 +59,26 @@
         <div class="settings-panel-header">
           <div>
             <h3 class="settings-section-title">{{ activeEditorId ? '编辑 Provider' : '新增 Provider' }}</h3>
-            <p class="settings-section-copy">目前先支持 OpenAI-compatible 接口。</p>
+            <p class="settings-section-copy">内置接入 genai 支持的 provider，也保留 OpenAI-compatible 作为自定义端点入口。</p>
           </div>
         </div>
 
         <form class="space-y-4" @submit.prevent="submitProvider">
           <div class="dialog-field">
-            <label class="dialog-label" for="provider-name">名称</label>
-            <Input id="provider-name" v-model="providerName" placeholder="OpenRouter / Local vLLM" />
+            <label class="dialog-label" for="provider-type">类型</label>
+            <SettingsSelect v-model="providerType" :options="providerTypeOptions" placeholder="请选择 provider 类型" />
           </div>
           <div class="dialog-field">
+            <label class="dialog-label" for="provider-name">名称</label>
+            <Input id="provider-name" v-model="providerName" :placeholder="providerNamePlaceholder" />
+          </div>
+          <div class="dialog-field" v-if="showBaseUrlField">
             <label class="dialog-label" for="provider-base-url">Base URL</label>
-            <Input id="provider-base-url" v-model="providerBaseUrl" placeholder="https://api.openai.com/v1" />
+            <Input
+              id="provider-base-url"
+              v-model="providerBaseUrl"
+              :placeholder="baseUrlPlaceholder"
+            />
           </div>
           <div class="dialog-field">
             <label class="dialog-label" for="provider-api-key">API Key</label>
@@ -77,13 +86,19 @@
               id="provider-api-key"
               v-model="providerApiKey"
               type="password"
-              :placeholder="activeEditorId ? '留空则保持当前 API key' : 'sk-...'"
+              :placeholder="apiKeyPlaceholder"
             />
           </div>
           <div class="flex items-center justify-end gap-2">
+            <Button variant="outline" type="button" :disabled="busy" @click="testProvider">
+              测试连通性
+            </Button>
             <Button variant="ghost" type="button" @click="resetForm">清空</Button>
             <Button type="submit" :disabled="busy">{{ activeEditorId ? '保存修改' : '创建 Provider' }}</Button>
           </div>
+          <p v-if="props.providerTestMessage" class="text-[12px]" :class="props.providerTestSuccess ? 'text-[#9bd59b]' : 'text-[#ffb2b2]'">
+            {{ props.providerTestMessage }}
+          </p>
         </form>
 
         <div class="settings-divider"></div>
@@ -126,6 +141,17 @@
             <template v-else>
               <Input id="default-model" v-model="defaultModelLocal" placeholder="gpt-5.3-codex / qwen2.5-coder" />
             </template>
+            <div v-if="!availableModels.length && suggestedModels.length" class="mt-2 flex flex-wrap gap-2">
+              <button
+                v-for="model in suggestedModels"
+                :key="model"
+                type="button"
+                class="rounded-full border border-white/8 px-2.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
+                @click="defaultModelLocal = model"
+              >
+                {{ model }}
+              </button>
+            </div>
           </div>
           <div class="flex items-center justify-end">
             <Button :disabled="busy || !defaultProviderIdLocal || !defaultModelLocal.trim()" @click="submitDefaultProvider">
@@ -152,17 +178,22 @@ const props = defineProps<{
   busy?: boolean;
   modelsLoading?: boolean;
   availableModels: string[];
+  suggestedModels: string[];
+  providerTestMessage?: string;
+  providerTestSuccess?: boolean;
 }>();
 
 const emit = defineEmits<{
   close: [];
-  saveProvider: [input: { id?: number; name: string; baseUrl: string; apiKey: string }];
+  saveProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string }];
+  testProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string }];
   deleteProvider: [providerId: number];
   saveDefaultProvider: [input: { providerId: number; model: string }];
   requestModels: [providerId: number];
 }>();
 
 const activeEditorId = ref<number | null>(null);
+const providerType = ref('openai_compat');
 const providerName = ref('');
 const providerBaseUrl = ref('');
 const providerApiKey = ref('');
@@ -177,9 +208,27 @@ const defaultProviderIdLocal = computed(() => {
 const providerOptions = computed(() =>
   (props.settings?.providers ?? []).map((provider) => ({
     value: String(provider.id),
-    label: provider.name,
+    label: `${provider.name} · ${providerTypeLabel(provider.providerType)}`,
   })),
 );
+
+const providerTypeOptions = [
+  { value: 'openai_compat', label: 'OpenAI-compatible' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'fireworks', label: 'Fireworks' },
+  { value: 'together', label: 'Together' },
+  { value: 'groq', label: 'Groq' },
+  { value: 'mimo', label: 'Mimo' },
+  { value: 'nebius', label: 'Nebius' },
+  { value: 'xai', label: 'xAI' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'zai', label: 'ZAI' },
+  { value: 'bigmodel', label: 'BigModel' },
+  { value: 'cohere', label: 'Cohere' },
+  { value: 'ollama', label: 'Ollama' },
+];
 
 const modelOptions = computed(() =>
   props.availableModels.map((model) => ({
@@ -187,6 +236,26 @@ const modelOptions = computed(() =>
     label: model,
   })),
 );
+
+const showBaseUrlField = computed(() => providerType.value === 'openai_compat' || providerType.value === 'ollama');
+
+const providerNamePlaceholder = computed(() => {
+  if (providerType.value === 'openai_compat') {
+    return 'OpenRouter / Local vLLM';
+  }
+  return providerTypeLabel(providerType.value);
+});
+
+const baseUrlPlaceholder = computed(() =>
+  providerType.value === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1',
+);
+
+const apiKeyPlaceholder = computed(() => {
+  if (providerType.value === 'ollama') {
+    return activeEditorId.value ? '留空即可，当前类型默认不需要 API key' : '可留空';
+  }
+  return activeEditorId.value ? '留空则保持当前 API key' : 'sk-...';
+});
 
 watch(
   () => props.settings,
@@ -206,6 +275,7 @@ watch(defaultProviderIdLocal, (providerId, previous) => {
 
 function startCreate() {
   activeEditorId.value = null;
+  providerType.value = 'openai_compat';
   providerName.value = '';
   providerBaseUrl.value = '';
   providerApiKey.value = '';
@@ -213,8 +283,9 @@ function startCreate() {
 
 function startEdit(provider: ProviderSettingsView['providers'][number]) {
   activeEditorId.value = provider.id;
+  providerType.value = provider.providerType;
   providerName.value = provider.name;
-  providerBaseUrl.value = provider.baseUrl;
+  providerBaseUrl.value = provider.baseUrl ?? '';
   providerApiKey.value = '';
 }
 
@@ -232,6 +303,17 @@ function resetForm() {
 function submitProvider() {
   emit('save-provider', {
     id: activeEditorId.value ?? undefined,
+    providerType: providerType.value,
+    name: providerName.value,
+    baseUrl: providerBaseUrl.value,
+    apiKey: providerApiKey.value,
+  });
+}
+
+function testProvider() {
+  emit('testProvider', {
+    id: activeEditorId.value ?? undefined,
+    providerType: providerType.value,
     name: providerName.value,
     baseUrl: providerBaseUrl.value,
     apiKey: providerApiKey.value,
@@ -253,5 +335,9 @@ function submitDefaultProvider() {
     providerId: defaultProviderIdLocal.value,
     model: defaultModelLocal.value,
   });
+}
+
+function providerTypeLabel(providerTypeValue: string) {
+  return providerTypeOptions.find((option) => option.value === providerTypeValue)?.label ?? providerTypeValue;
 }
 </script>

@@ -21,12 +21,13 @@
           :key="task.id"
           class="task-item group"
           :class="task.id === activeTaskId ? 'task-item-active' : ''"
+          @click="!busy && $emit('select', task.id)"
         >
           <button
             type="button"
             class="min-w-0 flex flex-1 items-center gap-2 text-left"
             :disabled="busy"
-            @click="$emit('select', task.id)"
+            @click.stop="$emit('select', task.id)"
           >
             <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[1.4]">{{ task.name }}</span>
             <span class="task-item-meta" :class="!busy ? 'group-hover:opacity-0' : ''">{{ task.updatedAt }}</span>

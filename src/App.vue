@@ -65,8 +65,12 @@
         :busy="busy"
         :models-loading="providerModelsLoading"
         :available-models="providerModels"
+        :suggested-models="providerSuggestedModels"
+        :provider-test-message="providerTestMessage"
+        :provider-test-success="providerTestSuccess"
         @close="closeSettings"
         @save-provider="saveProvider"
+        @test-provider="testProviderConnection"
         @delete-provider="confirmDeleteProvider"
         @save-default-provider="saveDefaultProvider"
         @request-models="loadProviderModelsForSettings"
@@ -127,9 +131,12 @@ const {
   isActiveTaskSending,
   isActiveTaskCancelling,
   settingsOpen,
-  providerSettings,
-  providerModels,
-  providerModelsLoading,
+    providerSettings,
+    providerModels,
+    providerSuggestedModels,
+    providerModelsLoading,
+    providerTestMessage,
+    providerTestSuccess,
   noteDialogOpen,
   noteDialogMode,
   noteDraftId,
@@ -158,8 +165,9 @@ const {
   setTaskModel,
   handleOpenSettings,
   closeSettings,
-  saveProvider,
-  confirmDeleteProvider,
+    saveProvider,
+    testProviderConnection,
+    confirmDeleteProvider,
   saveDefaultProvider,
   loadProviderModelsForSettings,
   handleConfirmDialogOpenChange,

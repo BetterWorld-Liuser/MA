@@ -12,9 +12,9 @@ use ma::ui::{
     UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest, UiProviderModelsView,
     UiProviderSettingsView, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
     UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiToggleOpenFileLockRequest, UiUpsertNoteRequest, UiUpsertProviderRequest,
-    UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_provider_models,
-    fetch_provider_models_for_provider,
+    UiTestProviderConnectionRequest, UiTestProviderConnectionResult, UiToggleOpenFileLockRequest,
+    UiUpsertNoteRequest, UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceSnapshot,
+    fetch_provider_models, fetch_provider_models_for_provider, test_provider_connection as run_provider_connection_test,
 };
 
 struct AppState {
@@ -268,6 +268,15 @@ fn set_default_provider(
 }
 
 #[tauri::command]
+async fn test_provider_connection(
+    input: UiTestProviderConnectionRequest,
+) -> Result<UiTestProviderConnectionResult, String> {
+    run_provider_connection_test(input)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn search_workspace_entries(
     state: tauri::State<'_, AppState>,
     input: UiSearchWorkspaceEntriesRequest,
@@ -311,6 +320,7 @@ pub fn run() {
             upsert_provider,
             delete_provider,
             set_default_provider,
+            test_provider_connection,
             search_workspace_entries
         ])
         .run(tauri::generate_context!())

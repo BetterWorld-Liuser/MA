@@ -5,12 +5,85 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
+/// ProviderType 对应设置页和运行时可选的 provider 入口。
+/// 旧版本只有 OpenAI-compatible，这里保留 compat 作为自定义端点类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderType {
+    OpenAiCompat,
+    OpenAi,
+    Anthropic,
+    Gemini,
+    Fireworks,
+    Together,
+    Groq,
+    Mimo,
+    Nebius,
+    Xai,
+    DeepSeek,
+    Zai,
+    BigModel,
+    Cohere,
+    Ollama,
+}
+
+impl ProviderType {
+    pub fn as_db_value(self) -> &'static str {
+        match self {
+            ProviderType::OpenAiCompat => "openai_compat",
+            ProviderType::OpenAi => "openai",
+            ProviderType::Anthropic => "anthropic",
+            ProviderType::Gemini => "gemini",
+            ProviderType::Fireworks => "fireworks",
+            ProviderType::Together => "together",
+            ProviderType::Groq => "groq",
+            ProviderType::Mimo => "mimo",
+            ProviderType::Nebius => "nebius",
+            ProviderType::Xai => "xai",
+            ProviderType::DeepSeek => "deepseek",
+            ProviderType::Zai => "zai",
+            ProviderType::BigModel => "bigmodel",
+            ProviderType::Cohere => "cohere",
+            ProviderType::Ollama => "ollama",
+        }
+    }
+
+    pub fn from_db_value(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "openai_compat" => Some(Self::OpenAiCompat),
+            "openai" => Some(Self::OpenAi),
+            "anthropic" => Some(Self::Anthropic),
+            "gemini" => Some(Self::Gemini),
+            "fireworks" => Some(Self::Fireworks),
+            "together" => Some(Self::Together),
+            "groq" => Some(Self::Groq),
+            "mimo" => Some(Self::Mimo),
+            "nebius" => Some(Self::Nebius),
+            "xai" => Some(Self::Xai),
+            "deepseek" => Some(Self::DeepSeek),
+            "zai" => Some(Self::Zai),
+            "bigmodel" => Some(Self::BigModel),
+            "cohere" => Some(Self::Cohere),
+            "ollama" => Some(Self::Ollama),
+            _ => None,
+        }
+    }
+
+    pub fn requires_api_key(self) -> bool {
+        !matches!(self, Self::Ollama)
+    }
+
+    pub fn base_url_required(self) -> bool {
+        matches!(self, Self::OpenAiCompat)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderRecord {
     pub id: i64,
     pub name: String,
+    pub provider_type: ProviderType,
     pub api_key: String,
-    pub base_url: String,
+    pub base_url: Option<String>,
     pub created_at: SystemTime,
 }
 
@@ -63,7 +136,7 @@ impl SettingsStorage {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, name, api_key, base_url, created_at
+                "SELECT id, name, provider_type, api_key, base_url, created_at
                  FROM providers
                  ORDER BY created_at ASC, id ASC",
             )
@@ -76,20 +149,24 @@ impl SettingsStorage {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })
             .context("failed to query providers")?;
 
         let mut providers = Vec::new();
         for row in rows {
-            let (id, name, api_key, base_url, created_at) =
+            let (id, name, provider_type_raw, api_key, base_url_raw, created_at) =
                 row.context("failed to decode provider row")?;
+            let provider_type = ProviderType::from_db_value(&provider_type_raw)
+                .ok_or_else(|| anyhow::anyhow!("unsupported provider type {provider_type_raw}"))?;
             providers.push(ProviderRecord {
                 id,
                 name,
+                provider_type,
                 api_key,
-                base_url,
+                base_url: normalize_optional_string(base_url_raw),
                 created_at: system_time_from_unix(created_at)?,
             });
         }
@@ -99,18 +176,19 @@ impl SettingsStorage {
     pub fn upsert_provider(
         &self,
         provider_id: Option<i64>,
+        provider_type: ProviderType,
         name: impl AsRef<str>,
         api_key: impl AsRef<str>,
         base_url: impl AsRef<str>,
     ) -> Result<ProviderRecord> {
         let name = name.as_ref().trim();
         let api_key = api_key.as_ref().trim().to_string();
-        let base_url = normalize_base_url(base_url.as_ref());
+        let base_url = normalize_optional_string(base_url.as_ref().to_string());
 
         if name.is_empty() {
             bail!("provider name cannot be empty");
         }
-        if base_url.is_empty() {
+        if provider_type.base_url_required() && base_url.is_none() {
             bail!("provider base url cannot be empty");
         }
 
@@ -125,13 +203,22 @@ impl SettingsStorage {
                 } else {
                     api_key
                 };
+                if provider_type.requires_api_key() && api_key.trim().is_empty() {
+                    bail!("provider api key cannot be empty");
+                }
                 let affected = self
                     .connection
                     .execute(
                         "UPDATE providers
-                         SET name = ?2, api_key = ?3, base_url = ?4
+                         SET name = ?2, provider_type = ?3, api_key = ?4, base_url = ?5
                          WHERE id = ?1",
-                        params![id, name, api_key, base_url],
+                        params![
+                            id,
+                            name,
+                            provider_type.as_db_value(),
+                            api_key,
+                            base_url.as_deref().unwrap_or_default(),
+                        ],
                     )
                     .context("failed to update provider")?;
 
@@ -142,14 +229,20 @@ impl SettingsStorage {
                 self.load_provider(id)
             }
             None => {
-                if api_key.is_empty() {
+                if provider_type.requires_api_key() && api_key.is_empty() {
                     bail!("provider api key cannot be empty");
                 }
                 self.connection
                     .execute(
-                        "INSERT INTO providers (name, api_key, base_url, created_at)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        params![name, api_key, base_url, created_at],
+                        "INSERT INTO providers (name, provider_type, api_key, base_url, created_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![
+                            name,
+                            provider_type.as_db_value(),
+                            api_key,
+                            base_url.as_deref().unwrap_or_default(),
+                            created_at,
+                        ],
                     )
                     .context("failed to insert provider")?;
                 let id = self.connection.last_insert_rowid();
@@ -215,7 +308,7 @@ impl SettingsStorage {
         let row = self
             .connection
             .query_row(
-                "SELECT id, name, api_key, base_url, created_at
+                "SELECT id, name, provider_type, api_key, base_url, created_at
                  FROM providers
                  WHERE id = ?1",
                 params![provider_id],
@@ -225,7 +318,8 @@ impl SettingsStorage {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
                     ))
                 },
             )
@@ -233,12 +327,16 @@ impl SettingsStorage {
             .context("failed to load provider")?
             .ok_or_else(|| anyhow::anyhow!("provider {} not found", provider_id))?;
 
+        let provider_type = ProviderType::from_db_value(&row.2)
+            .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", row.2))?;
+
         Ok(ProviderRecord {
             id: row.0,
             name: row.1,
-            api_key: row.2,
-            base_url: row.3,
-            created_at: system_time_from_unix(row.4)?,
+            provider_type,
+            api_key: row.3,
+            base_url: normalize_optional_string(row.4),
+            created_at: system_time_from_unix(row.5)?,
         })
     }
 
@@ -264,11 +362,12 @@ impl SettingsStorage {
             .execute_batch(
                 "
                 CREATE TABLE IF NOT EXISTS providers (
-                    id         INTEGER PRIMARY KEY,
-                    name       TEXT    NOT NULL,
-                    api_key    TEXT    NOT NULL,
-                    base_url   TEXT    NOT NULL,
-                    created_at INTEGER NOT NULL
+                    id            INTEGER PRIMARY KEY,
+                    name          TEXT    NOT NULL,
+                    provider_type TEXT    NOT NULL DEFAULT 'openai_compat',
+                    api_key       TEXT    NOT NULL,
+                    base_url      TEXT    NOT NULL DEFAULT '',
+                    created_at    INTEGER NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS settings (
@@ -277,7 +376,27 @@ impl SettingsStorage {
                 );
                 ",
             )
-            .context("failed to initialize settings schema")
+            .context("failed to initialize settings schema")?;
+
+        let has_provider_type = self
+            .connection
+            .prepare("PRAGMA table_info(providers)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|name| name == "provider_type");
+
+        if !has_provider_type {
+            // 旧版本只有 OpenAI-compatible provider，迁移时统一标记成 compat，保证旧设置继续可用。
+            self.connection
+                .execute(
+                    "ALTER TABLE providers ADD COLUMN provider_type TEXT NOT NULL DEFAULT 'openai_compat'",
+                    [],
+                )
+                .context("failed to add provider_type column")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -334,10 +453,6 @@ fn query_setting_i64(connection: &Connection, key: &str) -> Result<Option<i64>> 
         .optional()
         .context("failed to read setting")?
         .and_then(|raw| raw.trim().parse::<i64>().ok()))
-}
-
-fn normalize_base_url(raw: &str) -> String {
-    raw.trim().trim_end_matches('/').to_string()
 }
 
 fn normalize_optional_string(raw: String) -> Option<String> {
