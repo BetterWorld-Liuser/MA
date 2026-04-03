@@ -176,11 +176,10 @@
 
 如果 provider 返回的是普通 JSON 响应，则直接 pretty-print。
 
-如果 provider 返回的是 SSE 流，则应在后端先重组为一个更适合调试的结构，例如：
+如果 provider 返回的是 SSE 流，则应在后端先把流式增量重组成“最终响应结构体”，而不是把 event 列表直接暴露给 UI，例如：
 
 - 最终拼出的 `content`
 - 最终拼出的 `tool_calls`
-- 流内收到的各个 `chunks`
 
 同时保留 `Raw` 子视图，便于协议级排查。
 

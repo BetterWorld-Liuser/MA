@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::context::{AgentContext, render_file_snapshot_for_prompt};
 use crate::tools::{ToolDefinition, ToolParameter};
@@ -409,11 +409,8 @@ pub struct ProviderToolCall {
 
 #[derive(Debug, Serialize)]
 struct DebugStructuredProviderResponse {
-    transport: &'static str,
-    event_count: usize,
     content: Option<String>,
     tool_calls: Vec<DebugStructuredToolCall>,
-    chunks: Vec<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -463,12 +460,18 @@ pub fn format_provider_response_for_debug(raw_response: &str) -> String {
         return "(empty response)".to_string();
     }
 
-    if let Ok(value) = serde_json::from_str::<Value>(raw_response) {
-        return serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw_response.to_string());
+    if let Ok(payload) = serde_json::from_str::<ChatCompletionResponse>(raw_response) {
+        let structured = debug_structured_response_from_provider(
+            provider_response_from_payload(payload, String::new()).ok(),
+        );
+        return serde_json::to_string_pretty(&structured)
+            .unwrap_or_else(|_| raw_response.to_string());
     }
 
-    if let Some(value) = parse_sse_response_for_debug(raw_response) {
-        return serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw_response.to_string());
+    if let Some(response) = parse_sse_response_for_debug(raw_response) {
+        let structured = debug_structured_response_from_provider(Some(response));
+        return serde_json::to_string_pretty(&structured)
+            .unwrap_or_else(|_| raw_response.to_string());
     }
 
     raw_response.to_string()
@@ -1030,44 +1033,48 @@ fn pop_sse_event(buffer: &mut String) -> Option<SseEvent> {
     }
 }
 
-fn parse_sse_response_for_debug(raw_response: &str) -> Option<Value> {
-    // Debug 面板更关心“这条流最终拼出了什么”，所以这里把 SSE 事件重新组装成一个可读结构。
+fn parse_sse_response_for_debug(raw_response: &str) -> Option<ProviderResponse> {
+    // Debug 面板更关心“这条流最终拼出了什么”，所以这里直接重建最终响应结构。
     let mut buffer = raw_response.to_string();
     let mut collector = StreamResponseCollector::default();
-    let mut chunks = Vec::new();
-    let mut saw_event = false;
 
     while let Some(event) = pop_sse_event(&mut buffer) {
-        saw_event = true;
         match event {
             SseEvent::Done => {
-                let final_response = collector.finish(String::new()).ok()?;
-                return Some(json!(DebugStructuredProviderResponse {
-                    transport: "sse",
-                    event_count: chunks.len(),
-                    content: final_response.content,
-                    tool_calls: final_response
-                        .tool_calls
-                        .into_iter()
-                        .map(|tool_call| DebugStructuredToolCall {
-                            id: tool_call.id,
-                            name: tool_call.name,
-                            arguments_json: tool_call.arguments_json,
-                        })
-                        .collect(),
-                    chunks,
-                }));
+                return collector.finish(String::new()).ok();
             }
             SseEvent::Data(data) => {
-                let chunk_json = serde_json::from_str::<Value>(&data).ok()?;
-                let payload: ChatCompletionChunk = serde_json::from_value(chunk_json.clone()).ok()?;
+                let payload: ChatCompletionChunk = serde_json::from_str(&data).ok()?;
                 collector.ingest_chunk(payload).ok()?;
-                chunks.push(chunk_json);
             }
         }
     }
 
-    if saw_event { None } else { None }
+    None
+}
+
+fn debug_structured_response_from_provider(
+    response: Option<ProviderResponse>,
+) -> DebugStructuredProviderResponse {
+    let response = response.unwrap_or(ProviderResponse {
+        content: None,
+        tool_calls: Vec::new(),
+        request_json: String::new(),
+        raw_response: String::new(),
+    });
+
+    DebugStructuredProviderResponse {
+        content: response.content,
+        tool_calls: response
+            .tool_calls
+            .into_iter()
+            .map(|tool_call| DebugStructuredToolCall {
+                id: tool_call.id,
+                name: tool_call.name,
+                arguments_json: tool_call.arguments_json,
+            })
+            .collect(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1404,9 +1411,8 @@ mod tests {
         let formatted = format_provider_response_for_debug(raw);
         let payload: Value = serde_json::from_str(&formatted).expect("formatted debug response json");
 
-        assert_eq!(payload["transport"], "sse");
         assert_eq!(payload["content"], "你好");
-        assert_eq!(payload["event_count"], 2);
+        assert_eq!(payload["tool_calls"].as_array().map(Vec::len), Some(0));
     }
 
     #[test]
