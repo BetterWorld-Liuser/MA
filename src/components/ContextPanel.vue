@@ -8,86 +8,22 @@
     </div>
 
     <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-2">
-      <section class="space-y-1.5">
-        <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title mb-0 !text-[9px]">Notes</h3>
-          <button class="pill px-1.5" type="button" :disabled="busy" @click="$emit('add-note')">
-            <Icon :icon="plusIcon" class="h-3.5 w-3.5" />
-          </button>
-        </div>
-        <div v-if="orderedNotes.length" class="space-y-0.5">
-          <div v-for="note in orderedNotes" :key="note.id" class="group compact-row">
-            <div class="min-w-0 flex flex-1 items-baseline gap-2 overflow-hidden">
-              <span class="shrink-0 font-mono text-[9px] uppercase tracking-widest text-text-dim">{{ note.id }}</span>
-              <p class="truncate text-[11px] text-text">{{ note.content }}</p>
-            </div>
-            <div class="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
-              <button class="context-icon-button" type="button" :disabled="busy" :title="`Edit ${note.id}`" @click="$emit('edit-note', note.id)">
-                <Icon :icon="pencilIcon" class="h-3.5 w-3.5" />
-              </button>
-              <button class="context-icon-button" type="button" :disabled="busy" :title="`Delete ${note.id}`" @click="$emit('delete-note', note.id)">
-                <Icon :icon="xIcon" class="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-else class="compact-empty">No notes</div>
-      </section>
+      <ContextNotesSection
+        :notes="notes"
+        :busy="busy"
+        @add-note="$emit('add-note')"
+        @edit-note="$emit('edit-note', $event)"
+        @delete-note="$emit('delete-note', $event)"
+      />
 
-      <section class="space-y-1.5">
-        <h3 class="section-title !text-[9px]">Open files</h3>
-        <div class="space-y-0.5">
-          <div v-for="file in openFiles" :key="file.path" class="group compact-row">
-            <button
-              v-if="!file.locked"
-              class="open-file-glyph shrink-0 opacity-0 transition group-hover:opacity-100"
-              type="button"
-              :disabled="busy"
-              :aria-label="`Close ${fileName(file.path)}`"
-              :title="`Close ${fileName(file.path)}`"
-              @click="$emit('close-file', file.path)"
-            >
-              <Icon :icon="xIcon" class="h-3.5 w-3.5 transition-transform duration-150 group-hover:scale-110" />
-            </button>
+      <ContextOpenFilesSection
+        :open-files="openFiles"
+        :busy="busy"
+        @toggle-file-lock="$emit('toggle-file-lock', $event[0], $event[1])"
+        @close-file="$emit('close-file', $event)"
+      />
 
-            <div class="min-w-0 flex flex-1 items-center gap-2" :title="file.path">
-              <p class="truncate font-mono text-[12px]" :class="freshnessClass(file.freshness)">
-                {{ fileName(file.path) }}
-              </p>
-              <span class="shrink-0 font-mono text-[9px] text-text-dim">{{ file.tokenUsage }} tok</span>
-            </div>
-
-            <button
-              class="open-file-glyph shrink-0"
-              :class="file.locked ? 'open-file-glyph-locked' : 'open-file-glyph-unlocked'"
-              type="button"
-              :disabled="busy"
-              :aria-label="`${file.locked ? 'Unlock' : 'Lock'} ${fileName(file.path)}`"
-              :title="`${file.locked ? 'Unlock' : 'Lock'} ${fileName(file.path)}`"
-              @click="$emit('toggle-file-lock', file.path, !file.locked)"
-            >
-              <Icon :icon="file.locked ? lockIcon : unlockIcon" class="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section v-if="hints.length" class="space-y-1.5">
-        <h3 class="section-title !text-[9px]">Hints</h3>
-        <div class="space-y-0.5">
-          <div v-for="hint in hints" :key="`${hint.source}-${hint.content}`" class="compact-row">
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-[11px] text-text">
-                <span class="mr-2 text-[9px] uppercase tracking-widest text-text-dim">{{ hint.source }}</span>{{ hint.content }}
-              </p>
-            </div>
-            <div class="shrink-0 text-right text-[9px] text-text-dim">
-              <p class="font-mono">{{ hint.timeLeft }}</p>
-              <p>{{ hint.turnsLeft }}</p>
-            </div>
-          </div>
-        </div>
-      </section>
+      <ContextHintsSection v-if="hints.length" :hints="hints" />
 
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">
@@ -337,18 +273,17 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import copyIcon from '@iconify-icons/lucide/copy';
 import expandIcon from '@iconify-icons/lucide/expand';
-import lockIcon from '@iconify-icons/lucide/lock';
 import panelRightIcon from '@iconify-icons/lucide/panel-right';
-import pencilIcon from '@iconify-icons/lucide/pencil';
-import plusIcon from '@iconify-icons/lucide/plus';
-import unlockIcon from '@iconify-icons/lucide/unlock';
 import xIcon from '@iconify-icons/lucide/x';
+import ContextHintsSection from '@/components/context/ContextHintsSection.vue';
+import ContextNotesSection from '@/components/context/ContextNotesSection.vue';
+import ContextOpenFilesSection from '@/components/context/ContextOpenFilesSection.vue';
 import { Dialog, DialogClose, DialogContent, DialogTitle } from './ui/dialog';
 import type { ContextUsage, DebugRoundItem, HintItem, NoteItem, OpenFileItem } from '../data/mock';
-import { computed, ref } from 'vue';
 
 const props = defineProps<{
   notes: NoteItem[];
@@ -367,14 +302,6 @@ defineEmits<{
   'close-file': [path: string];
 }>();
 
-const orderedNotes = computed(() =>
-  [...props.notes].sort((a, b) => {
-    if (a.id.toLowerCase() === 'target') return -1;
-    if (b.id.toLowerCase() === 'target') return 1;
-    return a.id.localeCompare(b.id);
-  }),
-);
-
 const debugTabs = ['Overview', 'Context', 'Request', 'Response', 'Tools'] as const;
 const activeDebugTab = ref<(typeof debugTabs)[number]>('Overview');
 const responseModes = ['Structured', 'Raw'] as const;
@@ -382,18 +309,6 @@ const activeResponseMode = ref<(typeof responseModes)[number]>('Structured');
 const isPreviewOpen = ref(false);
 const previewTitle = ref('');
 const previewContent = ref('');
-
-function freshnessClass(freshness: OpenFileItem['freshness']) {
-  if (freshness === 'high') return 'text-text';
-  if (freshness === 'medium') return 'text-text-muted';
-  return 'text-text-dim';
-}
-
-function fileName(path: string) {
-  const normalized = path.replaceAll('\\', '/');
-  const segments = normalized.split('/');
-  return segments[segments.length - 1] || normalized;
-}
 
 function summarizeRound(round: DebugRoundItem) {
   if (!round.toolCalls.length && !round.toolResults.length) {
