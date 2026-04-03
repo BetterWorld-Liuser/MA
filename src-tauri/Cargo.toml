@@ -14,5 +14,5 @@ tauri-build = { version = "2.0.0", features = [] }
 [dependencies]
 anyhow = "1.0"
 dotenvy = "0.15"
-ma = { path = "../crates/ma-core" }
+ma = { package = "ma-core", path = "../crates/ma-core" }
 tauri = { version = "2.0.0", features = [] }

@@ -135,8 +135,32 @@ Only choose from the shells listed above.
 - `write_note(id, content)`：新建或覆盖某条 note，id 由 AI 自己约定
 - `remove_note(id)`：清除不再需要的条目
 
+`write_note` 的关键语义是 **upsert**：
+
+- 如果 `id` 不存在，就创建新 note
+- 如果 `id` 已存在，就直接用新内容覆盖旧内容
+- 因此 AI 在记录同一类事实时，应优先复用稳定 id，而不是为相近内容不断发明新 id
+
+这条规则尤其重要，因为 Notes 会直接进入后续轮次上下文。如果 AI 把“当前目标”“用户身份”“最近一次构建错误”这类本应单点更新的信息拆成多条相似 note，后续上下文会同时出现多份接近但不完全一致的描述，增加歧义和 token 浪费。
+
+推荐把 note id 视为“一个长期槽位”而不是一次性标签。例如：
+
+- `target`：当前任务目标；目标变化时直接覆盖
+- `user_identity`：用户身份或角色设定；理解修正时直接覆盖
+- `build_output`：最近一次仍然相关的构建错误；重新构建后直接覆盖，问题解决后 remove
+- `plan`：当前有效计划；计划调整时直接覆盖
+
+不推荐这种做法：
+
+- `target_v2`
+- `latest_target`
+- `boss_identity_new`
+
+除非这些内容确实需要并列长期保留，否则应直接覆盖原 id 对应的 note。
+
 典型用法：
 - `write_note("target", "当前目标：修复登录模块的 token 刷新逻辑")`
+- `write_note("target", "当前目标：补充登录模块 token 刷新测试并验证回归")`  ← 复用同一个 id 覆盖旧目标
 - `write_note("build_output", "cargo build 输出：error[E0502] ...")`
 - `remove_note("build_output")`  ← 问题解决后清除
 

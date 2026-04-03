@@ -278,23 +278,27 @@ fn delete_lines_tool() -> ToolDefinition {
 fn write_note_tool() -> ToolDefinition {
     ToolDefinition {
         name: "write_note",
-        description: "Create or overwrite a persistent note in the AI's cross-turn working memory.",
+        description: "Create or overwrite a persistent note in the AI's cross-turn working memory. Reusing an existing id replaces that note's content instead of creating a second similar entry.",
         parameters: vec![
             ToolParameter {
                 name: "id",
                 kind: "string",
                 required: true,
-                description: "The stable identifier for this note.",
+                description: "The stable identifier for this note. If this id already exists, write_note overwrites the existing note in place.",
             },
             ToolParameter {
                 name: "content",
                 kind: "string",
                 required: true,
-                description: "The note body to store.",
+                description: "The full note body to store as the current content for this id.",
             },
         ],
         notes: vec![
             "Use write_note to preserve important state across turns, such as the current task target or a useful build error summary.".to_string(),
+            "Treat note ids as stable memory slots: reuse the same id when updating the same fact, plan, identity, or status.".to_string(),
+            "If a note with that id already exists, write_note replaces it; it does not append a second note.".to_string(),
+            "Prefer overwriting an existing semantically matching id over inventing near-duplicate ids like target_v2, latest_target, or user_identity_new.".to_string(),
+            "Create a new id only when the new information truly needs to coexist with the old note in future turns.".to_string(),
         ],
     }
 }
