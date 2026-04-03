@@ -189,24 +189,38 @@
           </div>
 
           <div v-else-if="activeDebugTab === 'Response'" class="debug-panel">
+            <div class="mb-2 flex items-center justify-end">
+              <div class="debug-tab-row">
+                <button
+                  v-for="mode in responseModes"
+                  :key="mode"
+                  class="debug-tab"
+                  :class="activeResponseMode === mode ? 'debug-tab-active' : ''"
+                  type="button"
+                  @click="activeResponseMode = mode"
+                >
+                  {{ mode }}
+                </button>
+              </div>
+            </div>
             <div v-for="round in debugRounds" :key="`response-${round.iteration}`" class="debug-block">
               <div class="debug-block-header">
-                <span>Round {{ round.iteration }}</span>
+                <span>Round {{ round.iteration }} · {{ activeResponseMode }}</span>
                 <div class="flex items-center gap-1">
                   <button
                     class="debug-copy-button"
                     type="button"
                     title="Open large preview"
-                    @click="openPreview(`Round ${round.iteration} · Response`, round.providerResponseRaw)"
+                    @click="openPreview(`Round ${round.iteration} · Response · ${activeResponseMode}`, selectedResponse(round))"
                   >
                     <Icon :icon="expandIcon" class="h-3.5 w-3.5" />
                   </button>
-                  <button class="debug-copy-button" type="button" title="Copy response" @click="copyText(round.providerResponseRaw)">
+                  <button class="debug-copy-button" type="button" title="Copy response" @click="copyText(selectedResponse(round))">
                     <Icon :icon="copyIcon" class="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
-              <pre class="debug-pre">{{ round.providerResponseRaw }}</pre>
+              <pre class="debug-pre">{{ selectedResponse(round) }}</pre>
             </div>
           </div>
 
@@ -363,6 +377,8 @@ const orderedNotes = computed(() =>
 
 const debugTabs = ['Overview', 'Context', 'Request', 'Response', 'Tools'] as const;
 const activeDebugTab = ref<(typeof debugTabs)[number]>('Overview');
+const responseModes = ['Structured', 'Raw'] as const;
+const activeResponseMode = ref<(typeof responseModes)[number]>('Structured');
 const isPreviewOpen = ref(false);
 const previewTitle = ref('');
 const previewContent = ref('');
@@ -403,6 +419,10 @@ function formatToolsRound(round: DebugRoundItem) {
   const toolResults = round.toolResults.length ? round.toolResults.join('\n\n') : '(none)';
 
   return `Round ${round.iteration}\n\n[Tool Calls]\n${toolCalls}\n\n[Tool Results]\n${toolResults}`;
+}
+
+function selectedResponse(round: DebugRoundItem) {
+  return activeResponseMode.value === 'Raw' ? round.providerResponseRaw : round.providerResponseJson;
 }
 
 function openPreview(title: string, content: string) {

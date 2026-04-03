@@ -22,7 +22,6 @@ impl ToolRuntime {
                 delete_lines_tool(),
                 write_note_tool(),
                 remove_note_tool(),
-                reply_tool(),
             ],
         }
     }
@@ -79,30 +78,6 @@ pub struct ToolParameter {
     pub description: &'static str,
 }
 
-fn reply_tool() -> ToolDefinition {
-    ToolDefinition {
-        name: "reply",
-        description: "Send a message to the user. Set wait=true when the current turn is complete and Ma should pause for the next user input.",
-        parameters: vec![
-            ToolParameter {
-                name: "message",
-                kind: "string",
-                required: true,
-                description: "The message to show to the user.",
-            },
-            ToolParameter {
-                name: "wait",
-                kind: "boolean",
-                required: true,
-                description: "Whether Ma should stop after sending this message and wait for the next user turn.",
-            },
-        ],
-        notes: vec![
-            "Use reply as the only user-visible output channel.".to_string(),
-            "Use wait=false for progress updates during a longer task, then finish with reply(wait=true).".to_string(),
-        ],
-    }
-}
 
 fn run_command_tool(
     available_shells: &[AvailableShell],
@@ -380,7 +355,7 @@ mod tests {
         let prompt = runtime.render_prompt_section();
 
         assert!(prompt.contains("## run_command"));
-        assert!(prompt.contains("## reply"));
+
         assert!(prompt.contains("Available shells in this session: powershell (pwsh), cmd."));
         assert!(prompt.contains("## open_file"));
         assert!(prompt.contains("Prefer open_file over run_command"));
@@ -389,6 +364,6 @@ mod tests {
         assert!(prompt.contains("## replace_lines"));
         assert!(prompt.contains("## write_note"));
         assert!(prompt.contains("## remove_note"));
-        assert!(prompt.contains("## reply"));
+
     }
 }

@@ -15,7 +15,10 @@ use crate::context::{
     SystemStatus, ToolSummary,
 };
 use crate::model_capabilities::get_model_capabilities;
-use crate::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig, fallback_task_title};
+use crate::provider::{
+    OpenAiCompatibleClient, OpenAiCompatibleConfig, fallback_task_title,
+    format_provider_response_for_debug,
+};
 use crate::storage::{
     PersistedOpenFile, PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource,
 };
@@ -173,6 +176,7 @@ pub struct UiDebugRoundView {
     pub iteration: usize,
     pub context_preview: String,
     pub provider_request_json: String,
+    pub provider_response_json: String,
     pub provider_response_raw: String,
     pub tool_calls: Vec<UiDebugToolCallView>,
     pub tool_results: Vec<String>,
@@ -1216,6 +1220,7 @@ impl From<DebugRound> for UiDebugRoundView {
             iteration: round.iteration,
             context_preview: round.context_preview,
             provider_request_json: pretty_json_or_original(&round.provider_request_json),
+            provider_response_json: format_provider_response_for_debug(&round.provider_raw_response),
             provider_response_raw: pretty_json_or_original(&round.provider_raw_response),
             tool_calls: round
                 .tool_calls

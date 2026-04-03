@@ -172,17 +172,31 @@
 
 ### 4. Response
 
-`Response` tab 显示 provider 返回的原始响应文本或 pretty-printed JSON。
+`Response` tab 默认显示 provider 响应的结构化视图，而不是直接把 SSE 原始文本整段倾倒给用户。
+
+如果 provider 返回的是普通 JSON 响应，则直接 pretty-print。
+
+如果 provider 返回的是 SSE 流，则应在后端先重组为一个更适合调试的结构，例如：
+
+- 最终拼出的 `content`
+- 最终拼出的 `tool_calls`
+- 流内收到的各个 `chunks`
+
+同时保留 `Raw` 子视图，便于协议级排查。
 
 这块应标注为：
 
-`Provider Response (raw)`
+`Provider Response (structured)`
 
 用于观察：
 
 - 返回的是 assistant text 还是 tool calls
 - tool call 的参数长什么样
 - provider 有没有异常字段或意外格式
+
+`Raw` 子视图则标注为：
+
+`Provider Response (raw SSE / raw JSON)`
 
 ### 5. Tools
 
@@ -219,6 +233,7 @@ struct UiDebugRoundView {
     iteration: usize,
     context_preview: String,
     provider_request_json: String,
+    provider_response_json: String,
     provider_response_raw: String,
     tool_calls: Vec<UiDebugToolCallView>,
     tool_results: Vec<String>,

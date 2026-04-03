@@ -67,6 +67,7 @@ export type DebugRoundItem = {
   iteration: number;
   contextPreview: string;
   providerRequestJson: string;
+  providerResponseJson: string;
   providerResponseRaw: string;
   toolCalls: Array<{
     id: string;
@@ -156,6 +157,7 @@ export type BackendWorkspaceSnapshot = {
         iteration: number;
         context_preview: string;
         provider_request_json: string;
+        provider_response_json: string;
         provider_response_raw: string;
         tool_calls: Array<{
           id: string;
@@ -303,6 +305,8 @@ export const mockWorkspace: WorkspaceView = {
       iteration: 1,
       contextPreview: '# Open Files\nsrc/auth.rs\n\n# Recent Chat\nUser: 帮我把 auth 模块拆成更小的单元。',
       providerRequestJson: '{\n  "model": "gpt-5",\n  "messages": [],\n  "tools": []\n}',
+      providerResponseJson:
+        '{\n  "choices": [\n    {\n      "message": {\n        "tool_calls": [\n          {\n            "id": "call_1",\n            "function": {\n              "name": "open_file",\n              "arguments": "{\\"path\\":\\"src/auth.rs\\"}"\n            }\n          }\n        ]\n      }\n    }\n  ]\n}',
       providerResponseRaw:
         '{\n  "choices": [\n    {\n      "message": {\n        "tool_calls": [\n          {\n            "id": "call_1",\n            "function": {\n              "name": "open_file",\n              "arguments": "{\\"path\\":\\"src/auth.rs\\"}"\n            }\n          }\n        ]\n      }\n    }\n  ]\n}',
       toolCalls: [
@@ -362,6 +366,7 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       iteration: round.iteration,
       contextPreview: round.context_preview,
       providerRequestJson: round.provider_request_json,
+      providerResponseJson: round.provider_response_json,
       providerResponseRaw: round.provider_response_raw,
       toolCalls: round.tool_calls.map((toolCall) => ({
         id: toolCall.id,

@@ -18,7 +18,7 @@ use crate::context::{
 };
 use crate::provider::{
     ApiToolCallRequest, ApiToolFunctionCallRequest, OpenAiCompatibleClient, ProviderProgressEvent,
-    ProviderToolCall, ProviderToolCallDelta, RequestMessage, build_messages,
+    ProviderToolCall, RequestMessage, build_messages,
 };
 use crate::storage::{PersistedOpenFile, PersistedTask, PersistedTaskState};
 use crate::tools::ToolRuntime;
@@ -78,8 +78,8 @@ Tool use:
 - Use tools when they are needed to inspect, modify, or verify the workspace.
 - Prefer the open-files context layer for file contents that are already tracked; do not re-read the same file through shell commands unless you need a view that open files cannot provide.
 - Do not use tools for simple greetings or casual conversation.
-- User-visible responses must be sent with the reply tool.
-- Use reply with wait=false for progress updates and reply with wait=true when your turn is complete.
+- When all work is complete, output your final response as plain text without calling any tools. That is what ends the turn.
+- Do not call any tool to deliver the final answer.
 
 Tone:
 - Be direct, warm, and concise.
@@ -184,7 +184,6 @@ pub struct DebugToolCall {
 struct ToolOutcome {
     result_text: String,
     summary: Option<ToolSummary>,
-    reply: Option<ReplyEvent>,
 }
 
 impl AgentSession {
@@ -269,7 +268,7 @@ impl AgentSession {
             let context_preview = render_prompt(&context);
             let mut conversation = build_messages(&context);
             conversation.extend(transient_messages.clone());
-            let mut last_reply_preview = None::<String>;
+            let mut content_preview = String::new();
             on_event(
                 self,
                 AgentProgressEvent::Status {
@@ -279,9 +278,9 @@ impl AgentSession {
             )?;
             let response = client
                 .complete_context_with_events(&context, conversation, |event| {
-                    if let Some(preview) = preview_reply_message_from_provider_event(&event) {
-                        if last_reply_preview.as_deref() != Some(preview.as_str()) {
-                            last_reply_preview = Some(preview.clone());
+                    if let ProviderProgressEvent::ContentDelta(ref delta) = event {
+                        if !delta.is_empty() {
+                            content_preview.push_str(delta);
                             on_event(
                                 self,
                                 AgentProgressEvent::Status {
@@ -289,7 +288,12 @@ impl AgentSession {
                                     label: "正在生成回复".to_string(),
                                 },
                             )?;
-                            on_event(self, AgentProgressEvent::ReplyPreview { message: preview })?;
+                            on_event(
+                                self,
+                                AgentProgressEvent::ReplyPreview {
+                                    message: content_preview.clone(),
+                                },
+                            )?;
                         }
                     }
                     Ok(())
@@ -318,14 +322,30 @@ impl AgentSession {
             };
 
             if response.tool_calls.is_empty() {
+                // No tool calls: the model is done. Plain text output is the final reply.
+                // This is the only legitimate turn exit — mirroring Codex's "text output = done" contract.
+                let final_message = match assistant_text {
+                    Some(text) if !text.trim().is_empty() => text,
+                    _ => bail!("provider returned no tool calls and no text; cannot end turn"),
+                };
+                let reply = ReplyEvent {
+                    message: final_message,
+                    wait: true,
+                };
+                self.add_assistant_turn(reply.message.clone(), summaries.clone());
+                on_event(self, AgentProgressEvent::Reply(reply.clone()))?;
+                replies.push(reply);
                 debug_rounds.push(debug_round);
-                if let Some(text) = assistant_text {
-                    bail!(
-                        "provider returned plain assistant text without tool calls; only reply(wait=...) may produce user-visible output: {}",
-                        text
-                    );
-                }
-                bail!("provider returned neither assistant text nor tool calls");
+                on_event(
+                    self,
+                    AgentProgressEvent::RoundCompleted(
+                        debug_rounds.last().cloned().expect("debug round just pushed"),
+                    ),
+                )?;
+                return Ok(AgentRunResult {
+                    replies,
+                    debug_rounds,
+                });
             }
 
             append_assistant_tool_call_message(
@@ -389,29 +409,6 @@ impl AgentSession {
                 debug_round.tool_results.push(outcome.result_text.clone());
                 if let Some(summary) = outcome.summary {
                     summaries.push(summary);
-                }
-                if let Some(reply) = outcome.reply {
-                    self.add_assistant_turn(reply.message.clone(), summaries.clone());
-                    transient_messages.push(RequestMessage::assistant_text(reply.message.clone()));
-                    on_event(self, AgentProgressEvent::Reply(reply.clone()))?;
-                    let should_wait = reply.wait;
-                    replies.push(reply);
-                    if should_wait {
-                        debug_rounds.push(debug_round);
-                        on_event(
-                            self,
-                            AgentProgressEvent::RoundCompleted(
-                                debug_rounds
-                                    .last()
-                                    .cloned()
-                                    .expect("debug round just pushed"),
-                            ),
-                        )?;
-                        return Ok(AgentRunResult {
-                            replies,
-                            debug_rounds,
-                        });
-                    }
                 }
             }
 
@@ -692,20 +689,6 @@ impl AgentSession {
         })?;
 
         match tool_call.name.as_str() {
-            "reply" => {
-                let args: ReplyArgs = serde_json::from_value(args).context("invalid reply args")?;
-                Ok(ToolOutcome {
-                    result_text: format!("sent reply (wait={}): {}", args.wait, args.message),
-                    summary: Some(ToolSummary {
-                        name: "reply".to_string(),
-                        summary: "发送了用户可见消息".to_string(),
-                    }),
-                    reply: Some(ReplyEvent {
-                        message: args.message,
-                        wait: args.wait,
-                    }),
-                })
-            }
             "run_command" => {
                 let args: RunCommandArgs =
                     serde_json::from_value(args).context("invalid run_command args")?;
@@ -722,7 +705,7 @@ impl AgentSession {
                             execution.command, execution.exit_code
                         ),
                     }),
-                    reply: None,
+
                 })
             }
             "open_file" => {
@@ -959,19 +942,6 @@ fn estimate_token_count(text: &str) -> usize {
     ascii_chars.div_ceil(4) + non_ascii_chars
 }
 
-fn preview_reply_message_from_provider_event(event: &ProviderProgressEvent) -> Option<String> {
-    match event {
-        ProviderProgressEvent::ToolCallsUpdated(tool_calls) => tool_calls
-            .iter()
-            .find(|tool_call| tool_call.name == "reply")
-            .and_then(preview_reply_message_from_tool_call),
-        ProviderProgressEvent::ContentDelta(_) => None,
-    }
-}
-
-fn preview_reply_message_from_tool_call(tool_call: &ProviderToolCallDelta) -> Option<String> {
-    extract_json_string_field(&tool_call.arguments_json, "message")
-}
 
 fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
     let args = serde_json::from_str::<Value>(arguments_json).unwrap_or(Value::Null);
@@ -1020,7 +990,6 @@ fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
                 format!("{name} {id}")
             }
         }
-        "reply" => "reply".to_string(),
         _ => name.to_string(),
     }
 }
@@ -1065,58 +1034,6 @@ fn decode_command_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
-fn extract_json_string_field(input: &str, field_name: &str) -> Option<String> {
-    let field_pattern = format!("\"{}\"", field_name);
-    let key_start = input.find(&field_pattern)?;
-    let mut cursor = key_start + field_pattern.len();
-    let bytes = input.as_bytes();
-
-    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
-        cursor += 1;
-    }
-    if bytes.get(cursor) != Some(&b':') {
-        return None;
-    }
-    cursor += 1;
-
-    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
-        cursor += 1;
-    }
-    if bytes.get(cursor) != Some(&b'"') {
-        return None;
-    }
-    cursor += 1;
-
-    let mut output = String::new();
-    let mut chars = input[cursor..].chars();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => return Some(output),
-            '\\' => {
-                let escaped = chars.next()?;
-                match escaped {
-                    '"' => output.push('"'),
-                    '\\' => output.push('\\'),
-                    '/' => output.push('/'),
-                    'b' => output.push('\u{0008}'),
-                    'f' => output.push('\u{000C}'),
-                    'n' => output.push('\n'),
-                    'r' => output.push('\r'),
-                    't' => output.push('\t'),
-                    'u' => {
-                        let hex = [chars.next()?, chars.next()?, chars.next()?, chars.next()?];
-                        let code = u16::from_str_radix(&hex.iter().collect::<String>(), 16).ok()?;
-                        output.push(char::from_u32(code as u32)?);
-                    }
-                    _ => return None,
-                }
-            }
-            other => output.push(other),
-        }
-    }
-
-    Some(output)
-}
 
 fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome {
     ToolOutcome {
@@ -1125,7 +1042,6 @@ fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome 
             name: name.to_string(),
             summary,
         }),
-        reply: None,
     }
 }
 
@@ -1492,11 +1408,6 @@ fn validate_line_range(lines: &[String], start_line: usize, end_line: usize) -> 
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-struct ReplyArgs {
-    message: String,
-    wait: bool,
-}
 
 #[derive(Debug, Deserialize)]
 struct RunCommandArgs {
@@ -1570,7 +1481,7 @@ mod tests {
                 "Do not assume every user message is a request for a project status report"
             )
         );
-        assert!(prompt.contains("User-visible responses must be sent with the reply tool"));
+        assert!(prompt.contains("When all work is complete, output your final response as plain text"));
     }
 
     #[test]
@@ -1660,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn transient_messages_keep_prior_tool_rounds_until_wait_reply() {
+    fn transient_messages_accumulate_tool_rounds() {
         let first_call = ProviderToolCall {
             id: "call_1".to_string(),
             name: "run_command".to_string(),

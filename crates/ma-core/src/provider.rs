@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::context::{AgentContext, render_file_snapshot_for_prompt};
 use crate::tools::{ToolDefinition, ToolParameter};
@@ -131,7 +131,7 @@ impl OpenAiCompatibleClient {
             tool_choice: if context.tools.is_empty() {
                 None
             } else {
-                Some(ToolChoice::Required)
+                Some(ApiToolChoice::Auto)
             },
         };
 
@@ -407,6 +407,22 @@ pub struct ProviderToolCall {
     pub arguments_json: String,
 }
 
+#[derive(Debug, Serialize)]
+struct DebugStructuredProviderResponse {
+    transport: &'static str,
+    event_count: usize,
+    content: Option<String>,
+    tool_calls: Vec<DebugStructuredToolCall>,
+    chunks: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugStructuredToolCall {
+    id: String,
+    name: String,
+    arguments_json: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderToolCallDelta {
     pub id: Option<String>,
@@ -440,6 +456,22 @@ pub enum ConversationDelta {
 pub enum ModelResponse {
     AssistantMessage(String),
     ToolCalls(Vec<RequestedToolCall>),
+}
+
+pub fn format_provider_response_for_debug(raw_response: &str) -> String {
+    if raw_response.trim().is_empty() {
+        return "(empty response)".to_string();
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(raw_response) {
+        return serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw_response.to_string());
+    }
+
+    if let Some(value) = parse_sse_response_for_debug(raw_response) {
+        return serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw_response.to_string());
+    }
+
+    raw_response.to_string()
 }
 
 /// RequestMessage 保持显式结构，方便 tool loop 在同一轮里累积 assistant/tool 消息。
@@ -670,7 +702,13 @@ struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<ToolChoice>,
+    tool_choice: Option<ApiToolChoice>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ApiToolChoice {
+    Auto,
 }
 
 #[derive(Debug, Serialize)]
@@ -711,11 +749,6 @@ pub struct ApiToolFunctionCallRequest {
     pub arguments: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ToolChoice {
-    Required,
-}
 
 #[derive(Debug, Deserialize)]
 struct ChatCompletionResponse {
@@ -997,6 +1030,46 @@ fn pop_sse_event(buffer: &mut String) -> Option<SseEvent> {
     }
 }
 
+fn parse_sse_response_for_debug(raw_response: &str) -> Option<Value> {
+    // Debug 面板更关心“这条流最终拼出了什么”，所以这里把 SSE 事件重新组装成一个可读结构。
+    let mut buffer = raw_response.to_string();
+    let mut collector = StreamResponseCollector::default();
+    let mut chunks = Vec::new();
+    let mut saw_event = false;
+
+    while let Some(event) = pop_sse_event(&mut buffer) {
+        saw_event = true;
+        match event {
+            SseEvent::Done => {
+                let final_response = collector.finish(String::new()).ok()?;
+                return Some(json!(DebugStructuredProviderResponse {
+                    transport: "sse",
+                    event_count: chunks.len(),
+                    content: final_response.content,
+                    tool_calls: final_response
+                        .tool_calls
+                        .into_iter()
+                        .map(|tool_call| DebugStructuredToolCall {
+                            id: tool_call.id,
+                            name: tool_call.name,
+                            arguments_json: tool_call.arguments_json,
+                        })
+                        .collect(),
+                    chunks,
+                }));
+            }
+            SseEvent::Data(data) => {
+                let chunk_json = serde_json::from_str::<Value>(&data).ok()?;
+                let payload: ChatCompletionChunk = serde_json::from_value(chunk_json.clone()).ok()?;
+                collector.ingest_chunk(payload).ok()?;
+                chunks.push(chunk_json);
+            }
+        }
+    }
+
+    if saw_event { None } else { None }
+}
+
 #[derive(Debug, Deserialize)]
 struct ModelListResponse {
     data: Vec<Value>,
@@ -1198,6 +1271,35 @@ mod tests {
     }
 
     #[test]
+    fn chat_completion_request_serializes_tool_choice_when_tools_exist() {
+        let request = ChatCompletionRequest {
+            model: "gpt-5.3-codex".to_string(),
+            messages: vec![RequestMessage::user("hello")],
+            temperature: Some(0.2),
+            stream: true,
+            tools: Some(vec![ApiToolDefinition {
+                tool_type: "function".to_string(),
+                function: ApiFunctionDefinition {
+                    name: "open_file".to_string(),
+                    description: Some("Open a file".to_string()),
+                    parameters: ApiJsonSchema {
+                        schema_type: "object".to_string(),
+                        properties: serde_json::json!({}),
+                        required: Vec::new(),
+                        additional_properties: false,
+                    },
+                },
+            }]),
+            tool_choice: Some(ApiToolChoice::Auto),
+        };
+
+        let payload = serde_json::to_value(request).expect("serialize request");
+
+        assert_eq!(payload["tool_choice"], "auto");
+        assert_eq!(payload["tools"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
     fn response_message_extracts_text_from_parts() {
         let message = ResponseMessage {
             content: Some(ResponseContent::Parts(vec![ResponseContentPart::Text {
@@ -1228,12 +1330,6 @@ mod tests {
         assert_eq!(payload["role"], "assistant");
         assert_eq!(payload["content"], "Working on it");
         assert_eq!(payload["tool_calls"].as_array().map(Vec::len), Some(1));
-    }
-
-    #[test]
-    fn required_tool_choice_serializes_as_required() {
-        let payload = serde_json::to_value(ToolChoice::Required).expect("serialize tool choice");
-        assert_eq!(payload, serde_json::Value::String("required".to_string()));
     }
 
     #[test]
@@ -1295,6 +1391,22 @@ mod tests {
             response.tool_calls[0].arguments_json,
             "{\"message\":\"hello\",\"wait\":true}"
         );
+    }
+
+    #[test]
+    fn debug_formatter_converts_sse_stream_into_structured_json() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let formatted = format_provider_response_for_debug(raw);
+        let payload: Value = serde_json::from_str(&formatted).expect("formatted debug response json");
+
+        assert_eq!(payload["transport"], "sse");
+        assert_eq!(payload["content"], "你好");
+        assert_eq!(payload["event_count"], 2);
     }
 
     #[test]
