@@ -722,6 +722,26 @@
     display: none;
   }
 
+  /*
+    Chat markdown should feel like dense desktop UI, not documentation chrome.
+    Keep inline code identifiable, but lower contrast so it supports the sentence
+    instead of visually hijacking the line.
+  */
+  .message-bubble-assistant .markstream-vue code:not(pre code) {
+    color: var(--color-text-muted) !important;
+    background: rgba(255, 255, 255, 0.035) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    border-radius: 0.4rem !important;
+    padding: 0.08rem 0.42rem !important;
+    font-size: 0.9em !important;
+    font-weight: 500 !important;
+    box-shadow: none !important;
+  }
+
+  .message-bubble-assistant .markstream-vue code:not(pre code) .inline-code-stream-delta {
+    color: inherit !important;
+  }
+
   html,
   body,
   #app {
