@@ -74,6 +74,9 @@ export function useWorkspaceApp() {
     providerModels,
     providerSuggestedModels,
     providerModelsLoading,
+    providerProbeModels,
+    providerProbeSuggestedModels,
+    providerProbeModelsLoading,
     providerTestMessage,
     providerTestSuccess,
     refreshProviderSettings,
@@ -84,6 +87,7 @@ export function useWorkspaceApp() {
     deleteProvider,
     saveDefaultProvider,
     loadProviderModelsForSettings,
+    loadProbeModels,
   } = useProviderSettings({
     runWorkspaceAction,
     setErrorMessage: (message) => {
@@ -426,7 +430,7 @@ export function useWorkspaceApp() {
     });
   }
 
-  async function setTaskModel(model: string) {
+  async function setTaskModel(selection: { providerId?: number | null; model: string }) {
     if (!activeTaskIdNumber.value || busy.value) {
       return;
     }
@@ -435,7 +439,8 @@ export function useWorkspaceApp() {
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_model', {
         input: {
           taskId: activeTaskIdNumber.value,
-          model,
+          providerId: selection.providerId ?? null,
+          model: selection.model,
         },
       });
     });
@@ -446,6 +451,21 @@ export function useWorkspaceApp() {
       return;
     }
     await openSettings();
+  }
+
+  async function requestProbeModels(input: {
+    id?: number;
+    providerType: string;
+    baseUrl: string;
+    apiKey: string;
+    probeModel?: string;
+  }) {
+    try {
+      await loadProbeModels(input);
+      errorMessage.value = '';
+    } catch (error) {
+      errorMessage.value = humanizeError(error);
+    }
   }
 
   function confirmDeleteProvider(providerId: number) {
@@ -517,6 +537,9 @@ export function useWorkspaceApp() {
     providerModels,
     providerSuggestedModels,
     providerModelsLoading,
+    providerProbeModels,
+    providerProbeSuggestedModels,
+    providerProbeModelsLoading,
     providerTestMessage,
     providerTestSuccess,
     noteDialogOpen,
@@ -550,6 +573,7 @@ export function useWorkspaceApp() {
     setTheme,
     saveProvider,
     testProviderConnection,
+    requestProbeModels,
     confirmDeleteProvider,
     saveDefaultProvider,
     loadProviderModelsForSettings,

@@ -64,6 +64,7 @@ pub struct UiOpenFilesRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiSetTaskModelRequest {
     pub task_id: Option<i64>,
+    pub provider_id: Option<i64>,
     pub model: String,
 }
 
@@ -136,6 +137,25 @@ pub struct UiProviderModelsView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiProviderModelGroupView {
+    pub provider_id: Option<i64>,
+    pub provider_name: String,
+    pub provider_type: String,
+    pub provider_cache_key: String,
+    pub available_models: Vec<String>,
+    pub suggested_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiTaskModelSelectorView {
+    pub current_provider_id: Option<i64>,
+    pub current_model: String,
+    pub providers: Vec<UiProviderModelGroupView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiProviderSettingsView {
     pub database_path: PathBuf,
     pub providers: Vec<UiProviderView>,
@@ -185,6 +205,17 @@ pub struct UiTestProviderConnectionRequest {
     pub name: String,
     pub api_key: String,
     pub base_url: String,
+    pub probe_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiProbeProviderModelsRequest {
+    pub id: Option<i64>,
+    pub provider_type: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub probe_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -482,7 +513,7 @@ impl UiAppBackend {
             return Ok(task.id);
         }
 
-        Ok(self.storage.create_task(DEFAULT_TASK_NAME)?.id)
+        Ok(self.create_task(DEFAULT_TASK_NAME)?.id)
     }
 
     pub fn create_task(&mut self, name: impl AsRef<str>) -> Result<TaskRecord> {
@@ -492,10 +523,16 @@ impl UiAppBackend {
         } else {
             (name, TaskTitleSource::Manual, true)
         };
+        let settings = SettingsStorage::open()?;
+        let defaults = settings.snapshot()?;
 
-        let task = self
-            .storage
-            .create_task_with_metadata(name, title_source, title_locked)?;
+        let task = self.storage.create_task_with_metadata_and_selection(
+            name,
+            title_source,
+            title_locked,
+            defaults.default_provider_id,
+            defaults.default_model,
+        )?;
         let session = AgentSession::new(ui_agent_config(), ConversationHistory::default(), [])?;
         self.save_session(task.id, &session)?;
         Ok(task)
@@ -669,81 +706,86 @@ impl UiAppBackend {
             user_message: content.to_string(),
         })?;
         let result = session
-            .handle_user_message_with_events_and_cancel(&provider, content.to_string(), &is_cancelled, |session, event| {
-                match event {
-                    AgentProgressEvent::Status { phase, label } => {
-                        on_progress(UiAgentProgressEvent::Status {
-                            task_id,
-                            turn_id: turn_id.clone(),
-                            phase: phase.into(),
-                            label,
-                        })?;
-                    }
-                    AgentProgressEvent::ToolStarted {
-                        tool_call_id,
-                        tool_name,
-                        summary,
-                    } => {
-                        on_progress(UiAgentProgressEvent::ToolStarted {
-                            task_id,
-                            turn_id: turn_id.clone(),
+            .handle_user_message_with_events_and_cancel(
+                &provider,
+                content.to_string(),
+                &is_cancelled,
+                |session, event| {
+                    match event {
+                        AgentProgressEvent::Status { phase, label } => {
+                            on_progress(UiAgentProgressEvent::Status {
+                                task_id,
+                                turn_id: turn_id.clone(),
+                                phase: phase.into(),
+                                label,
+                            })?;
+                        }
+                        AgentProgressEvent::ToolStarted {
                             tool_call_id,
                             tool_name,
                             summary,
-                        })?;
-                    }
-                    AgentProgressEvent::ToolFinished {
-                        tool_call_id,
-                        status,
-                        summary,
-                        preview,
-                    } => {
-                        on_progress(UiAgentProgressEvent::ToolFinished {
-                            task_id,
-                            turn_id: turn_id.clone(),
+                        } => {
+                            on_progress(UiAgentProgressEvent::ToolStarted {
+                                task_id,
+                                turn_id: turn_id.clone(),
+                                tool_call_id,
+                                tool_name,
+                                summary,
+                            })?;
+                        }
+                        AgentProgressEvent::ToolFinished {
                             tool_call_id,
-                            status: status.into(),
+                            status,
                             summary,
                             preview,
-                        })?;
+                        } => {
+                            on_progress(UiAgentProgressEvent::ToolFinished {
+                                task_id,
+                                turn_id: turn_id.clone(),
+                                tool_call_id,
+                                status: status.into(),
+                                summary,
+                                preview,
+                            })?;
+                        }
+                        AgentProgressEvent::AssistantTextPreview { message } => {
+                            on_progress(UiAgentProgressEvent::AssistantTextPreview {
+                                task_id,
+                                turn_id: turn_id.clone(),
+                                message,
+                            })?;
+                        }
+                        AgentProgressEvent::FinalAssistantMessage(_) => {
+                            let task = Self::live_task_snapshot(
+                                progress_task.clone(),
+                                session,
+                                &progress_rounds,
+                                context_budget_tokens,
+                            )?;
+                            on_progress(UiAgentProgressEvent::FinalAssistantMessage {
+                                task_id,
+                                turn_id: turn_id.clone(),
+                                task,
+                            })?;
+                        }
+                        AgentProgressEvent::RoundCompleted(round) => {
+                            progress_rounds.push(round);
+                            let task = Self::live_task_snapshot(
+                                progress_task.clone(),
+                                session,
+                                &progress_rounds,
+                                context_budget_tokens,
+                            )?;
+                            on_progress(UiAgentProgressEvent::RoundComplete {
+                                task_id,
+                                turn_id: turn_id.clone(),
+                                task,
+                            })?;
+                        }
                     }
-                    AgentProgressEvent::AssistantTextPreview { message } => {
-                        on_progress(UiAgentProgressEvent::AssistantTextPreview {
-                            task_id,
-                            turn_id: turn_id.clone(),
-                            message,
-                        })?;
-                    }
-                    AgentProgressEvent::FinalAssistantMessage(_) => {
-                        let task = Self::live_task_snapshot(
-                            progress_task.clone(),
-                            session,
-                            &progress_rounds,
-                            context_budget_tokens,
-                        )?;
-                        on_progress(UiAgentProgressEvent::FinalAssistantMessage {
-                            task_id,
-                            turn_id: turn_id.clone(),
-                            task,
-                        })?;
-                    }
-                    AgentProgressEvent::RoundCompleted(round) => {
-                        progress_rounds.push(round);
-                        let task = Self::live_task_snapshot(
-                            progress_task.clone(),
-                            session,
-                            &progress_rounds,
-                            context_budget_tokens,
-                        )?;
-                        on_progress(UiAgentProgressEvent::RoundComplete {
-                            task_id,
-                            turn_id: turn_id.clone(),
-                            task,
-                        })?;
-                    }
-                }
-                Ok(())
-            })
+                    Ok(())
+                },
+            )
             .await;
         if let Err(error) = &result {
             self.save_session(task_id, &session)?;
@@ -935,6 +977,15 @@ impl UiAppBackend {
         settings.default_model()
     }
 
+    pub fn task_record_for_provider_models(
+        &self,
+        task_id: Option<i64>,
+    ) -> Result<Option<TaskRecord>> {
+        task_id
+            .map(|id| self.storage.load_task(id).map(|persisted| persisted.task))
+            .transpose()
+    }
+
     pub fn handle_set_task_model(
         &mut self,
         request: UiSetTaskModelRequest,
@@ -944,8 +995,12 @@ impl UiAppBackend {
         if model.is_empty() {
             bail!("model cannot be empty");
         }
+        let task = self.storage.load_task(task_id)?;
+        let provider_id = request.provider_id.or(task.task.selected_provider_id).or(
+            SettingsStorage::open()?.snapshot()?.default_provider_id,
+        );
         self.storage
-            .update_task_model(task_id, Some(model.to_string()))?;
+            .update_task_selection(task_id, provider_id, Some(model.to_string()))?;
         self.workspace_snapshot(Some(task_id))
     }
 
@@ -962,8 +1017,10 @@ impl UiAppBackend {
         request: UiUpsertProviderRequest,
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
-        let provider_type = ProviderType::from_db_value(&request.provider_type)
-            .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
+        let provider_type =
+            ProviderType::from_db_value(&request.provider_type).ok_or_else(|| {
+                anyhow::anyhow!("unsupported provider type {}", request.provider_type)
+            })?;
         settings.upsert_provider(
             request.id,
             provider_type,
@@ -990,10 +1047,13 @@ impl UiAppBackend {
     }
 
     pub fn handle_set_default_provider(
-        &self,
+        &mut self,
         request: UiSetDefaultProviderRequest,
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
+        let previous = settings.snapshot()?;
+        self.storage
+            .backfill_missing_task_defaults(previous.default_provider_id, previous.default_model)?;
         settings.set_default_provider(request.provider_id, request.model)?;
         Ok(UiProviderSettingsView::from_snapshot(
             settings.database_path().to_path_buf(),
@@ -1131,7 +1191,11 @@ impl UiProviderSettingsView {
     pub fn from_snapshot(database_path: PathBuf, snapshot: ProviderSettingsSnapshot) -> Self {
         Self {
             database_path,
-            providers: snapshot.providers.into_iter().map(UiProviderView::from).collect(),
+            providers: snapshot
+                .providers
+                .into_iter()
+                .map(UiProviderView::from)
+                .collect(),
             default_provider_id: snapshot.default_provider_id,
             default_model: snapshot.default_model,
         }
@@ -1200,6 +1264,24 @@ impl From<TaskRecord> for UiTaskSummary {
 fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
     let settings = SettingsStorage::open()?;
 
+    if let Some(provider_id) = task.selected_provider_id {
+        if let Ok(provider) = settings.load_provider(provider_id) {
+            let model = task
+                .selected_model
+                .clone()
+                .or(settings.default_model()?)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("missing task model in settings"))?;
+
+            return Ok(OpenAiCompatibleConfig {
+                provider_type: provider.provider_type,
+                base_url: provider.base_url,
+                api_key: provider.api_key,
+                model,
+            });
+        }
+    }
+
     if let Some(provider) = settings.default_provider()? {
         let model = task
             .selected_model
@@ -1223,8 +1305,10 @@ fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig>
     Ok(config)
 }
 
-pub async fn fetch_provider_models(selected_model: Option<String>) -> Result<UiProviderModelsView> {
-    let config = resolve_active_provider_config(selected_model)?;
+pub async fn fetch_provider_models_for_task(
+    task: Option<&TaskRecord>,
+) -> Result<UiProviderModelsView> {
+    let config = resolve_active_provider_config(task)?;
     let current_model = config.model.clone();
     let suggested_models = suggested_models_for_provider_type(config.provider_type);
     // UI 侧按 provider 维度缓存模型列表，因此 base_url 仍可作为稳定缓存键。
@@ -1245,16 +1329,144 @@ pub async fn fetch_provider_models(selected_model: Option<String>) -> Result<UiP
     })
 }
 
+pub async fn fetch_task_model_selector(
+    task: Option<&TaskRecord>,
+) -> Result<UiTaskModelSelectorView> {
+    let settings = SettingsStorage::open()?;
+    let snapshot = settings.snapshot()?;
+    let default_model = settings.default_model()?.unwrap_or_default();
+    let current_provider_id = task
+        .and_then(|value| value.selected_provider_id)
+        .or(snapshot.default_provider_id);
+    let current_model = task
+        .and_then(|value| value.selected_model.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| (!default_model.trim().is_empty()).then(|| default_model.clone()))
+        .or_else(|| {
+            resolve_active_provider_config(task)
+                .ok()
+                .map(|config| config.model)
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_default();
+
+    let mut providers = Vec::new();
+    for provider in snapshot.providers {
+        let suggested_models = suggested_models_for_provider_type(provider.provider_type);
+        let provider_current_model = if Some(provider.id) == current_provider_id {
+            current_model.clone()
+        } else if !default_model.trim().is_empty() {
+            default_model.clone()
+        } else if let Some(first_suggested) = suggested_models.first() {
+            first_suggested.clone()
+        } else {
+            default_probe_model(provider.provider_type).to_string()
+        };
+        let provider_cache_key =
+            provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
+        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+            provider_type: provider.provider_type,
+            base_url: provider.base_url.clone(),
+            api_key: provider.api_key.clone(),
+            model: provider_current_model.clone(),
+        });
+        let mut available_models = client.list_models().await.unwrap_or_default();
+        if !provider_current_model.is_empty()
+            && !available_models.iter().any(|model| model == &provider_current_model)
+        {
+            available_models.insert(0, provider_current_model);
+        }
+        available_models.sort();
+        available_models.dedup();
+
+        providers.push(UiProviderModelGroupView {
+            provider_id: Some(provider.id),
+            provider_name: provider.name,
+            provider_type: provider.provider_type.as_db_value().to_string(),
+            provider_cache_key,
+            available_models,
+            suggested_models,
+        });
+    }
+
+    if providers.is_empty() {
+        let fallback = fetch_provider_models_for_task(task).await?;
+        providers.push(UiProviderModelGroupView {
+            provider_id: None,
+            provider_name: "当前环境".to_string(),
+            provider_type: "env".to_string(),
+            provider_cache_key: fallback.provider_cache_key,
+            available_models: fallback.available_models,
+            suggested_models: fallback.suggested_models,
+        });
+    }
+
+    Ok(UiTaskModelSelectorView {
+        current_provider_id,
+        current_model,
+        providers,
+    })
+}
+
 pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiProviderModelsView> {
     let settings = SettingsStorage::open()?;
     let provider = settings.load_provider(provider_id)?;
     let current_model = settings.default_model()?.unwrap_or_default();
     let suggested_models = suggested_models_for_provider_type(provider.provider_type);
-    let provider_cache_key = provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
+    let provider_cache_key =
+        provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
     let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
         provider_type: provider.provider_type,
         base_url: provider.base_url,
         api_key: provider.api_key,
+        model: current_model.clone(),
+    });
+    let mut available_models = client.list_models().await.unwrap_or_default();
+    if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
+        available_models.insert(0, current_model.clone());
+    }
+    available_models.sort();
+    available_models.dedup();
+
+    Ok(UiProviderModelsView {
+        current_model,
+        available_models,
+        suggested_models,
+        provider_cache_key,
+    })
+}
+
+pub async fn fetch_probe_models(
+    request: UiProbeProviderModelsRequest,
+) -> Result<UiProviderModelsView> {
+    let provider_type = ProviderType::from_db_value(&request.provider_type)
+        .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
+    let settings = SettingsStorage::open()?;
+    let persisted_api_key = match request.id {
+        Some(id) => settings.load_provider(id)?.api_key,
+        None => String::new(),
+    };
+    let api_key = if request.api_key.trim().is_empty() {
+        persisted_api_key
+    } else {
+        request.api_key.trim().to_string()
+    };
+    let suggested_models = suggested_models_for_provider_type(provider_type);
+    let current_model = request
+        .probe_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| suggested_models.first().cloned())
+        .or(settings.default_model()?)
+        .unwrap_or_else(|| default_probe_model(provider_type).to_string());
+    let base_url = normalize_ui_optional_string(request.base_url);
+    let provider_cache_key = provider_cache_key(&provider_type, base_url.as_deref());
+    let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+        provider_type,
+        base_url,
+        api_key,
         model: current_model.clone(),
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
@@ -1290,8 +1502,13 @@ pub async fn test_provider_connection(
     } else {
         request.api_key.trim().to_string()
     };
-    let model = suggested_model
-        .clone()
+    let model = request
+        .probe_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| suggested_model.clone())
         .or(settings.default_model()?)
         .unwrap_or_else(|| default_probe_model(provider_type).to_string());
     let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
@@ -1676,10 +1893,30 @@ impl UiAppBackend {
     }
 }
 
-fn resolve_active_provider_config(selected_model: Option<String>) -> Result<OpenAiCompatibleConfig> {
+fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCompatibleConfig> {
     let settings = SettingsStorage::open()?;
+    if let Some(task) = task {
+        if let Some(provider_id) = task.selected_provider_id {
+            if let Ok(provider) = settings.load_provider(provider_id) {
+                let model = task
+                    .selected_model
+                    .clone()
+                    .or(settings.default_model()?)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("missing task model in settings"))?;
+                return Ok(OpenAiCompatibleConfig {
+                    provider_type: provider.provider_type,
+                    base_url: provider.base_url,
+                    api_key: provider.api_key,
+                    model,
+                });
+            }
+        }
+    }
+
     if let Some(provider) = settings.default_provider()? {
-        let model = selected_model
+        let model = task
+            .and_then(|value| value.selected_model.clone())
             .or(settings.default_model()?)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
@@ -1692,7 +1929,10 @@ fn resolve_active_provider_config(selected_model: Option<String>) -> Result<Open
     }
 
     let mut config = OpenAiCompatibleConfig::from_env()?;
-    if let Some(model) = selected_model.filter(|value| !value.trim().is_empty()) {
+    if let Some(model) = task
+        .and_then(|value| value.selected_model.clone())
+        .filter(|value| !value.trim().is_empty())
+    {
         config.model = model;
     }
     Ok(config)
@@ -1743,7 +1983,9 @@ fn suggested_models_for_provider_type(provider_type: ProviderType) -> Vec<String
             "nebius::meta-llama/Meta-Llama-3.1-70B-Instruct".to_string(),
         ],
         ProviderType::Xai => vec!["grok-3-mini".to_string(), "grok-3".to_string()],
-        ProviderType::DeepSeek => vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()],
+        ProviderType::DeepSeek => {
+            vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
+        }
         ProviderType::Zai => vec!["glm-4.6".to_string(), "coding::glm-4.6".to_string()],
         ProviderType::BigModel => vec!["glm-4-plus".to_string(), "glm-4-air".to_string()],
         ProviderType::Cohere => vec!["command-r-plus".to_string(), "command-r".to_string()],

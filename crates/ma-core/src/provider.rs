@@ -2,14 +2,17 @@ use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use genai::adapter::AdapterKind;
 use genai::chat::{
-    ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent, ContentPart, MessageContent,
-    Tool as GenAiTool, ToolCall as GenAiToolCall, ToolResponse as GenAiToolResponse,
+    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatStreamEvent, ContentPart,
+    MessageContent, Tool as GenAiTool, ToolCall as GenAiToolCall,
+    ToolResponse as GenAiToolResponse,
 };
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client as GenAiClient, ModelIden, ServiceTarget};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use crate::context::{AgentContext, render_file_snapshot_for_prompt};
 use crate::settings::ProviderType;
@@ -161,47 +164,44 @@ impl ProviderClient {
         let request = build_chat_request(context, &conversation)?;
         let request_json =
             serde_json::to_string_pretty(&request).context("failed to encode provider request")?;
-        let options = ChatOptions::default()
-            .with_temperature(0.2)
-            .with_capture_content(true)
-            .with_capture_tool_calls(true);
-        let mut stream = self
-            .client
-            .exec_chat_stream(&self.config.model, request, Some(&options))
-            .await
-            .context("failed to start provider stream")?;
+        let mode = stream_preference_for(&self.config);
+        if mode == ProviderDeliveryMode::NonStreaming {
+            return self
+                .complete_non_streaming(request, request_json, DeliveryPath::NonStreamingCached)
+                .await;
+        }
 
-        let mut collector = StreamCollector::default();
-        while let Some(event) = stream.stream.next().await {
-            match event.context("failed to read provider stream event")? {
-                ChatStreamEvent::Start => {}
-                ChatStreamEvent::Chunk(chunk) => {
-                    if !chunk.content.is_empty() {
-                        collector.content.push_str(&chunk.content);
-                        on_event(ProviderProgressEvent::ContentDelta(chunk.content))?;
-                    }
-                }
-                ChatStreamEvent::ToolCallChunk(chunk) => {
-                    collector.ingest_tool_call(chunk.tool_call)?;
-                    on_event(ProviderProgressEvent::ToolCallsUpdated(
-                        collector.tool_call_deltas(),
-                    ))?;
-                }
-                ChatStreamEvent::ReasoningChunk(_) | ChatStreamEvent::ThoughtSignatureChunk(_) => {}
-                ChatStreamEvent::End(end) => {
-                    collector.absorb_captured_content(end.captured_content);
-                    let mut response = collector.finish()?;
-                    response.request_json = request_json;
-                    response.raw_response = serde_json::to_string_pretty(
-                        &debug_structured_response_from_provider(Some(response.clone())),
+        match self
+            .complete_via_stream(request.clone(), &request_json, &mut on_event)
+            .await
+        {
+            Ok(response) => {
+                remember_stream_success(&self.config);
+                Ok(response)
+            }
+            Err(stream_failure) => {
+                // Provider capability is messy in practice, especially for OpenAI-compatible
+                // endpoints. We probe streaming optimistically once, then pin this provider/model
+                // to the safer non-streaming path after a stream failure so later turns stay stable.
+                remember_stream_failure(&self.config);
+                match self
+                    .complete_non_streaming(
+                        request,
+                        request_json,
+                        DeliveryPath::NonStreamingFallback {
+                            stream_failure: stream_failure.summary(),
+                        },
                     )
-                    .unwrap_or_else(|_| "(failed to format provider response)".to_string());
-                    return Ok(response);
+                    .await
+                {
+                    Ok(response) => Ok(response),
+                    Err(fallback_error) => Err(fallback_error.context(format!(
+                        "provider streaming failed ({}) and fallback non-stream request also failed",
+                        stream_failure.summary()
+                    ))),
                 }
             }
         }
-
-        bail!("provider stream ended unexpectedly")
     }
 
     pub async fn respond_to_context(
@@ -286,37 +286,226 @@ impl ProviderClient {
     }
 
     pub async fn test_connection(&self) -> Result<String> {
+        let probe_model = self.resolve_probe_model_for_connection().await?;
+        let reply = self.run_probe_request(&probe_model).await?;
+        Ok(format!(
+            "连接成功，模型 {} 已完成最小消息往返：{}",
+            probe_model, reply
+        ))
+    }
+
+    /// 连通性测试需要验证“这个入口真的能完成一次最小对话”，而不只是 `/models`
+    /// 或鉴权端点可达。对于 OpenAI-compatible / Ollama，优先探测一遍模型列表，
+    /// 避免拿一个根本不存在的默认模型去误判“连不通”。
+    async fn resolve_probe_model_for_connection(&self) -> Result<String> {
+        let configured_model = self.config.model.trim();
+
         match self.config.provider_type {
-            ProviderType::OpenAiCompat | ProviderType::Ollama => {
-                let models = self.list_models().await?;
-                let model_count = models.len();
-                let sample = models.into_iter().take(3).collect::<Vec<_>>().join(", ");
-                if sample.is_empty() {
-                    Ok("连接成功，但 provider 没有返回模型列表。".to_string())
-                } else {
-                    Ok(format!(
-                        "连接成功，已读取 {} 个模型，例如：{}",
-                        model_count, sample
+            ProviderType::OpenAiCompat | ProviderType::Ollama => match self.list_models().await {
+                Ok(models) => {
+                    if let Some(model) = models
+                        .iter()
+                        .find(|model| model.as_str() == configured_model)
+                    {
+                        return Ok(model.clone());
+                    }
+                    if let Some(model) = models.into_iter().find(|model| !model.trim().is_empty()) {
+                        return Ok(model);
+                    }
+                    if !configured_model.is_empty() {
+                        return Ok(configured_model.to_string());
+                    }
+                    anyhow::bail!("provider 没有返回可用模型，无法完成真实对话测试")
+                }
+                Err(error) => {
+                    if !configured_model.is_empty() {
+                        Ok(configured_model.to_string())
+                    } else {
+                        Err(error.context(
+                            "failed to determine probe model for provider connection test",
+                        ))
+                    }
+                }
+            },
+            _ if !configured_model.is_empty() => Ok(configured_model.to_string()),
+            _ => anyhow::bail!("provider probe model is empty"),
+        }
+    }
+
+    async fn run_probe_request(&self, model: &str) -> Result<String> {
+        let request = ChatRequest::from_user(
+            "Return exactly `MARCH_OK` and nothing else. Do not call tools.",
+        );
+        let options = ChatOptions::default()
+            .with_temperature(0.0)
+            .with_max_tokens(16)
+            .with_capture_content(true);
+        let response = self
+            .client
+            .exec_chat(model, request, Some(&options))
+            .await
+            .context("failed to run provider probe request")?;
+        let reply = response
+            .first_text()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("provider probe response did not contain text"))?;
+
+        Ok(summarize_probe_reply(reply))
+    }
+}
+
+fn summarize_probe_reply(reply: &str) -> String {
+    const MAX_REPLY_CHARS: usize = 48;
+
+    let compact = reply.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = compact.chars();
+    let truncated = chars.by_ref().take(MAX_REPLY_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{}…", truncated)
+    } else {
+        truncated
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderDeliveryMode {
+    Streaming,
+    NonStreaming,
+}
+
+#[derive(Debug, Clone)]
+enum DeliveryPath {
+    Streaming,
+    NonStreamingCached,
+    NonStreamingFallback { stream_failure: String },
+}
+
+#[derive(Debug)]
+struct StreamAttemptFailure {
+    kind: StreamFailureKind,
+    source: anyhow::Error,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StreamFailureKind {
+    Start,
+    ReadEvent,
+    UnexpectedEnd,
+}
+
+impl StreamAttemptFailure {
+    fn summary(&self) -> String {
+        match self.kind {
+            StreamFailureKind::Start => {
+                format!("failed to start provider stream: {}", self.source)
+            }
+            StreamFailureKind::ReadEvent => {
+                format!("failed to read provider stream event: {}", self.source)
+            }
+            StreamFailureKind::UnexpectedEnd => "provider stream ended unexpectedly".to_string(),
+        }
+    }
+}
+
+impl ProviderClient {
+    fn chat_options() -> ChatOptions {
+        ChatOptions::default()
+            .with_temperature(0.2)
+            .with_capture_content(true)
+            .with_capture_tool_calls(true)
+    }
+
+    async fn complete_via_stream<F>(
+        &self,
+        request: ChatRequest,
+        request_json: &str,
+        on_event: &mut F,
+    ) -> std::result::Result<ProviderResponse, StreamAttemptFailure>
+    where
+        F: FnMut(ProviderProgressEvent) -> Result<()>,
+    {
+        let options = Self::chat_options();
+        let mut stream = self
+            .client
+            .exec_chat_stream(&self.config.model, request, Some(&options))
+            .await
+            .map_err(|error| StreamAttemptFailure {
+                kind: StreamFailureKind::Start,
+                source: error.into(),
+            })?;
+
+        let mut collector = StreamCollector::default();
+        while let Some(event) = stream.stream.next().await {
+            let event = event.map_err(|error| StreamAttemptFailure {
+                kind: StreamFailureKind::ReadEvent,
+                source: error.into(),
+            })?;
+            match event {
+                ChatStreamEvent::Start => {}
+                ChatStreamEvent::Chunk(chunk) => {
+                    if !chunk.content.is_empty() {
+                        collector.content.push_str(&chunk.content);
+                        on_event(ProviderProgressEvent::ContentDelta(chunk.content)).map_err(
+                            |error| StreamAttemptFailure {
+                                kind: StreamFailureKind::ReadEvent,
+                                source: error,
+                            },
+                        )?;
+                    }
+                }
+                ChatStreamEvent::ToolCallChunk(chunk) => {
+                    collector
+                        .ingest_tool_call(chunk.tool_call)
+                        .map_err(|error| StreamAttemptFailure {
+                            kind: StreamFailureKind::ReadEvent,
+                            source: error,
+                        })?;
+                    on_event(ProviderProgressEvent::ToolCallsUpdated(
+                        collector.tool_call_deltas(),
                     ))
+                    .map_err(|error| StreamAttemptFailure {
+                        kind: StreamFailureKind::ReadEvent,
+                        source: error,
+                    })?;
+                }
+                ChatStreamEvent::ReasoningChunk(_) | ChatStreamEvent::ThoughtSignatureChunk(_) => {}
+                ChatStreamEvent::End(end) => {
+                    collector.absorb_captured_content(end.captured_content);
+                    let mut response =
+                        collector.finish().map_err(|error| StreamAttemptFailure {
+                            kind: StreamFailureKind::ReadEvent,
+                            source: error,
+                        })?;
+                    response.request_json = request_json.to_string();
+                    response.raw_response = serde_json::to_string_pretty(
+                        &debug_structured_response(&response, DeliveryPath::Streaming, None),
+                    )
+                    .unwrap_or_else(|_| "(failed to format provider response)".to_string());
+                    return Ok(response);
                 }
             }
-            _ => {
-                let request = ChatRequest::from_user("Reply with OK only.");
-                let options = ChatOptions::default()
-                    .with_temperature(0.0)
-                    .with_max_tokens(8);
-                let response = self
-                    .client
-                    .exec_chat(&self.config.model, request, Some(&options))
-                    .await
-                    .context("failed to run provider probe request")?;
-                let reply = response.first_text().unwrap_or("OK").trim();
-                Ok(format!(
-                    "连接成功，模型 {} 已响应：{}",
-                    self.config.model, reply
-                ))
-            }
         }
+
+        Err(StreamAttemptFailure {
+            kind: StreamFailureKind::UnexpectedEnd,
+            source: anyhow::anyhow!("provider stream ended unexpectedly"),
+        })
+    }
+
+    async fn complete_non_streaming(
+        &self,
+        request: ChatRequest,
+        request_json: String,
+        delivery_path: DeliveryPath,
+    ) -> Result<ProviderResponse> {
+        let options = Self::chat_options().with_capture_raw_body(true);
+        let response = self
+            .client
+            .exec_chat(&self.config.model, request, Some(&options))
+            .await
+            .context("failed to request provider non-stream response")?;
+        build_provider_response_from_chat_response(response, request_json, delivery_path)
     }
 }
 
@@ -325,7 +514,7 @@ fn build_service_target(config: &RuntimeProviderConfig) -> ServiceTarget {
     let endpoint = config
         .base_url
         .as_ref()
-        .map(|url| Endpoint::from_owned(url.clone()))
+        .map(|url| Endpoint::from_owned(endpoint_base_url_for_genai(url)))
         .unwrap_or_else(|| default_endpoint_for_provider(config.provider_type));
     let auth = if config.api_key.trim().is_empty() {
         AuthData::from_single("ollama")
@@ -337,6 +526,19 @@ fn build_service_target(config: &RuntimeProviderConfig) -> ServiceTarget {
         endpoint,
         auth,
         model: ModelIden::new(adapter_kind, config.model.clone()),
+    }
+}
+
+/// `genai` 内部会用 URL join 追加 `chat/completions`、`embeddings` 等后缀。
+/// 如果用户填写的是 `https://host/v1` 这种没有尾随 `/` 的目录 URL，
+/// join 时会把最后一段 `v1` 当作“文件名”替换掉，最终错误地变成 `https://host/chat/completions`。
+/// 这里统一补成目录语义，保证 `/v1/` 这类前缀路径在 OpenAI-compatible 网关上不被吞掉。
+fn endpoint_base_url_for_genai(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.ends_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/")
     }
 }
 
@@ -369,9 +571,7 @@ fn default_endpoint_for_provider(provider_type: ProviderType) -> Endpoint {
         ProviderType::Gemini => {
             Endpoint::from_static("https://generativelanguage.googleapis.com/v1beta/")
         }
-        ProviderType::Fireworks => {
-            Endpoint::from_static("https://api.fireworks.ai/inference/v1/")
-        }
+        ProviderType::Fireworks => Endpoint::from_static("https://api.fireworks.ai/inference/v1/"),
         ProviderType::Together => Endpoint::from_static("https://api.together.xyz/v1/"),
         ProviderType::Groq => Endpoint::from_static("https://api.groq.com/openai/v1/"),
         ProviderType::Mimo => Endpoint::from_static("https://api.mimo.org/v1/"),
@@ -402,8 +602,13 @@ pub struct ProviderToolCall {
 
 #[derive(Debug, Serialize)]
 struct DebugStructuredProviderResponse {
+    delivery_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_failure: Option<String>,
     content: Option<String>,
     tool_calls: Vec<DebugStructuredToolCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    captured_raw_body: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -742,7 +947,8 @@ fn build_chat_request(
                     .clone()
                     .context("tool message missing tool_call_id")?;
                 request = request.append_message(ChatMessage::from(GenAiToolResponse::new(
-                    tool_call_id, content,
+                    tool_call_id,
+                    content,
                 )));
             }
             other => bail!("unsupported request role {other}"),
@@ -959,20 +1165,18 @@ impl StreamCollector {
     }
 }
 
-fn debug_structured_response_from_provider(
-    response: Option<ProviderResponse>,
+fn debug_structured_response(
+    response: &ProviderResponse,
+    delivery_path: DeliveryPath,
+    captured_raw_body: Option<Value>,
 ) -> DebugStructuredProviderResponse {
-    let Some(response) = response else {
-        return DebugStructuredProviderResponse {
-            content: None,
-            tool_calls: Vec::new(),
-        };
-    };
-
     DebugStructuredProviderResponse {
-        content: response.content,
+        delivery_path: delivery_path.label().to_string(),
+        stream_failure: delivery_path.stream_failure(),
+        content: response.content.clone(),
         tool_calls: response
             .tool_calls
+            .clone()
             .into_iter()
             .map(|tool_call| DebugStructuredToolCall {
                 id: tool_call.id,
@@ -980,7 +1184,107 @@ fn debug_structured_response_from_provider(
                 arguments_json: tool_call.arguments_json,
             })
             .collect(),
+        captured_raw_body,
     }
+}
+
+impl DeliveryPath {
+    fn label(&self) -> &'static str {
+        match self {
+            DeliveryPath::Streaming => "streaming",
+            DeliveryPath::NonStreamingCached => "non_streaming_cached",
+            DeliveryPath::NonStreamingFallback { .. } => "non_streaming_fallback",
+        }
+    }
+
+    fn stream_failure(&self) -> Option<String> {
+        match self {
+            DeliveryPath::NonStreamingFallback { stream_failure } => Some(stream_failure.clone()),
+            _ => None,
+        }
+    }
+}
+
+fn build_provider_response_from_chat_response(
+    response: ChatResponse,
+    request_json: String,
+    delivery_path: DeliveryPath,
+) -> Result<ProviderResponse> {
+    let content = response
+        .content
+        .joined_texts()
+        .filter(|text| !text.trim().is_empty());
+    let tool_calls = response
+        .content
+        .tool_calls()
+        .into_iter()
+        .map(|tool_call| {
+            Ok(ProviderToolCall {
+                id: tool_call.call_id.clone(),
+                name: tool_call.fn_name.clone(),
+                arguments_json: serde_json::to_string(&tool_call.fn_arguments)
+                    .context("failed to encode provider tool call arguments")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let provider_response = ProviderResponse {
+        content,
+        tool_calls,
+        request_json,
+        raw_response: String::new(),
+    };
+    let debug_payload = debug_structured_response(
+        &provider_response,
+        delivery_path,
+        response.captured_raw_body,
+    );
+
+    Ok(ProviderResponse {
+        raw_response: serde_json::to_string_pretty(&debug_payload)
+            .unwrap_or_else(|_| "(failed to format provider response)".to_string()),
+        ..provider_response
+    })
+}
+
+fn stream_capability_cache() -> &'static Mutex<HashMap<String, ProviderDeliveryMode>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ProviderDeliveryMode>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stream_preference_for(config: &RuntimeProviderConfig) -> ProviderDeliveryMode {
+    stream_capability_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&provider_capability_key(config)).copied())
+        .unwrap_or(ProviderDeliveryMode::Streaming)
+}
+
+fn remember_stream_success(config: &RuntimeProviderConfig) {
+    if let Ok(mut cache) = stream_capability_cache().lock() {
+        cache.insert(
+            provider_capability_key(config),
+            ProviderDeliveryMode::Streaming,
+        );
+    }
+}
+
+fn remember_stream_failure(config: &RuntimeProviderConfig) {
+    if let Ok(mut cache) = stream_capability_cache().lock() {
+        cache.insert(
+            provider_capability_key(config),
+            ProviderDeliveryMode::NonStreaming,
+        );
+    }
+}
+
+fn provider_capability_key(config: &RuntimeProviderConfig) -> String {
+    format!(
+        "{}|{}|{}",
+        config.provider_type.as_db_value(),
+        config.base_url.as_deref().unwrap_or("(default)"),
+        config.model,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1023,7 +1327,9 @@ impl ModelDescriptor {
 
 fn parse_context_window_value(value: &Value) -> Option<usize> {
     match value {
-        Value::Number(number) => number.as_u64().and_then(|value| usize::try_from(value).ok()),
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok()),
         Value::String(text) => text.trim().parse::<usize>().ok(),
         _ => None,
     }
@@ -1031,13 +1337,18 @@ fn parse_context_window_value(value: &Value) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_messages, fallback_task_title};
-    use crate::context::{
-        AgentContext, ContextPressure, DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role,
-        RuntimeStatus, SessionStatus,
+    use super::{
+        DeliveryPath, RuntimeProviderConfig, build_messages, fallback_task_title,
+        provider_capability_key,
     };
+    use crate::context::{
+        AgentContext, ChatTurn, ContextPressure, FileSnapshot, Hint, Injection, ModifiedBy,
+        NoteEntry, Role, RuntimeStatus, SessionStatus,
+    };
+    use crate::settings::ProviderType;
     use indexmap::IndexMap;
     use std::path::PathBuf;
+    use std::time::SystemTime;
 
     #[test]
     fn fallback_task_title_removes_prefix_and_punctuation() {
@@ -1056,6 +1367,16 @@ mod tests {
                 content: "整理 provider 抽象".to_string(),
             },
         );
+        let mut open_files = IndexMap::new();
+        open_files.insert(
+            PathBuf::from("src/main.rs"),
+            FileSnapshot::available(
+                "src/main.rs",
+                "fn main() {}",
+                SystemTime::now(),
+                ModifiedBy::Unknown,
+            ),
+        );
         let context = AgentContext {
             system_core: "system core".to_string(),
             injections: vec![Injection {
@@ -1069,36 +1390,53 @@ mod tests {
                 available_shells: vec!["powershell".to_string()],
                 workspace_entries: vec!["src/main.rs".to_string()],
             },
-            open_files: vec![FileSnapshot {
-                path: PathBuf::from("src/main.rs"),
-                content: "fn main() {}".to_string(),
-                token_estimate: 4,
-                modified_by: None,
-            }],
+            open_files,
             notes,
             runtime_status: RuntimeStatus {
                 locked_files: vec![PathBuf::from("AGENTS.md")],
                 context_pressure: Some(ContextPressure {
-                    used_tokens: 100,
-                    max_tokens: 1000,
                     used_percent: 10,
                     message: "safe".to_string(),
                 }),
             },
-            hints: vec![Hint {
-                source: "CI".to_string(),
-                content: "tests red".to_string(),
-                expires_in_turns: None,
-                expires_at_unix_ms: None,
-            }],
-            recent_chat: vec![DisplayTurn {
+            hints: vec![Hint::new("tests red", None, None)],
+            recent_chat: vec![ChatTurn {
                 role: Role::User,
                 content: "hello".to_string(),
+                timestamp: SystemTime::now(),
             }],
             tools: Vec::new(),
         };
 
         let messages = build_messages(&context);
         assert_eq!(messages.len(), 3);
+    }
+
+    #[test]
+    fn provider_capability_key_includes_provider_endpoint_and_model() {
+        let config = RuntimeProviderConfig {
+            provider_type: ProviderType::OpenAiCompat,
+            base_url: Some("http://localhost:11434/v1".to_string()),
+            api_key: String::new(),
+            model: "qwen2.5-coder:32b".to_string(),
+        };
+
+        assert_eq!(
+            provider_capability_key(&config),
+            "openai_compat|http://localhost:11434/v1|qwen2.5-coder:32b"
+        );
+    }
+
+    #[test]
+    fn delivery_path_only_reports_stream_failure_for_fallback_mode() {
+        assert_eq!(DeliveryPath::Streaming.stream_failure(), None);
+        assert_eq!(DeliveryPath::NonStreamingCached.stream_failure(), None);
+        assert_eq!(
+            DeliveryPath::NonStreamingFallback {
+                stream_failure: "provider stream ended unexpectedly".to_string(),
+            }
+            .stream_failure(),
+            Some("provider stream ended unexpectedly".to_string())
+        );
     }
 }

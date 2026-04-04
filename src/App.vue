@@ -34,6 +34,7 @@
           :live-turn="workspace.liveTurn"
           :task-id="activeTaskIdNumber"
           :selected-model="workspace.selectedModel"
+          :settings-open="settingsOpen"
           :disabled="!activeTaskIdNumber"
           :sending="isActiveTaskSending"
           :interaction-locked="hasPendingSend"
@@ -71,6 +72,9 @@
         :models-loading="providerModelsLoading"
         :available-models="providerModels"
         :suggested-models="providerSuggestedModels"
+        :probe-models="providerProbeModels"
+        :probe-suggested-models="providerProbeSuggestedModels"
+        :probe-models-loading="providerProbeModelsLoading"
         :provider-test-message="providerTestMessage"
         :provider-test-success="providerTestSuccess"
         @close="closeSettings"
@@ -80,6 +84,7 @@
         @delete-provider="confirmDeleteProvider"
         @save-default-provider="saveDefaultProvider"
         @request-models="loadProviderModelsForSettings"
+        @request-probe-models="requestProbeModels"
       />
     </div>
 
@@ -141,6 +146,9 @@ const {
   providerModels,
   providerSuggestedModels,
   providerModelsLoading,
+  providerProbeModels,
+  providerProbeSuggestedModels,
+  providerProbeModelsLoading,
   providerTestMessage,
   providerTestSuccess,
   noteDialogOpen,
@@ -174,6 +182,7 @@ const {
   setTheme,
   saveProvider,
   testProviderConnection,
+  requestProbeModels,
   confirmDeleteProvider,
   saveDefaultProvider,
   loadProviderModelsForSettings,

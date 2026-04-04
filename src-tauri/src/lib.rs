@@ -1,25 +1,76 @@
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
-use tauri::Emitter;
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 use ma::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteNoteRequest,
-    UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest, UiProviderModelsView,
-    UiProviderSettingsView, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
-    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiTestProviderConnectionRequest, UiTestProviderConnectionResult, UiToggleOpenFileLockRequest,
-    UiUpsertNoteRequest, UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceSnapshot,
-    fetch_provider_models, fetch_provider_models_for_provider, test_provider_connection as run_provider_connection_test,
+    UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest, UiProbeProviderModelsRequest,
+    UiProviderModelsView, UiProviderSettingsView, UiSearchWorkspaceEntriesRequest,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
+    UiToggleOpenFileLockRequest, UiUpsertNoteRequest, UiUpsertProviderRequest,
+    UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_probe_models,
+    fetch_provider_models_for_provider, fetch_task_model_selector,
+    test_provider_connection as run_provider_connection_test,
 };
 
 struct AppState {
     workspace_path: PathBuf,
     cancellations: Mutex<HashMap<i64, Arc<AtomicBool>>>,
+}
+
+const MAIN_WINDOW_LABEL: &str = "main";
+const DEFAULT_WINDOW_WIDTH: u32 = 1440;
+const DEFAULT_WINDOW_HEIGHT: u32 = 900;
+const WINDOW_WORKAREA_MARGIN: u32 = 32;
+
+/// Keep the first-launch window inside the monitor work area.
+///
+/// March uses a custom title bar and a roomy three-column layout. On Windows with
+/// taskbars and display scaling enabled, a fixed 1440x900 startup size can exceed
+/// the monitor's usable work area, which leaves the composer clipped below the
+/// bottom edge. We normalize the initial bounds against the monitor work area so
+/// the full shell is visible on first paint.
+fn normalize_main_window_bounds(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let monitor = window
+        .current_monitor()?
+        .or_else(|| window.primary_monitor().ok().flatten());
+
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+
+    let work_area = monitor.work_area();
+    let max_width = work_area.size.width.saturating_sub(WINDOW_WORKAREA_MARGIN);
+    let max_height = work_area.size.height.saturating_sub(WINDOW_WORKAREA_MARGIN);
+
+    let scale_factor = monitor.scale_factor();
+    let preferred = PhysicalSize::new(
+        (f64::from(DEFAULT_WINDOW_WIDTH) * scale_factor).round() as u32,
+        (f64::from(DEFAULT_WINDOW_HEIGHT) * scale_factor).round() as u32,
+    );
+    let target_size = PhysicalSize::new(
+        preferred.width.min(max_width),
+        preferred.height.min(max_height),
+    );
+
+    window.set_size(target_size)?;
+
+    let centered_x =
+        work_area.position.x + ((work_area.size.width as i32 - target_size.width as i32) / 2);
+    let centered_y =
+        work_area.position.y + ((work_area.size.height as i32 - target_size.height as i32) / 2);
+
+    window.set_position(PhysicalPosition::new(
+        centered_x.max(work_area.position.x),
+        centered_y.max(work_area.position.y),
+    ))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -119,10 +170,7 @@ async fn send_message(
 }
 
 #[tauri::command]
-fn cancel_turn(
-    state: tauri::State<'_, AppState>,
-    task_id: i64,
-) -> Result<(), String> {
+fn cancel_turn(state: tauri::State<'_, AppState>, task_id: i64) -> Result<(), String> {
     let cancellations = state
         .cancellations
         .lock()
@@ -197,19 +245,31 @@ fn open_files(
 async fn list_provider_models(
     state: tauri::State<'_, AppState>,
     task_id: Option<i64>,
-) -> Result<UiProviderModelsView, String> {
+) -> Result<UiTaskModelSelectorView, String> {
     let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
-    let selected_model = backend
-        .selected_model_for_task(task_id)
+    let task = backend
+        .task_record_for_provider_models(task_id)
         .map_err(|error| error.to_string())?;
-    fetch_provider_models(selected_model)
+    drop(backend);
+    fetch_task_model_selector(task.as_ref())
         .await
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-async fn list_provider_models_for_settings(provider_id: i64) -> Result<UiProviderModelsView, String> {
+async fn list_provider_models_for_settings(
+    provider_id: i64,
+) -> Result<UiProviderModelsView, String> {
     fetch_provider_models_for_provider(provider_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn list_probe_models(
+    input: UiProbeProviderModelsRequest,
+) -> Result<UiProviderModelsView, String> {
+    fetch_probe_models(input)
         .await
         .map_err(|error| error.to_string())
 }
@@ -231,7 +291,9 @@ fn load_provider_settings(
     state: tauri::State<'_, AppState>,
 ) -> Result<UiProviderSettingsView, String> {
     let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
-    backend.provider_settings().map_err(|error| error.to_string())
+    backend
+        .provider_settings()
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -261,7 +323,8 @@ fn set_default_provider(
     state: tauri::State<'_, AppState>,
     input: UiSetDefaultProviderRequest,
 ) -> Result<UiProviderSettingsView, String> {
-    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
     backend
         .handle_set_default_provider(input)
         .map_err(|error| error.to_string())
@@ -297,6 +360,12 @@ pub fn run() {
     std::env::set_current_dir(&workspace_path).expect("failed to switch to workspace root");
 
     tauri::Builder::default()
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                normalize_main_window_bounds(&window)?;
+            }
+            Ok(())
+        })
         .manage(AppState {
             workspace_path,
             cancellations: Mutex::new(HashMap::new()),
@@ -315,6 +384,7 @@ pub fn run() {
             open_files,
             list_provider_models,
             list_provider_models_for_settings,
+            list_probe_models,
             set_task_model,
             load_provider_settings,
             upsert_provider,

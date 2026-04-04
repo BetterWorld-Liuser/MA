@@ -18,6 +18,9 @@ export function useProviderSettings({
   const providerModels = ref<string[]>([]);
   const providerSuggestedModels = ref<string[]>([]);
   const providerModelsLoading = ref(false);
+  const providerProbeModels = ref<string[]>([]);
+  const providerProbeSuggestedModels = ref<string[]>([]);
+  const providerProbeModelsLoading = ref(false);
   const providerTestMessage = ref('');
   const providerTestSuccess = ref(false);
 
@@ -100,27 +103,60 @@ export function useProviderSettings({
     }
   }
 
+  async function loadProbeModels(input: {
+    id?: number;
+    providerType: string;
+    baseUrl: string;
+    apiKey: string;
+    probeModel?: string;
+  }) {
+    providerProbeModelsLoading.value = true;
+    providerProbeModels.value = [];
+    providerProbeSuggestedModels.value = [];
+    try {
+      const response = await invoke<ProviderModelsView>('list_probe_models', {
+        input,
+      });
+      providerProbeModels.value = response.available_models;
+      providerProbeSuggestedModels.value = response.suggested_models;
+      return response;
+    } catch (error) {
+      providerProbeModels.value = [];
+      providerProbeSuggestedModels.value = [];
+      throw error;
+    } finally {
+      providerProbeModelsLoading.value = false;
+    }
+  }
+
   async function testProviderConnection(input: {
     id?: number;
     providerType: string;
     name: string;
     baseUrl: string;
     apiKey: string;
+    probeModel?: string;
   }) {
     providerTestMessage.value = '';
     providerTestSuccess.value = false;
     let result: ProviderConnectionTestResult | null = null;
+    let failureMessage = '';
     await runWorkspaceAction(async () => {
-      result = await invoke<ProviderConnectionTestResult>('test_provider_connection', {
-        input,
-      });
+      try {
+        result = await invoke<ProviderConnectionTestResult>('test_provider_connection', {
+          input,
+        });
+      } catch (error) {
+        failureMessage = humanizeError(error);
+        throw error;
+      }
     });
     if (result) {
       providerTestSuccess.value = result.success;
       providerTestMessage.value = result.message;
     } else {
       providerTestSuccess.value = false;
-      providerTestMessage.value = '测试连通性失败';
+      providerTestMessage.value = failureMessage || '测试连通性失败，请查看顶部错误信息。';
     }
     return result;
   }
@@ -131,6 +167,9 @@ export function useProviderSettings({
     providerModels,
     providerSuggestedModels,
     providerModelsLoading,
+    providerProbeModels,
+    providerProbeSuggestedModels,
+    providerProbeModelsLoading,
     providerTestMessage,
     providerTestSuccess,
     refreshProviderSettings,
@@ -141,5 +180,6 @@ export function useProviderSettings({
     deleteProvider,
     saveDefaultProvider,
     loadProviderModelsForSettings,
+    loadProbeModels,
   };
 }

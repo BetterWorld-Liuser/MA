@@ -154,23 +154,64 @@ CREATE TABLE settings (
 
 ## 运行时模型解析
 
-session 启动时，按以下优先级确定使用的模型：
+任务创建时，按以下优先级把运行入口写入该 task：
 
 ```
-1. 用户在输入框模型选择器里的选择（session 级）
-2. 全局默认（settings.default_provider_id + default_model_id）
+1. 当前默认运行配置（settings.default_provider_id + default_model_id）
+2. 环境变量 fallback（开发态 / 无设置页配置时）
 3. 硬编码 fallback：提示用户去设置页配置
 ```
 
-模型选择器的下拉列表 = 所有已配置 provider 下的所有可用模型，按 provider 分组展示：
+进入聊天运行时，优先级改为：
+
+```
+1. task 持久化的 provider/model
+2. 仅对历史旧 task 做兼容时，回退到当前默认运行配置
+3. 环境变量 fallback
+```
+
+这意味着：
+
+- 输入框模型选择器是 **task 级** 状态，不是 session 级临时状态
+- 用户在设置页修改“默认运行配置”时，只影响**之后新建的任务**
+- 已存在任务的 provider/model 应保持稳定，不应被新的全局默认值回刷
+
+模型选择器的下拉列表 = 所有已配置 provider 的可用模型列表，按 provider 分组展示；当前 task 仍然持久化自己选中的 provider/model：
 
 ```
 Anthropic
   ✓ claude-sonnet-4-6
     claude-opus-4-6
-Local Ollama
-    qwen2.5-coder:32b
+
+OpenAI
+    gpt-5.4
+    gpt-5.4-mini
 ```
+
+切换模型时，如果用户点的是另一个 provider 分组下的模型，March 应同时更新该 task 的 `selected_provider_id` 与 `selected_model`。
+
+## 流式稳健性策略
+
+provider 层默认仍然是“流式优先”，因为 UI 需要即时增量输出；但 March 不应把“某家 provider 的 stream 兼容性不好”直接升级成整个回合失败。
+
+运行时策略：
+
+```
+首次请求
+  └─ 先尝试 stream
+       ├─ 成功：记录该 provider/model 可稳定流式，后续继续走 stream
+       └─ 失败：自动降级到非流式 exec_chat
+                并把该 provider/model 标记为本进程内优先非流式
+```
+
+设计约束：
+
+- 能力探测是 runtime 行为，不写死在静态 provider 类型判断里
+- 探测粒度至少包含 `provider_type + base_url + model`，避免把一个兼容端点的失败误伤到所有 provider
+- 降级逻辑收敛在 provider 翻译层，agent loop 只消费统一的 `ProviderResponse`
+- debug 信息里要保留本次实际走的是 `streaming`、`non_streaming_cached` 还是 `non_streaming_fallback`
+
+这样做的目的不是追求“所有 provider 都完美支持 stream”，而是保证 March 在 provider 能力参差不齐时，仍能稳定完成一轮 agent loop。
 
 ---
 
@@ -223,12 +264,15 @@ fn build_genai_client(provider: &ProviderConfig) -> genai::Client {
 名称    [Anthropic        ]
 API Key [sk-ant-...       ]  [显示/隐藏]
 Base URL[                 ]  （可选，留空使用默认端点）
+Probe  [claude-sonnet-4-5 ∨]  （优先展示供应商模型列表，也支持手填）
 
                   [测试连通性]  [取消]  [保存]
 ```
 
 - 保存前必须通过连通性测试，或用户显式跳过
-- 连通性测试：发一个最小 API 请求（如单 token completion），验证 key 有效
+- 连通性测试：对用户指定的 probe model 发一个最小 API 请求，只有拿到完整响应才算成功
+- probe model 只用于测试，不等于全局默认模型，也不替代聊天页里的模型选择
+- 若 provider 的 `/models` 有返回数据，Probe 字段应展示一个可搜索列表；用户仍可手动输入未出现在列表里的 model id
 - 删除 provider 前：若有 session 正在使用该 provider，弹出确认提示
 
 ### OpenAICompat 额外字段

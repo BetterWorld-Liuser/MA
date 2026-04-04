@@ -139,19 +139,31 @@
         </div>
         <div class="composer-menu-list">
           <div v-if="modelsLoading" class="composer-menu-empty">正在读取…</div>
-          <button
-            v-for="model in filteredAvailableModels"
-            :key="model"
-            class="composer-menu-item composer-menu-item-model"
-            :class="model === effectiveSelectedModel ? 'composer-menu-item-active' : ''"
-            type="button"
-            @mousedown.prevent="selectModel(model)"
-          >
-            <span>{{ model }}</span>
-            <span v-if="model === effectiveSelectedModel">✓</span>
-          </button>
-          <div v-if="!availableModels.length && !modelsLoading" class="composer-menu-empty">当前没有可读模型列表</div>
-          <div v-else-if="!filteredAvailableModels.length && !modelsLoading" class="composer-menu-empty">没有匹配的模型</div>
+          <template v-else-if="filteredProviderGroups.length">
+            <div
+              v-for="group in filteredProviderGroups"
+              :key="group.providerCacheKey"
+              class="border-b border-border/60 last:border-b-0"
+            >
+              <div class="composer-menu-header">
+                <span>{{ group.providerName }}</span>
+                <span class="composer-menu-status">{{ providerTypeLabel(group.providerType) }}</span>
+              </div>
+              <button
+                v-for="model in group.filteredModels"
+                :key="`${group.providerCacheKey}:${model}`"
+                class="composer-menu-item composer-menu-item-model"
+                :class="isModelActive(group.providerId, model) ? 'composer-menu-item-active' : ''"
+                type="button"
+                @mousedown.prevent="selectModel(group.providerId, model)"
+              >
+                <span>{{ model }}</span>
+                <span v-if="isModelActive(group.providerId, model)">✓</span>
+              </button>
+            </div>
+          </template>
+          <div v-else-if="!providerGroups.length && !modelsLoading" class="composer-menu-empty">当前没有可读模型列表</div>
+          <div v-else-if="!modelsLoading" class="composer-menu-empty">没有匹配的模型</div>
         </div>
       </div>
     </Teleport>
@@ -165,18 +177,25 @@ import { invoke } from '@tauri-apps/api/core';
 import pauseIcon from '@iconify-icons/lucide/pause';
 import ChatMessageList from '@/components/ChatMessageList.vue';
 import { useChatComposer } from '@/composables/useChatComposer';
-import type { ProviderModelsView } from '../data/mock';
+import type { TaskModelSelectorView } from '../data/mock';
 
-type CachedModelList = {
-  providerKey: string;
-  currentModel: string;
+type CachedProviderGroup = {
+  providerId?: number | null;
+  providerName: string;
+  providerType: string;
+  providerCacheKey: string;
   availableModels: string[];
+};
+
+type CachedTaskModelSelector = {
+  currentProviderId?: number | null;
+  currentModel: string;
+  providers: CachedProviderGroup[];
 };
 
 // 模型列表读取仍然可能依赖 provider 网络请求。
 // 这里保留一个前端进程内缓存，让菜单可以先秒开最近一次成功结果，再异步刷新。
-const providerModelCache = new Map<string, CachedModelList>();
-const taskProviderCacheKey = new Map<number, string>();
+const taskModelSelectorCache = new Map<number, CachedTaskModelSelector>();
 
 const props = defineProps<{
   chat: import('../data/mock').ChatMessage[];
@@ -187,12 +206,13 @@ const props = defineProps<{
   cancelling?: boolean;
   taskId?: number | null;
   selectedModel?: string;
+  settingsOpen?: boolean;
 }>();
 
 const emit = defineEmits<{
   send: [payload: { content: string; directories: string[] }];
   openFiles: [paths: string[]];
-  setModel: [model: string];
+  setModel: [selection: { providerId?: number | null; model: string }];
   cancelTurn: [];
 }>();
 
@@ -236,22 +256,27 @@ const modelMenuAnchorRef = ref<HTMLElement | null>(null);
 const modelMenuPanelRef = ref<HTMLElement | null>(null);
 const modelSearchRef = ref<HTMLInputElement | null>(null);
 const modelMenuOpen = ref(false);
-const availableModels = ref<string[]>([]);
+const providerGroups = ref<CachedProviderGroup[]>([]);
 const modelSearchQuery = ref('');
 const modelsLoading = ref(false);
 const modelsRefreshing = ref(false);
+const resolvedCurrentProviderId = ref<number | null>(null);
 const resolvedCurrentModel = ref('');
 const modelMenuStyle = ref<Record<string, string>>({});
 let activeModelRequestId = 0;
 
 const effectiveSelectedModel = computed(() => props.selectedModel?.trim() || resolvedCurrentModel.value.trim());
 const modelButtonLabel = computed(() => effectiveSelectedModel.value || '选择模型');
-const filteredAvailableModels = computed(() => {
+const filteredProviderGroups = computed(() => {
   const query = modelSearchQuery.value.trim().toLowerCase();
-  if (!query) {
-    return availableModels.value;
-  }
-  return availableModels.value.filter((model) => model.toLowerCase().includes(query));
+  return providerGroups.value
+    .map((group) => ({
+      ...group,
+      filteredModels: !query
+        ? group.availableModels
+        : group.availableModels.filter((model) => model.toLowerCase().includes(query)),
+    }))
+    .filter((group) => group.filteredModels.length > 0);
 });
 
 watch(
@@ -267,6 +292,7 @@ watch(
   () => props.taskId,
   (taskId) => {
     resetComposer();
+    closeModelMenu();
     restoreModelStateFromCache(taskId);
     seedModelListFromCurrentSelection();
     void refreshModels();
@@ -276,15 +302,22 @@ watch(
 watch(
   () => props.selectedModel,
   (model) => {
-    if (model?.trim()) {
-      resolvedCurrentModel.value = model.trim();
-      seedModelListFromCurrentSelection();
-    }
+    resolvedCurrentModel.value = model?.trim() ?? '';
+    seedModelListFromCurrentSelection();
   },
   { immediate: true },
 );
 
-watch([modelMenuOpen, filteredAvailableModels, modelSearchQuery], async ([open]) => {
+watch(
+  () => props.settingsOpen,
+  (open) => {
+    if (open) {
+      closeModelMenu();
+    }
+  },
+);
+
+watch([modelMenuOpen, filteredProviderGroups, modelSearchQuery], async ([open]) => {
   if (!open) {
     return;
   }
@@ -294,6 +327,7 @@ watch([modelMenuOpen, filteredAvailableModels, modelSearchQuery], async ([open])
 
 onMounted(() => {
   document.addEventListener('mousedown', handleDocumentPointerDown);
+  document.addEventListener('mousedown', handleModelMenuPointerDown);
   window.addEventListener('resize', syncModelMenuPosition);
   window.addEventListener('scroll', syncModelMenuPosition, true);
   restoreModelStateFromCache(props.taskId);
@@ -303,6 +337,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handleDocumentPointerDown);
+  document.removeEventListener('mousedown', handleModelMenuPointerDown);
   window.removeEventListener('resize', syncModelMenuPosition);
   window.removeEventListener('scroll', syncModelMenuPosition, true);
 });
@@ -321,10 +356,8 @@ async function toggleModelMenu() {
     syncModelMenuPosition();
     modelSearchRef.value?.focus();
     return;
-  } else {
-    modelSearchQuery.value = '';
   }
-  modelMenuOpen.value = false;
+  closeModelMenu();
 }
 
 function primeModelMenu() {
@@ -335,22 +368,23 @@ function primeModelMenu() {
 
 function restoreModelStateFromCache(taskId?: number | null) {
   if (!taskId) {
+    resolvedCurrentProviderId.value = null;
     resolvedCurrentModel.value = '';
-    availableModels.value = [];
+    providerGroups.value = [];
     return;
   }
 
-  const providerKey = taskProviderCacheKey.get(taskId);
-  const cached =
-    (providerKey ? providerModelCache.get(providerKey) : undefined) ??
-    (providerModelCache.size === 1 ? Array.from(providerModelCache.values())[0] : undefined);
-
+  const cached = taskModelSelectorCache.get(taskId);
   if (!cached) {
     return;
   }
 
+  resolvedCurrentProviderId.value = cached.currentProviderId ?? null;
   resolvedCurrentModel.value = cached.currentModel;
-  availableModels.value = [...cached.availableModels];
+  providerGroups.value = cached.providers.map((group) => ({
+    ...group,
+    availableModels: [...group.availableModels],
+  }));
 }
 
 function seedModelListFromCurrentSelection() {
@@ -360,8 +394,16 @@ function seedModelListFromCurrentSelection() {
   }
 
   resolvedCurrentModel.value = selected;
-  if (!availableModels.value.includes(selected)) {
-    availableModels.value = [selected, ...availableModels.value];
+  if (resolvedCurrentProviderId.value !== null) {
+    const activeGroup = providerGroups.value.find((group) => group.providerId === resolvedCurrentProviderId.value);
+    if (activeGroup && !activeGroup.availableModels.includes(selected)) {
+      activeGroup.availableModels = [selected, ...activeGroup.availableModels];
+    }
+    return;
+  }
+
+  if (providerGroups.value.length === 1 && !providerGroups.value[0].availableModels.includes(selected)) {
+    providerGroups.value[0].availableModels = [selected, ...providerGroups.value[0].availableModels];
   }
 }
 
@@ -371,11 +413,11 @@ async function refreshModels() {
   }
 
   const requestId = ++activeModelRequestId;
-  const hasWarmData = availableModels.value.length > 0;
+  const hasWarmData = providerGroups.value.some((group) => group.availableModels.length > 0);
   modelsLoading.value = !hasWarmData;
   modelsRefreshing.value = hasWarmData;
   try {
-    const response = await invoke<ProviderModelsView>('list_provider_models', {
+    const response = await invoke<TaskModelSelectorView>('list_provider_models', {
       taskId: props.taskId,
     });
     if (requestId !== activeModelRequestId) {
@@ -390,34 +432,86 @@ async function refreshModels() {
   }
 }
 
-function applyProviderModels(response: ProviderModelsView, taskId: number) {
-  const normalizedModels = Array.from(
-    new Set(
-      [response.current_model, ...response.available_models]
-        .map((model) => model.trim())
-        .filter(Boolean),
+function applyProviderModels(response: TaskModelSelectorView, taskId: number) {
+  const normalizedProviders = response.providers.map((group) => ({
+    providerId: group.providerId ?? null,
+    providerName: group.providerName,
+    providerType: group.providerType,
+    providerCacheKey: group.providerCacheKey,
+    availableModels: Array.from(
+      new Set(
+        [
+          ...(response.currentProviderId === group.providerId ? [response.currentModel] : []),
+          ...group.availableModels,
+        ]
+          .map((model) => model.trim())
+          .filter(Boolean),
+      ),
     ),
-  );
+  }));
 
-  const cacheEntry: CachedModelList = {
-    providerKey: response.provider_cache_key,
-    currentModel: response.current_model,
-    availableModels: normalizedModels,
+  const cacheEntry: CachedTaskModelSelector = {
+    currentProviderId: response.currentProviderId ?? null,
+    currentModel: response.currentModel,
+    providers: normalizedProviders,
   };
 
-  providerModelCache.set(response.provider_cache_key, cacheEntry);
-  taskProviderCacheKey.set(taskId, response.provider_cache_key);
+  taskModelSelectorCache.set(taskId, cacheEntry);
+  resolvedCurrentProviderId.value = cacheEntry.currentProviderId ?? null;
   resolvedCurrentModel.value = cacheEntry.currentModel;
-  availableModels.value = [...cacheEntry.availableModels];
+  providerGroups.value = cacheEntry.providers.map((group) => ({
+    ...group,
+    availableModels: [...group.availableModels],
+  }));
 }
 
-function selectModel(model: string) {
+function selectModel(providerId: number | null | undefined, model: string) {
+  resolvedCurrentProviderId.value = providerId ?? null;
   resolvedCurrentModel.value = model;
-  if (!availableModels.value.includes(model)) {
-    availableModels.value = [model, ...availableModels.value];
+  const activeGroup = providerGroups.value.find((group) => group.providerId === (providerId ?? null));
+  if (activeGroup && !activeGroup.availableModels.includes(model)) {
+    activeGroup.availableModels = [model, ...activeGroup.availableModels];
   }
-  emit('setModel', model);
+  emit('setModel', { providerId, model });
+  closeModelMenu();
+}
+
+function isModelActive(providerId: number | null | undefined, model: string) {
+  return (providerId ?? null) === resolvedCurrentProviderId.value && model === effectiveSelectedModel.value;
+}
+
+function closeModelMenu() {
+  modelSearchQuery.value = '';
   modelMenuOpen.value = false;
+}
+
+function handleModelMenuPointerDown(event: MouseEvent) {
+  if (!modelMenuOpen.value) {
+    return;
+  }
+
+  const target = event.target as Node | null;
+  if (!target) {
+    return;
+  }
+
+  const clickedAnchor = modelMenuAnchorRef.value?.contains(target);
+  const clickedPanel = modelMenuPanelRef.value?.contains(target);
+  if (!clickedAnchor && !clickedPanel) {
+    closeModelMenu();
+  }
+}
+
+function providerTypeLabel(providerType: string) {
+  const labels: Record<string, string> = {
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+    gemini: 'Gemini',
+    openai_compat: 'OpenAI 兼容',
+    ollama: 'Ollama',
+    env: '环境',
+  };
+  return labels[providerType] ?? providerType;
 }
 
 function syncModelMenuPosition() {
@@ -460,6 +554,7 @@ function submit() {
     directories,
   });
   resetComposer();
+  closeModelMenu();
 }
 
 defineExpose({

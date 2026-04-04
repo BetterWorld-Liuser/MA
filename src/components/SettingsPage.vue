@@ -117,7 +117,7 @@
           </section>
         </div>
 
-        <div v-else class="settings-grid">
+        <div v-else-if="activeSection === 'providers'" class="settings-grid">
           <section class="settings-panel">
             <div class="settings-panel-header">
               <div>
@@ -163,7 +163,7 @@
             <div class="settings-panel-header">
               <div>
                 <h3 class="settings-section-title">{{ activeEditorId ? '编辑 Provider' : '新增 Provider' }}</h3>
-                <p class="settings-section-copy">内置接入 genai 支持的 provider，也保留 OpenAI-compatible 作为自定义端点入口。</p>
+                <p class="settings-section-copy">这里只负责维护单个 provider 的接入信息，不再承载全局默认模型配置。</p>
               </div>
             </div>
 
@@ -196,6 +196,56 @@
                   :placeholder="apiKeyPlaceholder"
                 />
               </div>
+              <div class="dialog-field">
+                <div class="flex items-center justify-between gap-3">
+                  <label class="dialog-label" for="provider-probe-model">Probe Model</label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    :disabled="busy || probeModelsLoading"
+                    @click="requestProbeModelsNow"
+                  >
+                    {{ probeModelsLoading ? '读取中…' : '刷新列表' }}
+                  </Button>
+                </div>
+                <template v-if="probeModels.length">
+                  <SettingsSelect
+                    v-model="providerProbeModel"
+                    :options="probeModelOptions"
+                    placeholder="从供应商模型列表中选择"
+                    searchable
+                    search-placeholder="搜索 probe model…"
+                  />
+                </template>
+                <template v-else>
+                  <Input
+                    id="provider-probe-model"
+                    v-model="providerProbeModel"
+                    :placeholder="probeModelPlaceholder"
+                  />
+                </template>
+                <Input
+                  v-if="probeModels.length"
+                  v-model="providerProbeModel"
+                  class="mt-2"
+                  :placeholder="probeModelPlaceholder"
+                />
+                <div v-if="!probeModels.length && probeSuggestedModels.length" class="mt-2 flex flex-wrap gap-2">
+                  <button
+                    v-for="model in probeSuggestedModels"
+                    :key="model"
+                    type="button"
+                    class="rounded-full border border-[color:var(--ma-line-soft)] px-2.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
+                    @click="providerProbeModel = model"
+                  >
+                    {{ model }}
+                  </button>
+                </div>
+                <p class="dialog-hint">
+                  优先展示供应商 `/models` 返回的可搜索列表；若接口没返回数据，或你想测试一个未列出的模型，也可以继续手动填写。
+                </p>
+              </div>
               <div class="flex items-center justify-end gap-2">
                 <Button variant="outline" type="button" :disabled="busy" @click="testProvider">
                   测试连通性
@@ -207,13 +257,15 @@
                 {{ props.providerTestMessage }}
               </p>
             </form>
+          </section>
+        </div>
 
-            <div class="settings-divider"></div>
-
+        <div v-else class="space-y-5">
+          <section class="settings-panel">
             <div class="settings-panel-header">
               <div>
-                <h3 class="settings-section-title">默认模型</h3>
-                <p class="settings-section-copy">默认 provider 会驱动聊天运行时和模型列表读取。</p>
+                <h3 class="settings-section-title">默认运行配置</h3>
+                <p class="settings-section-copy">这是应用级默认值，用来决定新任务初始使用哪个 provider 与模型。</p>
               </div>
               <Button
                 variant="outline"
@@ -233,6 +285,7 @@
                   :options="providerOptions"
                   placeholder="请选择"
                 />
+                <p class="dialog-hint">这里选的是全局默认入口，只用于之后新建任务的初始 provider / model。</p>
               </div>
               <div class="dialog-field">
                 <label class="dialog-label" for="default-model">默认模型</label>
@@ -262,9 +315,33 @@
               </div>
               <div class="flex items-center justify-end">
                 <Button :disabled="busy || !defaultProviderIdLocal || !defaultModelLocal.trim()" @click="submitDefaultProvider">
-                  保存默认模型
+                  保存默认配置
                 </Button>
               </div>
+            </div>
+          </section>
+
+          <section class="settings-panel">
+            <div class="settings-panel-header">
+              <div>
+                <h3 class="settings-section-title">说明</h3>
+                <p class="settings-section-copy">默认运行配置是应用级入口，不与任何单个 Provider 绑定。</p>
+              </div>
+            </div>
+
+            <div class="grid gap-3 md:grid-cols-3">
+              <article class="settings-info-card">
+                <p class="settings-info-label">作用范围</p>
+                <p class="settings-info-value">只影响之后新建的任务；已有任务保持自己的 provider 与模型</p>
+              </article>
+              <article class="settings-info-card">
+                <p class="settings-info-label">模型来源</p>
+                <p class="settings-info-value">来自当前默认 Provider 的可读模型列表</p>
+              </article>
+              <article class="settings-info-card">
+                <p class="settings-info-label">关系边界</p>
+                <p class="settings-info-value">与 Provider 凭据编辑分离，避免混淆全局配置与接入配置</p>
+              </article>
             </div>
           </section>
         </div>
@@ -274,10 +351,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import checkIcon from '@iconify-icons/lucide/check';
 import moonIcon from '@iconify-icons/lucide/moon-star';
+import slidersHorizontalIcon from '@iconify-icons/lucide/sliders-horizontal';
 import serverIcon from '@iconify-icons/lucide/server-cog';
 import sunIcon from '@iconify-icons/lucide/sun-medium';
 import xIcon from '@iconify-icons/lucide/x';
@@ -294,6 +372,9 @@ const props = defineProps<{
   modelsLoading?: boolean;
   availableModels: string[];
   suggestedModels: string[];
+  probeModels: string[];
+  probeSuggestedModels: string[];
+  probeModelsLoading?: boolean;
   providerTestMessage?: string;
   providerTestSuccess?: boolean;
 }>();
@@ -302,18 +383,20 @@ const emit = defineEmits<{
   close: [];
   updateTheme: [theme: ThemeMode];
   saveProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string }];
-  testProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string }];
+  testProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string; probeModel?: string }];
   deleteProvider: [providerId: number];
   saveDefaultProvider: [input: { providerId: number; model: string }];
   requestModels: [providerId: number];
+  requestProbeModels: [input: { id?: number; providerType: string; baseUrl: string; apiKey: string; probeModel?: string }];
 }>();
 
-const activeSection = ref<'appearance' | 'providers'>('appearance');
+const activeSection = ref<'appearance' | 'providers' | 'defaults'>('appearance');
 const activeEditorId = ref<number | null>(null);
 const providerType = ref('openai_compat');
 const providerName = ref('');
 const providerBaseUrl = ref('');
 const providerApiKey = ref('');
+const providerProbeModel = ref('');
 const defaultProviderIdString = ref('');
 const defaultModelLocal = ref('');
 
@@ -327,8 +410,14 @@ const sectionOptions = [
   {
     value: 'providers' as const,
     label: 'Providers',
-    description: '模型入口与默认配置',
+    description: '模型入口与凭据',
     icon: serverIcon,
+  },
+  {
+    value: 'defaults' as const,
+    label: '默认运行',
+    description: '默认 provider 与模型',
+    icon: slidersHorizontalIcon,
   },
 ];
 
@@ -384,6 +473,13 @@ const modelOptions = computed(() =>
   })),
 );
 
+const probeModelOptions = computed(() =>
+  props.probeModels.map((model) => ({
+    value: model,
+    label: model,
+  })),
+);
+
 const providerNamePlaceholder = computed(() => {
   if (providerType.value === 'openai_compat') {
     return 'OpenRouter / Local vLLM';
@@ -428,6 +524,13 @@ const apiKeyPlaceholder = computed(() => {
   return activeEditorId.value ? '留空则保持当前 API key' : 'sk-...';
 });
 
+const probeModelPlaceholder = computed(() => {
+  if (providerType.value === 'openai_compat') {
+    return '例如 gpt-4o-mini / kimi-k2 / qwen2.5-coder';
+  }
+  return '留空则使用内置建议模型';
+});
+
 watch(
   () => props.settings,
   (settings) => {
@@ -444,6 +547,24 @@ watch(defaultProviderIdLocal, (providerId, previous) => {
   emit('requestModels', providerId);
 });
 
+watch(
+  [activeSection, activeEditorId, providerType, providerBaseUrl, providerApiKey, providerProbeModel],
+  () => {
+    if (activeSection.value !== 'providers') {
+      return;
+    }
+    scheduleProbeModelsRequest();
+  },
+);
+
+let probeModelRequestTimer: ReturnType<typeof window.setTimeout> | null = null;
+
+onUnmounted(() => {
+  if (probeModelRequestTimer) {
+    window.clearTimeout(probeModelRequestTimer);
+  }
+});
+
 function startCreate() {
   activeSection.value = 'providers';
   activeEditorId.value = null;
@@ -451,6 +572,7 @@ function startCreate() {
   providerName.value = '';
   providerBaseUrl.value = '';
   providerApiKey.value = '';
+  providerProbeModel.value = '';
 }
 
 function startEdit(provider: ProviderSettingsView['providers'][number]) {
@@ -460,6 +582,7 @@ function startEdit(provider: ProviderSettingsView['providers'][number]) {
   providerName.value = provider.name;
   providerBaseUrl.value = provider.baseUrl ?? '';
   providerApiKey.value = '';
+  providerProbeModel.value = '';
 }
 
 function resetForm() {
@@ -490,6 +613,7 @@ function testProvider() {
     name: providerName.value,
     baseUrl: providerBaseUrl.value,
     apiKey: providerApiKey.value,
+    probeModel: providerProbeModel.value,
   });
 }
 
@@ -512,5 +636,28 @@ function submitDefaultProvider() {
 
 function providerTypeLabel(providerTypeValue: string) {
   return providerTypeOptions.find((option) => option.value === providerTypeValue)?.label ?? providerTypeValue;
+}
+
+function requestProbeModelsNow() {
+  if (probeModelRequestTimer) {
+    window.clearTimeout(probeModelRequestTimer);
+    probeModelRequestTimer = null;
+  }
+  emit('requestProbeModels', {
+    id: activeEditorId.value ?? undefined,
+    providerType: providerType.value,
+    baseUrl: providerBaseUrl.value,
+    apiKey: providerApiKey.value,
+    probeModel: providerProbeModel.value,
+  });
+}
+
+function scheduleProbeModelsRequest() {
+  if (probeModelRequestTimer) {
+    window.clearTimeout(probeModelRequestTimer);
+  }
+  probeModelRequestTimer = window.setTimeout(() => {
+    requestProbeModelsNow();
+  }, 350);
 }
 </script>

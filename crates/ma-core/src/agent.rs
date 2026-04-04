@@ -1768,6 +1768,7 @@ mod tests {
                 name: "test".to_string(),
                 title_source: TaskTitleSource::Default,
                 title_locked: false,
+                selected_provider_id: None,
                 selected_model: None,
                 created_at: SystemTime::now(),
                 last_active: SystemTime::now(),

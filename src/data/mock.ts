@@ -246,6 +246,19 @@ export type ProviderModelsView = {
   provider_cache_key: string;
 };
 
+export type TaskModelSelectorView = {
+  current_provider_id?: number | null;
+  current_model: string;
+  providers: Array<{
+    providerId?: number | null;
+    providerName: string;
+    providerType: string;
+    providerCacheKey: string;
+    availableModels: string[];
+    suggestedModels: string[];
+  }>;
+};
+
 export type ProviderConnectionTestResult = {
   success: boolean;
   message: string;

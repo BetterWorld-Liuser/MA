@@ -21,6 +21,7 @@ pub struct TaskRecord {
     pub name: String,
     pub title_source: TaskTitleSource,
     pub title_locked: bool,
+    pub selected_provider_id: Option<i64>,
     pub selected_model: Option<String>,
     pub created_at: SystemTime,
     pub last_active: SystemTime,
@@ -86,7 +87,13 @@ impl MaStorage {
     }
 
     pub fn create_task(&self, name: impl AsRef<str>) -> Result<TaskRecord> {
-        self.create_task_with_metadata(name, TaskTitleSource::Default, false)
+        self.create_task_with_metadata_and_selection(
+            name,
+            TaskTitleSource::Default,
+            false,
+            None,
+            None,
+        )
     }
 
     pub fn create_task_with_metadata(
@@ -95,21 +102,50 @@ impl MaStorage {
         title_source: TaskTitleSource,
         title_locked: bool,
     ) -> Result<TaskRecord> {
+        self.create_task_with_metadata_and_selection(name, title_source, title_locked, None, None)
+    }
+
+    pub fn create_task_with_metadata_and_selection(
+        &self,
+        name: impl AsRef<str>,
+        title_source: TaskTitleSource,
+        title_locked: bool,
+        selected_provider_id: Option<i64>,
+        selected_model: Option<String>,
+    ) -> Result<TaskRecord> {
         let name = name.as_ref().trim();
         if name.is_empty() {
             bail!("task name cannot be empty");
         }
+        let normalized_model = selected_model.and_then(|model| {
+            let trimmed = model.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
 
         let now = SystemTime::now();
         let now_ts = unix_timestamp(now)?;
         self.connection
             .execute(
-                "INSERT INTO tasks (name, title_source, title_locked, created_at, last_active)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO tasks (
+                    name,
+                    title_source,
+                    title_locked,
+                    selected_provider_id,
+                    selected_model,
+                    created_at,
+                    last_active
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     name,
                     title_source.as_db_value(),
                     if title_locked { 1 } else { 0 },
+                    selected_provider_id,
+                    normalized_model,
                     now_ts,
                     now_ts
                 ],
@@ -121,7 +157,8 @@ impl MaStorage {
             name: name.to_string(),
             title_source,
             title_locked,
-            selected_model: None,
+            selected_provider_id,
+            selected_model: normalized_model,
             created_at: now,
             last_active: now,
         })
@@ -200,7 +237,12 @@ impl MaStorage {
         Ok(())
     }
 
-    pub fn update_task_model(&self, task_id: i64, selected_model: Option<String>) -> Result<()> {
+    pub fn update_task_selection(
+        &self,
+        task_id: i64,
+        selected_provider_id: Option<i64>,
+        selected_model: Option<String>,
+    ) -> Result<()> {
         let normalized = selected_model.and_then(|model| {
             let trimmed = model.trim().to_string();
             if trimmed.is_empty() {
@@ -214,15 +256,41 @@ impl MaStorage {
             .connection
             .execute(
                 "UPDATE tasks
-                 SET selected_model = ?2
+                 SET selected_provider_id = ?2, selected_model = ?3
                  WHERE id = ?1",
-                params![task_id, normalized],
+                params![task_id, selected_provider_id, normalized],
             )
-            .context("failed to update task model")?;
+            .context("failed to update task selection")?;
 
         if affected == 0 {
             bail!("task {} not found", task_id);
         }
+
+        Ok(())
+    }
+
+    pub fn backfill_missing_task_defaults(
+        &self,
+        selected_provider_id: Option<i64>,
+        selected_model: Option<String>,
+    ) -> Result<()> {
+        let normalized_model = selected_model.and_then(|model| {
+            let trimmed = model.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+
+        self.connection
+            .execute(
+                "UPDATE tasks
+                 SET selected_provider_id = COALESCE(selected_provider_id, ?1),
+                     selected_model = COALESCE(selected_model, ?2)",
+                params![selected_provider_id, normalized_model],
+            )
+            .context("failed to backfill task defaults")?;
 
         Ok(())
     }
@@ -232,7 +300,7 @@ impl MaStorage {
             .connection
             .prepare(
                 "SELECT id, name, title_source, title_locked, created_at, last_active
-                 , selected_model
+                 , selected_provider_id, selected_model
                  FROM tasks
                  ORDER BY last_active DESC, id DESC",
             )
@@ -247,20 +315,30 @@ impl MaStorage {
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
-                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })
             .context("failed to query tasks")?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let (id, name, title_source, title_locked, created_at, last_active, selected_model) =
-                row.context("failed to decode task row")?;
+            let (
+                id,
+                name,
+                title_source,
+                title_locked,
+                created_at,
+                last_active,
+                selected_provider_id,
+                selected_model,
+            ) = row.context("failed to decode task row")?;
             tasks.push(TaskRecord {
                 id,
                 name,
                 title_source: TaskTitleSource::from_db_value(&title_source)?,
                 title_locked: title_locked != 0,
+                selected_provider_id,
                 selected_model,
                 created_at: system_time_from_unix(created_at)?,
                 last_active: system_time_from_unix(last_active)?,
@@ -312,6 +390,7 @@ impl MaStorage {
                     name        TEXT    NOT NULL,
                     title_source TEXT   NOT NULL DEFAULT 'default',
                     title_locked INTEGER NOT NULL DEFAULT 0,
+                    selected_provider_id INTEGER,
                     selected_model TEXT,
                     created_at  INTEGER NOT NULL,
                     last_active INTEGER NOT NULL
@@ -352,7 +431,7 @@ impl MaStorage {
                 ",
             )
             .context("failed to initialize sqlite schema")?;
-        self.ensure_task_title_columns()
+        self.ensure_task_columns()
     }
 
     fn delete_expired_hints(&self) -> Result<()> {
@@ -373,7 +452,7 @@ impl MaStorage {
             .connection
             .query_row(
                 "SELECT id, name, title_source, title_locked, created_at, last_active
-                 , selected_model
+                 , selected_provider_id, selected_model
                  FROM tasks
                  WHERE id = ?1",
                 params![task_id],
@@ -385,7 +464,8 @@ impl MaStorage {
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
-                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
@@ -398,13 +478,14 @@ impl MaStorage {
             name: raw.1,
             title_source: TaskTitleSource::from_db_value(&raw.2)?,
             title_locked: raw.3 != 0,
-            selected_model: raw.6,
+            selected_provider_id: raw.6,
+            selected_model: raw.7,
             created_at: system_time_from_unix(raw.4)?,
             last_active: system_time_from_unix(raw.5)?,
         })
     }
 
-    fn ensure_task_title_columns(&self) -> Result<()> {
+    fn ensure_task_columns(&self) -> Result<()> {
         let mut statement = self
             .connection
             .prepare("PRAGMA table_info(tasks)")
@@ -415,6 +496,7 @@ impl MaStorage {
 
         let mut has_title_source = false;
         let mut has_title_locked = false;
+        let mut has_selected_provider_id = false;
         let mut has_selected_model = false;
         for column in columns {
             let column = column.context("failed to decode tasks table_info row")?;
@@ -423,6 +505,9 @@ impl MaStorage {
             }
             if column == "title_locked" {
                 has_title_locked = true;
+            }
+            if column == "selected_provider_id" {
+                has_selected_provider_id = true;
             }
             if column == "selected_model" {
                 has_selected_model = true;
@@ -445,6 +530,15 @@ impl MaStorage {
                     [],
                 )
                 .context("failed to add tasks.title_locked column")?;
+        }
+
+        if !has_selected_provider_id {
+            self.connection
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN selected_provider_id INTEGER",
+                    [],
+                )
+                .context("failed to add tasks.selected_provider_id column")?;
         }
 
         if !has_selected_model {
@@ -870,6 +964,61 @@ mod tests {
         assert_eq!(loaded.task.name, "检查 main.rs 问题");
         assert_eq!(loaded.task.title_source, TaskTitleSource::Auto);
         assert!(!loaded.task.title_locked);
+    }
+
+    #[test]
+    fn task_selection_roundtrips() {
+        let workdir = temp_workspace();
+        let storage = MaStorage::open(&workdir).expect("open storage");
+        let task = storage
+            .create_task_with_metadata_and_selection(
+                "demo",
+                TaskTitleSource::Manual,
+                true,
+                Some(7),
+                Some("gpt-5.4".to_string()),
+            )
+            .expect("create task");
+
+        let loaded = storage.load_task(task.id).expect("load task");
+        assert_eq!(loaded.task.selected_provider_id, Some(7));
+        assert_eq!(loaded.task.selected_model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn backfill_only_updates_missing_task_defaults() {
+        let workdir = temp_workspace();
+        let storage = MaStorage::open(&workdir).expect("open storage");
+        let inherited = storage
+            .create_task("inherited")
+            .expect("create inherited task");
+        let explicit = storage
+            .create_task_with_metadata_and_selection(
+                "explicit",
+                TaskTitleSource::Manual,
+                true,
+                Some(9),
+                Some("custom-model".to_string()),
+            )
+            .expect("create explicit task");
+
+        storage
+            .backfill_missing_task_defaults(Some(3), Some("gpt-5.3-codex".to_string()))
+            .expect("backfill defaults");
+
+        let inherited_loaded = storage.load_task(inherited.id).expect("load inherited");
+        assert_eq!(inherited_loaded.task.selected_provider_id, Some(3));
+        assert_eq!(
+            inherited_loaded.task.selected_model.as_deref(),
+            Some("gpt-5.3-codex")
+        );
+
+        let explicit_loaded = storage.load_task(explicit.id).expect("load explicit");
+        assert_eq!(explicit_loaded.task.selected_provider_id, Some(9));
+        assert_eq!(
+            explicit_loaded.task.selected_model.as_deref(),
+            Some("custom-model")
+        );
     }
 
     #[test]
