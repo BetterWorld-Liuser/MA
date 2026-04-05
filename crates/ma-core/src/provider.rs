@@ -397,8 +397,8 @@ fn transport_adapter_kind(provider_type: ProviderType, model: &str) -> genai::ad
 mod tests {
     use super::{DeliveryPath, RuntimeProviderConfig, build_messages, fallback_task_title};
     use crate::context::{
-        AgentContext, ChatTurn, ContextPressure, FileSnapshot, Hint, Injection, ModifiedBy,
-        NoteEntry, Role, RuntimeStatus, SessionStatus,
+        AgentContext, ChatTurn, ContentBlock, ContextPressure, FileSnapshot, Hint, Injection,
+        ModifiedBy, NoteEntry, Role, RuntimeStatus, SessionStatus,
     };
     use crate::provider::delivery;
     use crate::settings::ProviderType;
@@ -458,14 +458,14 @@ mod tests {
             hints: vec![Hint::new("tests red", None, None)],
             recent_chat: vec![ChatTurn {
                 role: Role::User,
-                content: "hello".to_string(),
+                content: vec![ContentBlock::text("hello")],
                 timestamp: SystemTime::now(),
             }],
             tools: Vec::new(),
         };
 
         let messages = build_messages(&context);
-        assert_eq!(messages.len(), 3);
+        assert_eq!(messages.len(), 4);
     }
 
     #[test]

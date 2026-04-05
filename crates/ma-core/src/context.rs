@@ -243,6 +243,102 @@ impl Hint {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        media_type: String,
+        data_base64: String,
+        source_path: Option<PathBuf>,
+        name: Option<String>,
+    },
+}
+
+impl ContentBlock {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text { text: text.into() }
+    }
+
+    pub fn image(
+        media_type: impl Into<String>,
+        data_base64: impl Into<String>,
+        source_path: Option<PathBuf>,
+        name: Option<String>,
+    ) -> Self {
+        Self::Image {
+            media_type: media_type.into(),
+            data_base64: data_base64.into(),
+            source_path,
+            name,
+        }
+    }
+
+    pub fn text_content(&self) -> Option<&str> {
+        match self {
+            Self::Text { text } => Some(text.as_str()),
+            Self::Image { .. } => None,
+        }
+    }
+
+    pub fn is_image(&self) -> bool {
+        matches!(self, Self::Image { .. })
+    }
+
+    pub fn display_label(&self) -> Option<String> {
+        match self {
+            Self::Text { .. } => None,
+            Self::Image {
+                source_path, name, ..
+            } => Some(
+                name.clone()
+                    .or_else(|| {
+                        source_path.as_ref().and_then(|path| {
+                            path.file_name().map(|value| value.to_string_lossy().into_owned())
+                        })
+                    })
+                    .unwrap_or_else(|| "image".to_string()),
+            ),
+        }
+    }
+
+    pub fn image_token_cost(&self) -> usize {
+        match self {
+            Self::Text { .. } => 0,
+            Self::Image { .. } => 1_500,
+        }
+    }
+}
+
+pub fn join_text_blocks(content: &[ContentBlock]) -> String {
+    content
+        .iter()
+        .filter_map(ContentBlock::text_content)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+pub fn render_content_blocks_for_prompt(content: &[ContentBlock]) -> String {
+    let mut rendered = String::new();
+
+    for block in content {
+        match block {
+            ContentBlock::Text { text } => rendered.push_str(text),
+            ContentBlock::Image { .. } => {
+                if !rendered.is_empty() && !rendered.ends_with('\n') {
+                    rendered.push('\n');
+                }
+                let label = block.display_label().unwrap_or_else(|| "image".to_string());
+                rendered.push_str(&format!("[Image: {}]\n", label));
+            }
+        }
+    }
+
+    rendered.trim().to_string()
+}
+
 /// 用户看到的完整会话历史。
 /// 这层是展示真相，不参与“给 AI 什么”的裁剪决策。
 #[derive(Debug, Clone, Default)]
@@ -259,7 +355,7 @@ impl ConversationHistory {
 #[derive(Debug, Clone)]
 pub struct DisplayTurn {
     pub role: Role,
-    pub content: String,
+    pub content: Vec<ContentBlock>,
     pub tool_calls: Vec<ToolSummary>,
     pub timestamp: SystemTime,
 }
@@ -274,7 +370,7 @@ pub struct ToolSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatTurn {
     pub role: Role,
-    pub content: String,
+    pub content: Vec<ContentBlock>,
     pub timestamp: SystemTime,
 }
 
@@ -283,7 +379,7 @@ pub fn render_chat_turn_for_prompt(turn: &ChatTurn) -> String {
         "{:?} @ {}: {}",
         turn.role,
         format_prompt_timestamp(turn.timestamp),
-        turn.content
+        render_content_blocks_for_prompt(&turn.content)
     )
 }
 
@@ -298,12 +394,14 @@ pub enum Role {
 #[derive(Debug, Clone)]
 pub struct ContextBuildConfig {
     pub max_recent_chat_turns: usize,
+    pub max_recent_chat_image_turns: usize,
 }
 
 impl Default for ContextBuildConfig {
     fn default() -> Self {
         Self {
             max_recent_chat_turns: 10,
+            max_recent_chat_image_turns: 4,
         }
     }
 }
@@ -395,7 +493,7 @@ impl AgentContextBuilder {
 
     pub fn build(self) -> AgentContext {
         let max_recent_chat_turns = self.config.max_recent_chat_turns.max(1);
-        let recent_chat = self
+        let mut recent_chat = self
             .history
             .turns
             .into_iter()
@@ -405,7 +503,11 @@ impl AgentContextBuilder {
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
-            .collect();
+            .collect::<Vec<_>>();
+        trim_older_chat_images(
+            &mut recent_chat,
+            self.config.max_recent_chat_image_turns.max(1),
+        );
 
         AgentContext {
             system_core: self.system_core,
@@ -431,6 +533,24 @@ impl ChatTurn {
             }),
             Role::System | Role::Tool => None,
         }
+    }
+}
+
+fn trim_older_chat_images(turns: &mut [ChatTurn], max_recent_chat_image_turns: usize) {
+    let mut remaining_image_turns = max_recent_chat_image_turns;
+
+    for turn in turns.iter_mut().rev() {
+        let has_image = turn.content.iter().any(ContentBlock::is_image);
+        if !has_image {
+            continue;
+        }
+
+        if remaining_image_turns > 0 {
+            remaining_image_turns -= 1;
+            continue;
+        }
+
+        turn.content.retain(|block| matches!(block, ContentBlock::Text { .. }));
     }
 }
 
@@ -506,17 +626,17 @@ mod tests {
         let context = AgentContextBuilder::new("system").history(history).build();
 
         assert_eq!(context.recent_chat.len(), 4);
-        assert_eq!(context.recent_chat[0].content, "first");
-        assert_eq!(context.recent_chat[1].content, "second");
-        assert_eq!(context.recent_chat[2].content, "third");
-        assert_eq!(context.recent_chat[3].content, "fourth");
+        assert_eq!(join_text_blocks(&context.recent_chat[0].content), "first");
+        assert_eq!(join_text_blocks(&context.recent_chat[1].content), "second");
+        assert_eq!(join_text_blocks(&context.recent_chat[2].content), "third");
+        assert_eq!(join_text_blocks(&context.recent_chat[3].content), "fourth");
     }
 
     #[test]
     fn prompt_chat_render_includes_role_and_timestamp() {
         let rendered = render_chat_turn_for_prompt(&ChatTurn {
             role: Role::User,
-            content: "hello".to_string(),
+            content: vec![ContentBlock::text("hello")],
             timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(42),
         });
 
@@ -573,7 +693,7 @@ mod tests {
     fn display_turn(role: Role, content: &str) -> DisplayTurn {
         DisplayTurn {
             role,
-            content: content.to_string(),
+            content: vec![ContentBlock::text(content.to_string())],
             tool_calls: Vec::new(),
             timestamp: SystemTime::UNIX_EPOCH,
         }

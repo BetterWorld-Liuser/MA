@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
-use crate::context::{Role, ToolSummary};
+use crate::context::{ContentBlock, Role, ToolSummary};
 use crate::paths::canonicalize_clean;
 
 use super::TaskTitleSource;
@@ -96,4 +96,21 @@ pub fn decode_tool_summaries(raw: Option<&str>) -> Result<Vec<ToolSummary>> {
         return Ok(Vec::new());
     };
     serde_json::from_str(raw).context("failed to decode tool summaries from json")
+}
+
+pub fn encode_content_blocks(content: &[ContentBlock]) -> Result<String> {
+    serde_json::to_string(content).context("failed to encode content blocks as json")
+}
+
+pub fn decode_content_blocks(raw: &str) -> Result<Vec<ContentBlock>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![ContentBlock::text("")]);
+    }
+
+    if trimmed.starts_with('[') {
+        return serde_json::from_str(trimmed).context("failed to decode content blocks from json");
+    }
+
+    Ok(vec![ContentBlock::text(raw.to_string())])
 }

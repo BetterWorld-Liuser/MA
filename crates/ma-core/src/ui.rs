@@ -38,7 +38,21 @@ pub struct UiDeleteTaskRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiSendMessageRequest {
     pub task_id: Option<i64>,
-    pub content: String,
+    pub content_blocks: Vec<UiComposerContentBlock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UiComposerContentBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        media_type: String,
+        data_base64: String,
+        source_path: Option<PathBuf>,
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,6 +248,22 @@ pub struct UiWorkspaceEntryView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiLoadWorkspaceImageRequest {
+    pub task_id: Option<i64>,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiWorkspaceImageView {
+    pub path: PathBuf,
+    pub media_type: String,
+    pub data_url: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiTaskSnapshot {
     pub task: UiTaskSummary,
     pub history: Vec<UiTurnView>,
@@ -379,8 +409,19 @@ pub struct UiSkillView {
 pub struct UiTurnView {
     pub role: UiRoleView,
     pub content: String,
+    pub images: Vec<UiImageAttachmentView>,
     pub tool_summaries: Vec<UiToolSummaryView>,
     pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiImageAttachmentView {
+    pub id: String,
+    pub name: String,
+    pub media_type: String,
+    pub data_url: String,
+    pub source_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

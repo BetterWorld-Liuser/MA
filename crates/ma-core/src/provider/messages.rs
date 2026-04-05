@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::context::{
-    AgentContext, render_chat_turn_for_prompt, render_file_snapshot_for_prompt,
+    AgentContext, ChatTurn, ContentBlock, render_file_snapshot_for_prompt,
 };
 use crate::tools::{ToolDefinition, ToolParameter};
 
@@ -16,7 +16,7 @@ use crate::tools::{ToolDefinition, ToolParameter};
 pub struct RequestMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<MessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -27,13 +27,13 @@ impl RequestMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: "system".to_string(),
-            content: Some(content.into()),
+            content: Some(MessageContent::from_text(content.into())),
             tool_call_id: None,
             tool_calls: Vec::new(),
         }
     }
 
-    pub fn user(content: impl Into<String>) -> Self {
+    pub fn user(content: impl Into<MessageContent>) -> Self {
         Self {
             role: "user".to_string(),
             content: Some(content.into()),
@@ -42,7 +42,7 @@ impl RequestMessage {
         }
     }
 
-    pub fn assistant_text(content: impl Into<String>) -> Self {
+    pub fn assistant_text(content: impl Into<MessageContent>) -> Self {
         Self {
             role: "assistant".to_string(),
             content: Some(content.into()),
@@ -52,7 +52,7 @@ impl RequestMessage {
     }
 
     pub fn assistant_tool_calls_with_text(
-        content: Option<String>,
+        content: Option<MessageContent>,
         tool_calls: Vec<ApiToolCallRequest>,
     ) -> Self {
         Self {
@@ -70,7 +70,7 @@ impl RequestMessage {
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: "tool".to_string(),
-            content: Some(content.into()),
+            content: Some(MessageContent::from_text(content.into())),
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
         }
@@ -84,7 +84,12 @@ pub fn build_messages(context: &AgentContext) -> Vec<RequestMessage> {
         messages.push(RequestMessage::system(render_injections(context)));
     }
 
-    messages.push(RequestMessage::user(render_context_body(context)));
+    messages.push(RequestMessage::user(MessageContent::from_text(render_context_body(
+        context,
+    ))));
+    for turn in &context.recent_chat {
+        messages.push(request_message_from_chat_turn(turn));
+    }
     messages
 }
 
@@ -98,15 +103,16 @@ pub fn build_chat_request(
         let content = message.content.clone().unwrap_or_default();
         match message.role.as_str() {
             "system" => {
+                let content_text = content.into_joined_texts().unwrap_or_default();
                 if request.system.is_none() {
-                    request = request.with_system(content);
+                    request = request.with_system(content_text);
                 } else {
-                    request = request.append_message(ChatMessage::system(content));
+                    request = request.append_message(ChatMessage::system(content_text));
                 }
             }
             "user" => request = request.append_message(ChatMessage::user(content)),
             "assistant" => {
-                let assistant_message = build_assistant_message(&content, &message.tool_calls)?;
+                let assistant_message = build_assistant_message(content, &message.tool_calls)?;
                 request = request.append_message(assistant_message);
             }
             "tool" => {
@@ -116,7 +122,7 @@ pub fn build_chat_request(
                     .context("tool message missing tool_call_id")?;
                 request = request.append_message(ChatMessage::from(GenAiToolResponse::new(
                     tool_call_id,
-                    content,
+                    content.into_joined_texts().unwrap_or_default(),
                 )));
             }
             other => bail!("unsupported request role {other}"),
@@ -238,26 +244,18 @@ fn render_context_body(context: &AgentContext) -> String {
         }
     }
 
-    output.push_str("\n# Recent Chat\n");
-    for turn in &context.recent_chat {
-        output.push_str(&format!("{}\n", render_chat_turn_for_prompt(turn)));
-    }
-
     output
 }
 
 fn build_assistant_message(
-    content: &str,
+    content: MessageContent,
     tool_calls: &[ApiToolCallRequest],
 ) -> Result<ChatMessage> {
     if tool_calls.is_empty() {
-        return Ok(ChatMessage::assistant(content.to_string()));
+        return Ok(ChatMessage::assistant(content));
     }
 
-    let mut parts = Vec::new();
-    if !content.trim().is_empty() {
-        parts.push(ContentPart::Text(content.to_string()));
-    }
+    let mut parts = content.into_parts();
     for tool_call in tool_calls {
         parts.push(ContentPart::ToolCall(GenAiToolCall {
             call_id: tool_call.id.clone(),
@@ -268,6 +266,36 @@ fn build_assistant_message(
     }
 
     Ok(ChatMessage::assistant(MessageContent::from_parts(parts)))
+}
+
+fn request_message_from_chat_turn(turn: &ChatTurn) -> RequestMessage {
+    let content = message_content_from_blocks(&turn.content);
+    match turn.role {
+        crate::context::Role::User => RequestMessage::user(content),
+        crate::context::Role::Assistant => RequestMessage::assistant_text(content),
+        crate::context::Role::System | crate::context::Role::Tool => unreachable!(),
+    }
+}
+
+fn message_content_from_blocks(blocks: &[ContentBlock]) -> MessageContent {
+    MessageContent::from_parts(
+        blocks
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => ContentPart::Text(text.clone()),
+                ContentBlock::Image {
+                    media_type,
+                    data_base64,
+                    name,
+                    ..
+                } => ContentPart::from_binary_base64(
+                    media_type.clone(),
+                    data_base64.clone(),
+                    name.clone(),
+                ),
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn parse_tool_arguments(arguments_json: &str) -> Value {

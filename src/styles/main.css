@@ -489,6 +489,11 @@
   box-shadow: var(--ma-composer-shadow);
 }
 
+@utility chat-composer-dragging {
+  border-color: rgba(212, 105, 42, 0.42);
+  box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+}
+
 @utility chat-composer-chips {
   @apply flex flex-wrap gap-1 px-3 pt-2.5;
 }
@@ -529,6 +534,36 @@
   &::placeholder {
     color: color-mix(in srgb, var(--color-text) 40%, transparent);
   }
+}
+
+@utility composer-image-strip {
+  @apply flex flex-wrap gap-2 px-3 pb-2;
+}
+
+@utility composer-image-card {
+  @apply relative flex w-24 flex-col overflow-hidden rounded-2xl border text-left transition disabled:cursor-not-allowed disabled:opacity-60;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+@utility composer-image-thumb {
+  @apply h-20 w-full object-cover;
+}
+
+@utility composer-image-name {
+  @apply truncate px-2 py-1.5 text-[9px] text-text-dim;
+}
+
+@utility composer-image-remove {
+  @apply absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/55 text-[12px] leading-none text-white;
+}
+
+@utility composer-inline-notice {
+  @apply px-3 pb-1 text-[10px] text-warning;
 }
 
 @utility chat-composer-toolbar {
@@ -641,6 +676,31 @@
   @apply normal-case tracking-normal text-text-muted;
 }
 
+@utility composer-image-preview-backdrop {
+  @apply fixed inset-0 z-[1100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm;
+}
+
+@utility composer-image-preview-panel {
+  @apply relative flex max-h-full w-full max-w-5xl flex-col items-center gap-3 rounded-[28px] border p-4;
+  background: var(--ma-panel-popover);
+  border-color: var(--ma-line-strong);
+  box-shadow: var(--ma-floating-shadow);
+}
+
+@utility composer-image-preview-close {
+  @apply self-end rounded-xl border px-3 py-1.5 text-[10px] text-text-dim transition;
+  border-color: var(--ma-line-soft);
+  background: var(--ma-panel-surface);
+}
+
+@utility composer-image-preview-image {
+  @apply max-h-[70vh] w-auto max-w-full rounded-2xl object-contain;
+}
+
+@utility composer-image-preview-name {
+  @apply max-w-full truncate text-[11px] text-text-dim;
+}
+
 @utility chat-composer-toolbar-group {
   @apply flex min-w-0 items-center gap-1.5;
 }
@@ -693,6 +753,25 @@
 
 @utility composer-shortcut-hint {
   @apply hidden text-[9px] text-text-dim md:block;
+}
+
+@utility message-image-grid {
+  @apply mb-2 grid gap-2;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+@utility message-image-card {
+  @apply flex flex-col overflow-hidden rounded-2xl border text-left transition;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+@utility message-image-thumb {
+  @apply h-32 w-full object-cover;
+}
+
+@utility message-image-caption {
+  @apply truncate px-2 py-1.5 text-[10px] text-text-dim;
 }
 
 @utility composer-send-button {

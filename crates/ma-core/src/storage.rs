@@ -273,7 +273,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, UNIX_EPOCH};
 
-    use crate::context::{DisplayTurn, Role, ToolSummary};
+    use crate::context::{ContentBlock, DisplayTurn, Role, ToolSummary};
 
     #[test]
     fn storage_roundtrips_task_state() {
@@ -292,13 +292,13 @@ mod tests {
                     history: ConversationHistory::new(vec![
                         DisplayTurn {
                             role: Role::User,
-                            content: "继续".to_string(),
+                            content: vec![ContentBlock::text("继续")],
                             tool_calls: Vec::new(),
                             timestamp: UNIX_EPOCH + Duration::from_secs(1),
                         },
                         DisplayTurn {
                             role: Role::Assistant,
-                            content: "开始实现持久化".to_string(),
+                            content: vec![ContentBlock::text("开始实现持久化")],
                             tool_calls: vec![ToolSummary {
                                 name: "write_file".to_string(),
                                 summary: "创建了 storage 模块".to_string(),

@@ -10,6 +10,14 @@ export type ChatTool = {
   summary: string;
 };
 
+export type ChatImageAttachment = {
+  id: string;
+  name: string;
+  previewUrl: string;
+  mediaType: string;
+  sourcePath?: string;
+};
+
 export type LiveToolItem = {
   id: string;
   label: string;
@@ -33,6 +41,7 @@ export type ChatMessage = {
   time: string;
   timestamp?: number;
   content: string;
+  images?: ChatImageAttachment[];
   tools?: ChatTool[];
 };
 
@@ -128,6 +137,13 @@ export type BackendWorkspaceSnapshot = {
     history: Array<{
       role: 'System' | 'User' | 'Assistant' | 'Tool';
       content: string;
+      images?: Array<{
+        id: string;
+        name: string;
+        media_type: string;
+        data_url: string;
+        source_path?: string | null;
+      }>;
       timestamp: number;
       tool_summaries: Array<{
         name: string;
@@ -260,6 +276,13 @@ export type BackendAgentProgressEvent =
 export type WorkspaceEntryView = {
   path: string;
   kind: 'file' | 'directory';
+};
+
+export type WorkspaceImageView = {
+  path: string;
+  mediaType: string;
+  dataUrl: string;
+  name: string;
 };
 
 export type ProviderModelsView = {
@@ -425,6 +448,13 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       time: formatTime(turn.timestamp),
       timestamp: turn.timestamp * 1000,
       content: turn.content,
+      images: turn.images?.map((image) => ({
+        id: image.id,
+        name: image.name,
+        previewUrl: image.data_url,
+        mediaType: image.media_type,
+        sourcePath: image.source_path ?? undefined,
+      })),
       tools: turn.tool_summaries.map((tool) => ({
         label: tool.name,
         summary: tool.summary,

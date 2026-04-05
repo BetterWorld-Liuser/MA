@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use genai::chat::MessageContent;
 
 use crate::config::MarchConfig;
 use crate::context::{
@@ -164,7 +165,7 @@ pub(super) fn append_assistant_tool_call_message(
     tool_calls: &[ProviderToolCall],
 ) {
     transient_messages.push(RequestMessage::assistant_tool_calls_with_text(
-        assistant_text,
+        assistant_text.map(MessageContent::from_text),
         tool_calls.iter().map(to_request_tool_call).collect(),
     ));
 }

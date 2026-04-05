@@ -10,6 +10,8 @@ import { useProviderSettings } from '@/composables/useProviderSettings';
 import {
   mockWorkspace,
   toWorkspaceView,
+  type ChatImageAttachment,
+  type ChatMessage,
   type BackendAgentProgressEvent,
   type BackendWorkspaceSnapshot,
   type WorkspaceView,
@@ -25,6 +27,7 @@ export function useWorkspaceApp() {
   const appTitle = 'March';
   const appWindow = getCurrentWindow();
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
+  const localComposerMessages = ref<Record<number, ChatMessage[]>>({});
   const workspacePath = computed(() => snapshot.value?.workspace_path);
   const busy = ref(false);
   const sendingTaskId = ref<number | null>(null);
@@ -119,7 +122,7 @@ export function useWorkspaceApp() {
       );
       return {
         ...baseWorkspace,
-        chat: mergedChat,
+        chat: mergeChatWithComposerMessages(activeTaskId ?? undefined, mergedChat),
         liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
       };
     }
@@ -216,6 +219,7 @@ export function useWorkspaceApp() {
         });
         clearLiveTurn(Number(taskId));
         clearArchivedFailedTurns(Number(taskId));
+        delete localComposerMessages.value[Number(taskId)];
         if (sendingTaskId.value === Number(taskId)) {
           sendingTaskId.value = null;
         }
@@ -224,7 +228,7 @@ export function useWorkspaceApp() {
     });
   }
 
-  async function sendMessage(payload: { content: string; directories: string[]; files: string[] }) {
+  async function sendMessage(payload: { content: string; directories: string[]; files: string[]; images: ChatImageAttachment[] }) {
     if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
       return;
     }
@@ -232,7 +236,17 @@ export function useWorkspaceApp() {
     const taskId = activeTaskIdNumber.value;
     const content = augmentComposerMessage(payload);
 
-    appendOptimisticUserMessage(content);
+    queueLocalComposerMessage(taskId, {
+      role: 'user',
+      author: 'User',
+      time: new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      timestamp: Date.now(),
+      content,
+      images: payload.images,
+    });
     upsertLiveTurn(taskId, {
       turnId: `pending-${Date.now()}`,
       state: 'pending',
@@ -256,7 +270,18 @@ export function useWorkspaceApp() {
       const nextSnapshot = await invoke<BackendWorkspaceSnapshot>('send_message', {
         input: {
           taskId,
-          content,
+          contentBlocks: [
+            ...(content
+              ? [{ type: 'text', text: content }]
+              : []),
+            ...payload.images.map((image) => ({
+              type: 'image',
+              mediaType: image.mediaType,
+              dataBase64: extractBase64Payload(image.previewUrl),
+              sourcePath: image.sourcePath ?? null,
+              name: image.name,
+            })),
+          ],
         },
       });
       clearLiveTurn(taskId);
@@ -315,35 +340,13 @@ export function useWorkspaceApp() {
     }
   }
 
-  function augmentComposerMessage(payload: { content: string; directories: string[]; files: string[] }) {
+  function augmentComposerMessage(payload: { content: string; directories: string[]; files: string[]; images: ChatImageAttachment[] }) {
     const base = payload.content.trim();
-    if (!payload.directories.length) {
-      return base;
+    const sections = [base];
+    if (payload.directories.length) {
+      sections.push(`[目录引用]\n${payload.directories.map((path) => `- ${path}`).join('\n')}`);
     }
-
-    return `${base}\n\n[目录引用]\n${payload.directories.map((path) => `- ${path}`).join('\n')}`;
-  }
-
-  function appendOptimisticUserMessage(content: string) {
-    if (!snapshot.value?.active_task) {
-      return;
-    }
-
-    snapshot.value = {
-      ...snapshot.value,
-      active_task: {
-        ...snapshot.value.active_task,
-        history: [
-          ...snapshot.value.active_task.history,
-          {
-            role: 'User',
-            content,
-            timestamp: Math.floor(Date.now() / 1000),
-            tool_summaries: [],
-          },
-        ],
-      },
-    };
+    return sections.filter(Boolean).join('\n\n');
   }
 
   async function addNote() {
@@ -559,6 +562,61 @@ export function useWorkspaceApp() {
       return error.message;
     }
     return 'Unknown error while talking to the March backend.';
+  }
+
+  function queueLocalComposerMessage(taskId: number, message: ChatMessage) {
+    localComposerMessages.value = {
+      ...localComposerMessages.value,
+      [taskId]: [...(localComposerMessages.value[taskId] ?? []), message],
+    };
+  }
+
+  function mergeChatWithComposerMessages(taskId: number | undefined, chat: ChatMessage[]) {
+    if (!taskId) {
+      return chat;
+    }
+
+    const localMessages = localComposerMessages.value[taskId] ?? [];
+    if (!localMessages.length) {
+      return chat;
+    }
+
+    const merged = chat.map((message) => ({
+      ...message,
+      images: message.images ? [...message.images] : undefined,
+    }));
+    const usedIndices = new Set<number>();
+    const unmatched: ChatMessage[] = [];
+
+    for (const localMessage of localMessages) {
+      const matchIndex = merged.findIndex((message, index) =>
+        !usedIndices.has(index)
+        && message.role === localMessage.role
+        && message.content === localMessage.content
+        && Math.abs((message.timestamp ?? 0) - (localMessage.timestamp ?? 0)) < 120000,
+      );
+
+      if (matchIndex >= 0) {
+        usedIndices.add(matchIndex);
+        if (localMessage.images?.length) {
+          merged[matchIndex] = {
+            ...merged[matchIndex],
+            images: localMessage.images,
+          };
+        }
+      } else {
+        unmatched.push(localMessage);
+      }
+    }
+
+    return [...merged, ...unmatched].sort(
+      (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+
+  function extractBase64Payload(dataUrl: string) {
+    const separatorIndex = dataUrl.indexOf(',');
+    return separatorIndex >= 0 ? dataUrl.slice(separatorIndex + 1) : dataUrl;
   }
 
   async function minimizeWindow() {

@@ -5,7 +5,7 @@ use std::process::Command;
 
 use anyhow::Result;
 use ma::agent::{AgentConfig, AgentRunResult, AgentSession, DebugRound};
-use ma::context::ConversationHistory;
+use ma::context::{ContentBlock, ConversationHistory};
 use ma::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use ma::storage::MaStorage;
 
@@ -43,7 +43,10 @@ async fn main() -> Result<()> {
     let debug_logs = DebugLogs::new(cwd.join(".ma").join("debug"))?;
 
     if let Some(request) = cli_request {
-        match session.handle_user_message(&provider, request).await {
+        match session
+            .handle_user_message(&provider, vec![ContentBlock::text(request)])
+            .await
+        {
             Ok(result) => {
                 print_agent_result(&result, debug_enabled, &debug_logs)?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
@@ -95,7 +98,10 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        match session.handle_user_message(&provider, input).await {
+        match session
+            .handle_user_message(&provider, vec![ContentBlock::text(input)])
+            .await
+        {
             Ok(result) => {
                 print_agent_result(&result, debug_enabled, &debug_logs)?;
                 storage.save_task_state(task_id, &session.persisted_state())?;

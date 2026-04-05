@@ -4,7 +4,8 @@ use indexmap::IndexMap;
 
 use crate::agent::{AgentSession, AgentStatusPhase, AgentToolStatus, DebugRound, DebugToolCall};
 use crate::context::{
-    ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus, ToolSummary,
+    ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role,
+    SystemStatus, ToolSummary, join_text_blocks,
 };
 use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
@@ -16,8 +17,9 @@ use super::{
     UiAgentStatusPhase, UiAgentToolStatus, UiContextPressureView, UiContextUsageSectionView,
     UiContextUsageView, UiDebugRoundView, UiDebugToolCallView, UiDebugTraceView,
     UiFileSnapshotView, UiHintView, UiModifiedByView, UiNoteView, UiOpenFileView,
-    UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot, UiShellView,
-    UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
+    UiImageAttachmentView, UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot,
+    UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary,
+    UiToolSummaryView, UiTurnView,
 };
 
 impl UiTaskSnapshot {
@@ -160,7 +162,13 @@ impl From<DisplayTurn> for UiTurnView {
     fn from(turn: DisplayTurn) -> Self {
         Self {
             role: UiRoleView::from(turn.role),
-            content: turn.content,
+            content: join_text_blocks(&turn.content),
+            images: turn
+                .content
+                .iter()
+                .enumerate()
+                .filter_map(|(index, block)| image_attachment_from_content_block(block, index))
+                .collect(),
             tool_summaries: turn
                 .tool_calls
                 .into_iter()
@@ -169,6 +177,42 @@ impl From<DisplayTurn> for UiTurnView {
             timestamp: system_time_to_unix(turn.timestamp),
         }
     }
+}
+
+fn image_attachment_from_content_block(
+    block: &ContentBlock,
+    index: usize,
+) -> Option<UiImageAttachmentView> {
+    let ContentBlock::Image {
+        media_type,
+        data_base64,
+        source_path,
+        name,
+    } = block
+    else {
+        return None;
+    };
+
+    let display_name = name.clone().or_else(|| {
+        source_path
+            .as_ref()
+            .and_then(|path| path.file_name().map(|value| value.to_string_lossy().into_owned()))
+    });
+    let normalized_source_path = source_path.clone().map(clean_path);
+    Some(UiImageAttachmentView {
+        id: normalized_source_path
+            .as_ref()
+            .map(|path| format!("{}:{index}", path.display()))
+            .unwrap_or_else(|| format!("inline-image-{index}")),
+        name: display_name.unwrap_or_else(|| format!("image-{index}")),
+        media_type: media_type.clone(),
+        data_url: format!(
+            "data:{};base64,{}",
+            media_type,
+            data_base64
+        ),
+        source_path: normalized_source_path,
+    })
 }
 
 impl From<Role> for UiRoleView {

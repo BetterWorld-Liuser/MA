@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 
+use crate::context::ContentBlock;
 use crate::provider::{OpenAiCompatibleClient, ProviderProgressEvent, RequestMessage};
 
 use super::prompting::{append_assistant_tool_call_message, render_prompt};
@@ -13,7 +14,7 @@ impl AgentSession {
     pub async fn handle_user_message(
         &mut self,
         client: &OpenAiCompatibleClient,
-        content: impl Into<String>,
+        content: Vec<ContentBlock>,
     ) -> Result<AgentRunResult> {
         self.handle_user_message_with_events_and_cancel(client, content, || false, |_, _| Ok(()))
             .await
@@ -22,7 +23,7 @@ impl AgentSession {
     pub async fn handle_user_message_with_events<F>(
         &mut self,
         client: &OpenAiCompatibleClient,
-        content: impl Into<String>,
+        content: Vec<ContentBlock>,
         on_event: F,
     ) -> Result<AgentRunResult>
     where
@@ -35,7 +36,7 @@ impl AgentSession {
     pub async fn handle_user_message_with_events_and_cancel<F, C>(
         &mut self,
         client: &OpenAiCompatibleClient,
-        content: impl Into<String>,
+        content: Vec<ContentBlock>,
         is_cancelled: C,
         mut on_event: F,
     ) -> Result<AgentRunResult>
@@ -128,7 +129,10 @@ impl AgentSession {
                 let final_message = FinalAssistantMessage {
                     message: final_message,
                 };
-                self.add_assistant_turn(final_message.message.clone(), summaries.clone());
+                self.add_assistant_turn(
+                    vec![ContentBlock::text(final_message.message.clone())],
+                    summaries.clone(),
+                );
                 on_event(
                     self,
                     AgentProgressEvent::FinalAssistantMessage(final_message.clone()),

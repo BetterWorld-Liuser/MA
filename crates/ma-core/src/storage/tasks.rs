@@ -7,7 +7,8 @@ use rusqlite::{OptionalExtension, params};
 use crate::context::{ConversationHistory, DisplayTurn, Hint, NoteEntry};
 
 use super::codec::{
-    decode_tool_summaries, decode_working_directory, normalize_working_directory,
+    decode_content_blocks, decode_tool_summaries, decode_working_directory,
+    normalize_working_directory,
     optional_system_time, role_from_db, system_time_from_unix, unix_timestamp,
 };
 use super::{MaStorage, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource};
@@ -400,7 +401,7 @@ impl MaStorage {
                 row.context("failed to decode conversation row")?;
             turns.push(DisplayTurn {
                 role: role_from_db(&role)?,
-                content,
+                content: decode_content_blocks(&content)?,
                 tool_calls: decode_tool_summaries(tool_summaries_json.as_deref())?,
                 timestamp: system_time_from_unix(created_at)?,
             });

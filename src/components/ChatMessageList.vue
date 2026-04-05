@@ -23,6 +23,19 @@
           class="message-bubble"
           :class="message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user'"
         >
+          <div v-if="message.images?.length" class="message-image-grid">
+            <button
+              v-for="image in message.images"
+              :key="image.id"
+              class="message-image-card"
+              type="button"
+              @click="previewImage = image"
+            >
+              <img class="message-image-thumb" :src="image.previewUrl" :alt="image.name" />
+              <span class="message-image-caption">{{ image.name }}</span>
+            </button>
+          </div>
+
           <MarkdownRender
             v-if="message.role === 'assistant'"
             custom-id="ma-chat-message"
@@ -125,6 +138,16 @@
     </article>
 
     <div ref="bottomAnchor" aria-hidden="true"></div>
+
+    <Teleport to="body">
+      <div v-if="previewImage" class="composer-image-preview-backdrop" @click="previewImage = null">
+        <div class="composer-image-preview-panel" @click.stop>
+          <button class="composer-image-preview-close" type="button" @click="previewImage = null">关闭</button>
+          <img class="composer-image-preview-image" :src="previewImage.previewUrl" :alt="previewImage.name" />
+          <p class="composer-image-preview-name">{{ previewImage.name }}</p>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -134,7 +157,7 @@ import { Icon } from '@iconify/vue';
 import checkIcon from '@iconify-icons/lucide/check';
 import copyIcon from '@iconify-icons/lucide/copy';
 import MarkdownRender from 'markstream-vue';
-import type { ChatMessage, LiveTurn } from '@/data/mock';
+import type { ChatImageAttachment, ChatMessage, LiveTurn } from '@/data/mock';
 
 const props = defineProps<{
   chat: ChatMessage[];
@@ -145,6 +168,7 @@ const props = defineProps<{
 const scrollContainer = ref<HTMLElement | null>(null);
 const bottomAnchor = ref<HTMLElement | null>(null);
 const copiedContent = ref('');
+const previewImage = ref<ChatImageAttachment | null>(null);
 const hasInitializedTaskPosition = ref(false);
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 

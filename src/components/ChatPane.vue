@@ -9,10 +9,25 @@
     <ChatMessageList :chat="chat" :live-turn="liveTurn" :task-id="taskId" />
 
     <div class="shrink-0 p-2" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
-      <div ref="composerRootRef" class="chat-composer-shell">
-        <label class="sr-only" for="message-input">Reply</label>
+        <div ref="composerRootRef" class="chat-composer-shell">
+          <label class="sr-only" for="message-input">Reply</label>
+          <input
+            ref="imageInputRef"
+            class="sr-only"
+            type="file"
+            accept="image/*"
+            multiple
+            @change="handleImageFileSelection"
+          />
 
-        <div class="chat-composer">
+        <div
+          class="chat-composer"
+          :class="dragActive ? 'chat-composer-dragging' : ''"
+          @paste="handlePaste"
+          @dragover="handleDragOver"
+          @dragleave="handleDragLeave"
+          @drop="handleDrop"
+        >
           <div v-if="mentions.length" class="chat-composer-chips" aria-label="Referenced paths">
             <button
               v-for="chip in mentions"
@@ -42,6 +57,33 @@
             @keyup="handleComposerKeyup"
             @keydown="onComposerKeydown"
           ></textarea>
+
+          <div v-if="imageAttachments.length" class="composer-image-strip" aria-label="图片附件">
+            <button
+              v-for="image in imageAttachments"
+              :key="image.id"
+              class="composer-image-card"
+              type="button"
+              :disabled="disabled || interactionLocked"
+              @click="openImagePreview(image)"
+            >
+              <img class="composer-image-thumb" :src="image.previewUrl" :alt="image.name" />
+              <span class="composer-image-name">{{ image.name }}</span>
+              <span
+                class="composer-image-remove"
+                role="button"
+                tabindex="-1"
+                aria-label="移除图片"
+                @click.stop="removeImageAttachment(image.id)"
+              >
+                ×
+              </span>
+            </button>
+          </div>
+
+          <div v-if="composerNotice" class="composer-inline-notice">
+            {{ composerNotice }}
+          </div>
 
           <div class="chat-composer-toolbar">
             <div class="chat-composer-toolbar-group">
@@ -134,6 +176,14 @@
         <div v-if="plusMenuOpen" class="composer-menu">
           <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('file')">选择文件…</button>
           <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('directory')">选择目录…</button>
+          <button
+            v-if="supportsVision"
+            class="composer-menu-item"
+            type="button"
+            @mousedown.prevent="triggerImagePicker"
+          >
+            选择图片…
+          </button>
         </div>
 
       </div>
@@ -188,6 +238,16 @@
         </div>
       </div>
     </Teleport>
+
+    <Teleport to="body">
+      <div v-if="previewImage" class="composer-image-preview-backdrop" @click="closeImagePreview">
+        <div class="composer-image-preview-panel" @click.stop>
+          <button class="composer-image-preview-close" type="button" @click="closeImagePreview">关闭</button>
+          <img class="composer-image-preview-image" :src="previewImage.previewUrl" :alt="previewImage.name" />
+          <p class="composer-image-preview-name">{{ previewImage.name }}</p>
+        </div>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -201,6 +261,7 @@ import folderOpenIcon from '@iconify-icons/lucide/folder-open';
 import rotateCcwIcon from '@iconify-icons/lucide/rotate-ccw';
 import ChatMessageList from '@/components/ChatMessageList.vue';
 import { useChatComposer } from '@/composables/useChatComposer';
+import type { ComposerImageAttachment } from '@/composables/useChatComposer';
 import type { TaskModelSelectorView } from '../data/mock';
 
 type CachedProviderGroup = {
@@ -236,7 +297,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [payload: { content: string; directories: string[]; files: string[] }];
+  send: [payload: { content: string; directories: string[]; files: string[]; images: ComposerImageAttachment[] }];
   setModel: [selection: { providerId?: number | null; model: string }];
   setWorkingDirectory: [path?: string | null];
   cancelTurn: [];
@@ -245,12 +306,15 @@ const emit = defineEmits<{
 const disabledRef = computed(() => !!props.disabled);
 const interactionLockedRef = computed(() => !!props.interactionLocked);
 const taskIdRef = toRef(props, 'taskId');
+const supportsVision = computed(() => modelSupportsVision(props.selectedModel));
 
 const {
   draft,
   mentions,
+  imageAttachments,
   composerRef,
   composerRootRef,
+  imageInputRef,
   activeSearchQuery,
   searchResults,
   searchLoading,
@@ -259,6 +323,8 @@ const {
   plusMenuOpen,
   composerIsEmpty,
   searchPanelLabel,
+  composerNotice,
+  dragActive,
   handleDraftInput,
   handleComposerKeyup,
   handleComposerKeydown,
@@ -266,7 +332,14 @@ const {
   openSearchFromMenu,
   selectWorkspaceEntry,
   removeMention,
+  removeImageAttachment,
   togglePlusMenu,
+  triggerImagePicker,
+  handleImageFileSelection,
+  handlePaste,
+  handleDrop,
+  handleDragOver,
+  handleDragLeave,
   handleDocumentPointerDown,
   syncComposerHeight,
   focusComposer,
@@ -275,6 +348,7 @@ const {
   disabled: disabledRef,
   sending: interactionLockedRef,
   taskId: taskIdRef,
+  supportsVision,
 });
 
 const modelMenuAnchorRef = ref<HTMLElement | null>(null);
@@ -288,6 +362,7 @@ const modelsRefreshing = ref(false);
 const resolvedCurrentProviderId = ref<number | null>(null);
 const resolvedCurrentModel = ref('');
 const modelMenuStyle = ref<Record<string, string>>({});
+const previewImage = ref<ComposerImageAttachment | null>(null);
 let activeModelRequestId = 0;
 
 const effectiveSelectedModel = computed(() => props.selectedModel?.trim() || resolvedCurrentModel.value.trim());
@@ -600,7 +675,7 @@ function syncModelMenuPosition() {
 
 function submit() {
   const content = draft.value.trim();
-  if ((!content && mentions.value.length === 0) || props.disabled || props.interactionLocked) {
+  if ((!content && mentions.value.length === 0 && imageAttachments.value.length === 0) || props.disabled || props.interactionLocked) {
     return;
   }
 
@@ -610,9 +685,18 @@ function submit() {
     content,
     directories,
     files,
+    images: imageAttachments.value,
   });
   resetComposer();
   closeModelMenu();
+}
+
+function openImagePreview(image: ComposerImageAttachment) {
+  previewImage.value = image;
+}
+
+function closeImagePreview() {
+  previewImage.value = null;
 }
 
 defineExpose({
@@ -632,6 +716,19 @@ function normalizePath(path?: string) {
     return normalized.slice('//?/'.length);
   }
   return normalized;
+}
+
+function modelSupportsVision(model?: string) {
+  const normalized = model?.trim().toLowerCase() ?? '';
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.includes('gpt-4o')
+    || normalized.includes('claude-3')
+    || normalized.includes('gemini')
+    || normalized.includes('vision')
+    || normalized.includes('vl');
 }
 
 </script>

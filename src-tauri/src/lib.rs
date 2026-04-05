@@ -14,7 +14,8 @@ use ma::ui::{
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
     UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
     UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertNoteRequest,
-    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_probe_models,
+    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiLoadWorkspaceImageRequest, fetch_probe_models,
     fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
@@ -143,7 +144,7 @@ async fn send_message(
     };
     let request = UiSendMessageRequest {
         task_id: Some(task_id),
-        content: input.content,
+        content_blocks: input.content_blocks,
     };
     backend
         .handle_send_message_with_progress_and_cancel(
@@ -362,6 +363,17 @@ fn search_workspace_entries(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn load_workspace_image(
+    state: tauri::State<'_, AppState>,
+    input: UiLoadWorkspaceImageRequest,
+) -> Result<UiWorkspaceImageView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .load_workspace_image(input)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = dotenvy::dotenv();
@@ -405,7 +417,8 @@ pub fn run() {
             delete_provider,
             set_default_provider,
             test_provider_connection,
-            search_workspace_entries
+            search_workspace_entries,
+            load_workspace_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running March");

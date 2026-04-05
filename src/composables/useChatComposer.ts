@@ -1,6 +1,6 @@
 import { computed, ref, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { WorkspaceEntryView } from '@/data/mock';
+import type { ChatImageAttachment, WorkspaceEntryView, WorkspaceImageView } from '@/data/mock';
 
 export type MentionKind = 'file' | 'directory';
 
@@ -9,30 +9,49 @@ export type MentionItem = {
   kind: MentionKind;
 };
 
+export type ComposerImageAttachment = ChatImageAttachment;
+
+type SearchMode = 'smart' | 'file' | 'directory';
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+
 export function useChatComposer(options: {
   disabled: Ref<boolean>;
   sending: Ref<boolean>;
   taskId: Ref<number | null | undefined>;
+  supportsVision: Ref<boolean>;
 }) {
-  const { disabled, sending, taskId } = options;
+  const {
+    disabled,
+    sending,
+    taskId,
+    supportsVision,
+  } = options;
 
   const draft = ref('');
   const mentions = ref<MentionItem[]>([]);
+  const imageAttachments = ref<ComposerImageAttachment[]>([]);
   const composerRef = ref<HTMLTextAreaElement | null>(null);
   const composerRootRef = ref<HTMLElement | null>(null);
+  const imageInputRef = ref<HTMLInputElement | null>(null);
   const composerMaxHeight = 160;
   const activeSearchQuery = ref('');
   const searchResults = ref<WorkspaceEntryView[]>([]);
   const searchLoading = ref(false);
   const highlightedResultIndex = ref(0);
   const searchPanelOpen = ref(false);
-  const searchMode = ref<'smart' | 'file' | 'directory'>('smart');
+  const searchMode = ref<SearchMode>('smart');
   const mentionQueryRange = ref<{ start: number; end: number } | null>(null);
   const plusMenuOpen = ref(false);
   const lastSearchQuery = ref('');
-  const lastSearchMode = ref<'smart' | 'file' | 'directory' | null>(null);
+  const lastSearchMode = ref<SearchMode | null>(null);
+  const composerNotice = ref('');
+  const dragActive = ref(false);
+  let composerNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const composerIsEmpty = computed(() => !draft.value.trim() && mentions.value.length === 0);
+  const composerIsEmpty = computed(() =>
+    !draft.value.trim() && mentions.value.length === 0 && imageAttachments.value.length === 0,
+  );
   const searchPanelLabel = computed(() => {
     if (searchMode.value === 'file') {
       return '选择文件';
@@ -89,11 +108,7 @@ export function useChatComposer(options: {
 
   async function updateMentionQueryFromCursor() {
     const textarea = composerRef.value;
-    if (!textarea) {
-      return;
-    }
-
-    if (searchMode.value !== 'smart') {
+    if (!textarea || searchMode.value !== 'smart') {
       return;
     }
 
@@ -101,11 +116,8 @@ export function useChatComposer(options: {
     const prefix = draft.value.slice(0, cursor);
     const match = prefix.match(/(^|\s)@([^\s@]*)$/);
     if (!match || typeof match.index !== 'number') {
-      searchPanelOpen.value = false;
-      mentionQueryRange.value = null;
+      closeSearchPanel();
       activeSearchQuery.value = '';
-      lastSearchQuery.value = '';
-      lastSearchMode.value = null;
       return;
     }
 
@@ -116,16 +128,16 @@ export function useChatComposer(options: {
     await loadSearchResults(query, 'smart');
   }
 
-  async function loadSearchResults(query: string, mode: 'smart' | 'file' | 'directory') {
+  async function loadSearchResults(query: string, mode: SearchMode) {
     if (disabled.value || !taskId.value) {
       return;
     }
 
     if (
-      searchPanelOpen.value &&
-      lastSearchQuery.value === query &&
-      lastSearchMode.value === mode &&
-      searchResults.value.length > 0
+      searchPanelOpen.value
+      && lastSearchQuery.value === query
+      && lastSearchMode.value === mode
+      && searchResults.value.length > 0
     ) {
       return;
     }
@@ -158,6 +170,36 @@ export function useChatComposer(options: {
   }
 
   async function selectWorkspaceEntry(entry: WorkspaceEntryView) {
+    if (entry.kind === 'file' && isImagePath(entry.path)) {
+      if (!supportsVision.value) {
+        showComposerNotice('当前模型不支持图片输入');
+        removeMentionQueryFromDraft();
+        closeSearchPanel();
+        return;
+      }
+
+      if (!taskId.value) {
+        return;
+      }
+
+      const image = await invoke<WorkspaceImageView>('load_workspace_image', {
+        input: {
+          taskId: taskId.value,
+          path: entry.path,
+        },
+      });
+      addImageAttachment({
+        id: `workspace:${image.path}`,
+        name: image.name,
+        previewUrl: image.dataUrl,
+        mediaType: image.mediaType,
+        sourcePath: image.path,
+      });
+      removeMentionQueryFromDraft();
+      closeSearchPanel();
+      return;
+    }
+
     if (mentions.value.some((item) => item.path === entry.path && item.kind === entry.kind)) {
       closeSearchPanel();
       return;
@@ -170,15 +212,7 @@ export function useChatComposer(options: {
         kind: entry.kind,
       },
     ];
-
-    if (mentionQueryRange.value) {
-      const { start, end } = mentionQueryRange.value;
-      draft.value = `${draft.value.slice(0, start)}${draft.value.slice(end)}`.replace(/\s{2,}/g, ' ').trimStart();
-      composerRef.value?.focus();
-      const nextCursor = start;
-      composerRef.value?.setSelectionRange(nextCursor, nextCursor);
-    }
-
+    removeMentionQueryFromDraft();
     closeSearchPanel();
   }
 
@@ -186,10 +220,69 @@ export function useChatComposer(options: {
     mentions.value = mentions.value.filter((item) => !(item.path === path && item.kind === kind));
   }
 
+  function removeImageAttachment(id: string) {
+    imageAttachments.value = imageAttachments.value.filter((item) => item.id !== id);
+  }
+
   function togglePlusMenu() {
     plusMenuOpen.value = !plusMenuOpen.value;
     if (plusMenuOpen.value) {
       searchPanelOpen.value = false;
+    }
+  }
+
+  function triggerImagePicker() {
+    plusMenuOpen.value = false;
+    if (!supportsVision.value) {
+      showComposerNotice('当前模型不支持图片输入');
+      return;
+    }
+    imageInputRef.value?.click();
+  }
+
+  async function handleImageFileSelection(event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    const files = Array.from(target?.files ?? []);
+    await attachImageFiles(files);
+    if (target) {
+      target.value = '';
+    }
+  }
+
+  async function handlePaste(event: ClipboardEvent) {
+    const files = extractImageFiles(event.clipboardData?.items);
+    if (!files.length) {
+      return;
+    }
+
+    event.preventDefault();
+    await attachImageFiles(files);
+  }
+
+  async function handleDrop(event: DragEvent) {
+    dragActive.value = false;
+    const files = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith('image/'));
+    if (!files.length) {
+      return;
+    }
+
+    event.preventDefault();
+    await attachImageFiles(files);
+  }
+
+  function handleDragOver(event: DragEvent) {
+    if (!hasImageFile(event.dataTransfer?.items)) {
+      dragActive.value = false;
+      return;
+    }
+
+    event.preventDefault();
+    dragActive.value = true;
+  }
+
+  function handleDragLeave(event: DragEvent) {
+    if (!composerRootRef.value?.contains(event.relatedTarget as Node | null)) {
+      dragActive.value = false;
     }
   }
 
@@ -241,8 +334,82 @@ export function useChatComposer(options: {
   function resetComposer() {
     draft.value = '';
     mentions.value = [];
+    imageAttachments.value = [];
+    dragActive.value = false;
+    composerNotice.value = '';
     closeAllMenus();
     syncComposerHeight(true);
+  }
+
+  function showComposerNotice(message: string) {
+    composerNotice.value = message;
+    if (composerNoticeTimer) {
+      clearTimeout(composerNoticeTimer);
+    }
+    composerNoticeTimer = setTimeout(() => {
+      composerNotice.value = '';
+      composerNoticeTimer = null;
+    }, 2200);
+  }
+
+  async function attachImageFiles(files: File[]) {
+    if (!files.length) {
+      return;
+    }
+    if (!supportsVision.value) {
+      showComposerNotice('当前模型不支持图片输入');
+      return;
+    }
+
+    const imageFiles = files.filter((file) => file.type.startsWith('image/') || isImagePath(file.name));
+    const attachments = await Promise.all(imageFiles.map(fileToImageAttachment));
+    attachments.forEach(addImageAttachment);
+  }
+
+  function addImageAttachment(attachment: ComposerImageAttachment) {
+    if (imageAttachments.value.some((item) => item.id === attachment.id)) {
+      return;
+    }
+    imageAttachments.value = [...imageAttachments.value, attachment];
+  }
+
+  function removeMentionQueryFromDraft() {
+    if (!mentionQueryRange.value) {
+      return;
+    }
+
+    const { start, end } = mentionQueryRange.value;
+    draft.value = `${draft.value.slice(0, start)}${draft.value.slice(end)}`.replace(/\s{2,}/g, ' ').trimStart();
+    composerRef.value?.focus();
+    composerRef.value?.setSelectionRange(start, start);
+    mentionQueryRange.value = null;
+  }
+
+  async function fileToImageAttachment(file: File): Promise<ComposerImageAttachment> {
+    const previewUrl = await readFileAsDataUrl(file);
+    return {
+      id: `upload:${file.name}:${file.size}:${file.lastModified}`,
+      name: file.name,
+      previewUrl,
+      mediaType: file.type || inferImageMediaType(file.name),
+    };
+  }
+
+  function extractImageFiles(items?: DataTransferItemList | null) {
+    if (!items) {
+      return [];
+    }
+    return Array.from(items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+  }
+
+  function hasImageFile(items?: DataTransferItemList | null) {
+    if (!items) {
+      return false;
+    }
+    return Array.from(items).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
   }
 
   function isModifierOnlyKey(key: string) {
@@ -252,8 +419,10 @@ export function useChatComposer(options: {
   return {
     draft,
     mentions,
+    imageAttachments,
     composerRef,
     composerRootRef,
+    imageInputRef,
     activeSearchQuery,
     searchResults,
     searchLoading,
@@ -262,6 +431,8 @@ export function useChatComposer(options: {
     plusMenuOpen,
     composerIsEmpty,
     searchPanelLabel,
+    composerNotice,
+    dragActive,
     handleDraftInput,
     handleComposerKeyup,
     handleComposerKeydown,
@@ -269,11 +440,60 @@ export function useChatComposer(options: {
     openSearchFromMenu,
     selectWorkspaceEntry,
     removeMention,
+    removeImageAttachment,
     togglePlusMenu,
+    triggerImagePicker,
+    handleImageFileSelection,
+    handlePaste,
+    handleDrop,
+    handleDragOver,
+    handleDragLeave,
     closeAllMenus,
     handleDocumentPointerDown,
     syncComposerHeight,
     focusComposer,
     resetComposer,
   };
+}
+
+function isImagePath(path: string) {
+  const normalized = path.trim().toLowerCase();
+  const extension = normalized.split('.').pop();
+  return !!extension && IMAGE_EXTENSIONS.has(extension);
+}
+
+function inferImageMediaType(name: string) {
+  const extension = name.trim().toLowerCase().split('.').pop();
+  switch (extension) {
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'bmp':
+      return 'image/bmp';
+    case 'svg':
+      return 'image/svg+xml';
+    default:
+      return 'image/png';
+  }
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error(`failed to read image file ${file.name}`));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error(`failed to read image file ${file.name}`));
+    reader.readAsDataURL(file);
+  });
 }

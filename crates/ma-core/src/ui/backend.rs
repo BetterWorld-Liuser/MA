@@ -1,12 +1,14 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
+use base64::Engine;
 
 use crate::agent::{
     AgentConfig, AgentProgressEvent, AgentSession, DebugRound, is_turn_cancelled_error,
 };
-use crate::context::ConversationHistory;
+use crate::context::{ContentBlock, ConversationHistory, join_text_blocks};
 use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
 use crate::paths::{canonicalize_clean, clean_path};
 use crate::settings::{ProviderType, SettingsStorage};
@@ -18,10 +20,11 @@ use super::{
     DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProgressEvent,
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDebugTraceView,
     UiDeleteNoteRequest, UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest,
+    UiComposerContentBlock, UiLoadWorkspaceImageRequest,
     UiProviderSettingsView, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
     UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
     UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot, UiUpsertNoteRequest, UiUpsertProviderRequest,
-    UiWorkspaceEntryView, UiWorkspaceSnapshot,
+    UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
 impl UiAppBackend {
@@ -212,13 +215,23 @@ impl UiAppBackend {
         C: Fn() -> bool,
     {
         let task_id = self.resolve_or_create_task_id(request.task_id)?;
-        let content = request.content.trim();
-        if content.is_empty() {
+        let content_blocks = request
+            .content_blocks
+            .into_iter()
+            .map(content_block_from_ui)
+            .collect::<Vec<_>>();
+        let content_text = join_text_blocks(&content_blocks);
+        if content_blocks.is_empty()
+            || content_blocks.iter().all(|block| match block {
+                ContentBlock::Text { text } => text.trim().is_empty(),
+                ContentBlock::Image { .. } => false,
+            })
+        {
             bail!("message cannot be empty");
         }
 
         let persisted_before = self.storage.load_task(task_id)?;
-        let should_auto_title = should_auto_title(&persisted_before, content);
+        let should_auto_title = should_auto_title(&persisted_before, &content_text);
         let provider_config = provider_config_for_task(&persisted_before.task)?;
         let provider = OpenAiCompatibleClient::new(provider_config.clone());
         let context_budget_tokens =
@@ -243,12 +256,12 @@ impl UiAppBackend {
         on_progress(UiAgentProgressEvent::TurnStarted {
             task_id,
             turn_id: turn_id.clone(),
-            user_message: content.to_string(),
+            user_message: content_text.clone(),
         })?;
         let result = session
             .handle_user_message_with_events_and_cancel(
                 &provider,
-                content.to_string(),
+                content_blocks,
                 &is_cancelled,
                 |session, event| {
                     match event {
@@ -357,11 +370,11 @@ impl UiAppBackend {
         self.save_session(task_id, &session)?;
         if should_auto_title {
             let suggested_title = provider
-                .suggest_task_title(content)
+                .suggest_task_title(&content_text)
                 .await
                 .ok()
                 .flatten()
-                .or_else(|| fallback_task_title(content));
+                .or_else(|| fallback_task_title(&content_text));
             self.apply_suggested_task_title(task_id, suggested_title)?;
         }
         let mut workspace = self.workspace_snapshot(Some(task_id))?;
@@ -650,6 +663,32 @@ impl UiAppBackend {
         )
     }
 
+    pub fn load_workspace_image(
+        &self,
+        request: UiLoadWorkspaceImageRequest,
+    ) -> Result<UiWorkspaceImageView> {
+        let working_directory = self.working_directory_for_task(request.task_id)?;
+        let resolved_path = resolve_workspace_path(&working_directory, &request.path)?;
+        let media_type = infer_image_media_type(&resolved_path)
+            .ok_or_else(|| anyhow::anyhow!("unsupported image format: {}", resolved_path.display()))?;
+        let bytes = fs::read(&resolved_path)
+            .with_context(|| format!("failed to read image {}", resolved_path.display()))?;
+
+        Ok(UiWorkspaceImageView {
+            path: clean_path(resolved_path.clone()),
+            media_type: media_type.to_string(),
+            data_url: format!(
+                "data:{};base64,{}",
+                media_type,
+                base64::engine::general_purpose::STANDARD.encode(bytes),
+            ),
+            name: resolved_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| resolved_path.display().to_string()),
+        })
+    }
+
     pub fn workspace_path(&self) -> &std::path::Path {
         &self.workspace_path
     }
@@ -713,4 +752,38 @@ async fn resolve_context_window_with_provider(
         .ok()
         .flatten()
         .or_else(|| Some(resolve_context_window_fallback(Some(current_model))))
+}
+
+fn resolve_workspace_path(working_directory: &Path, path: &Path) -> Result<PathBuf> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        working_directory.join(path)
+    };
+
+    canonicalize_clean(&candidate).with_context(|| format!("failed to resolve {}", candidate.display()))
+}
+
+fn infer_image_media_type(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_string_lossy().to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
+fn content_block_from_ui(block: UiComposerContentBlock) -> ContentBlock {
+    match block {
+        UiComposerContentBlock::Text { text } => ContentBlock::text(text),
+        UiComposerContentBlock::Image {
+            media_type,
+            data_base64,
+            source_path,
+            name,
+        } => ContentBlock::image(media_type, data_base64, source_path, name),
+    }
 }

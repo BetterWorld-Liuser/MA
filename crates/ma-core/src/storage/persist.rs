@@ -7,7 +7,10 @@ use rusqlite::{Transaction, params};
 use crate::context::{ConversationHistory, Hint, NoteEntry};
 
 use super::PersistedOpenFile;
-use super::codec::{encode_tool_summaries, optional_unix_timestamp, role_to_db, unix_timestamp};
+use super::codec::{
+    encode_content_blocks, encode_tool_summaries, optional_unix_timestamp, role_to_db,
+    unix_timestamp,
+};
 
 pub fn update_task_last_active(
     transaction: &Transaction<'_>,
@@ -49,7 +52,7 @@ pub fn replace_conversation_history(
             .execute(params![
                 task_id,
                 role_to_db(turn.role),
-                turn.content,
+                encode_content_blocks(&turn.content)?,
                 summaries,
                 unix_timestamp(turn.timestamp)?,
             ])

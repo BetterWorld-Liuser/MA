@@ -6,8 +6,8 @@ use indexmap::IndexMap;
 
 use crate::context::{
     AgentContext, AgentContextBuilder, ContextBuildConfig, ContextPressure, ConversationHistory,
-    DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SessionStatus, SystemStatus,
-    ToolSummary,
+    ContentBlock, DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SessionStatus,
+    SystemStatus, ToolSummary, join_text_blocks,
 };
 use crate::paths::clean_path;
 use crate::storage::{PersistedOpenFile, PersistedTask, PersistedTaskState};
@@ -245,7 +245,7 @@ impl AgentSession {
         }
     }
 
-    pub fn add_user_turn(&mut self, content: impl Into<String>) {
+    pub fn add_user_turn(&mut self, content: impl Into<Vec<ContentBlock>>) {
         self.history.turns.push(DisplayTurn {
             role: Role::User,
             content: content.into(),
@@ -254,7 +254,11 @@ impl AgentSession {
         });
     }
 
-    pub fn add_assistant_turn(&mut self, content: impl Into<String>, tool_calls: Vec<ToolSummary>) {
+    pub fn add_assistant_turn(
+        &mut self,
+        content: impl Into<Vec<ContentBlock>>,
+        tool_calls: Vec<ToolSummary>,
+    ) {
         self.history.turns.push(DisplayTurn {
             role: Role::Assistant,
             content: content.into(),
@@ -312,6 +316,7 @@ impl AgentSession {
         let context = AgentContextBuilder::new(self.config.system_core.clone())
             .with_config(ContextBuildConfig {
                 max_recent_chat_turns: self.config.max_recent_turns,
+                max_recent_chat_image_turns: 4,
             })
             .injections(self.injections.clone())
             .tools(tools)
@@ -447,7 +452,7 @@ impl AgentSession {
                 self.history
                     .turns
                     .iter()
-                    .map(|turn| estimate_token_count(&turn.content))
+                    .map(|turn| estimate_content_blocks_token_count(&turn.content))
                     .sum(),
             ),
             UiContextUsageSectionView::new(
@@ -555,7 +560,7 @@ impl AgentSession {
                 .history
                 .turns
                 .iter()
-                .map(|turn| estimate_token_count(&turn.content))
+                .map(|turn| estimate_content_blocks_token_count(&turn.content))
                 .sum::<usize>()
             + self
                 .open_file_snapshots()
@@ -581,6 +586,12 @@ fn estimate_token_count(text: &str) -> usize {
     let ascii_chars = text.chars().filter(|ch| ch.is_ascii()).count();
     let non_ascii_chars = text.chars().count().saturating_sub(ascii_chars);
     ascii_chars.div_ceil(4) + non_ascii_chars
+}
+
+fn estimate_content_blocks_token_count(content: &[ContentBlock]) -> usize {
+    let text_tokens = estimate_token_count(&join_text_blocks(content));
+    let image_tokens = content.iter().map(ContentBlock::image_token_cost).sum::<usize>();
+    text_tokens + image_tokens
 }
 
 fn clean_unique_paths(paths: &[PathBuf]) -> Vec<PathBuf> {

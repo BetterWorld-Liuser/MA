@@ -2155,6 +2155,7 @@ name = "ma-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "dotenvy",
  "encoding_rs",
