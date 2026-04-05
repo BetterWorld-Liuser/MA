@@ -1,12 +1,8 @@
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow, bail};
-use encoding_rs::GBK;
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,6 +26,16 @@ use crate::ui::{
     UiRuntimeSnapshot, UiShellView, UiSkillView, UiSystemStatusView,
 };
 use crate::watcher::FileWatcherService;
+
+mod editing;
+mod shells;
+
+pub use shells::{AvailableShell, CommandShell};
+use editing::{delete_line_range, edit_lines, insert_line_block, replace_line_range};
+use shells::{
+    decode_command_output, detect_available_shells, parse_shell, platform_label, shell_command,
+    workspace_entries,
+};
 
 const AGENTS_FILENAME: &str = "AGENTS.md";
 const TURN_CANCELLED_ERROR_MESSAGE: &str = "turn cancelled";
@@ -114,14 +120,6 @@ Tone:
 pub struct CommandRequest {
     pub command: String,
     pub shell: CommandShell,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandShell {
-    Sh,
-    Bash,
-    PowerShell,
-    Cmd,
 }
 
 #[derive(Debug, Clone)]
@@ -1151,64 +1149,6 @@ fn format_tool_error(tool_name: &str, error: &anyhow::Error) -> String {
     format!("Tool `{tool_name}` failed.\nError: {error:#}")
 }
 
-fn decode_command_output(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-
-    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-        return text.trim().to_string();
-    }
-
-    #[cfg(windows)]
-    {
-        let (decoded, _, had_errors) = GBK.decode(bytes);
-        if !had_errors {
-            return decoded.trim().to_string();
-        }
-    }
-
-    String::from_utf8_lossy(bytes).trim().to_string()
-}
-
-fn platform_label() -> &'static str {
-    match std::env::consts::OS {
-        "windows" => "Windows",
-        "macos" => "macOS",
-        "linux" => "Linux",
-        other => other,
-    }
-}
-
-fn workspace_entries(working_directory: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(working_directory) else {
-        return Vec::new();
-    };
-
-    let mut entries = entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let file_type = entry.file_type().ok()?;
-            let mut name = entry.file_name().to_string_lossy().to_string();
-            if file_type.is_dir() {
-                name.push('/');
-            }
-            Some((file_type.is_dir(), name))
-        })
-        .collect::<Vec<_>>();
-
-    // 目录优先，再按名称排序，保证 session 级目录摘要稳定。
-    entries.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
-            .then_with(|| left.1.cmp(&right.1))
-    });
-
-    entries.into_iter().map(|(_, name)| name).collect()
-}
-
 fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome {
     ToolOutcome {
         result_text,
@@ -1350,81 +1290,6 @@ fn format_tool_output(execution: &CommandExecution) -> String {
     }
     text
 }
-
-impl CommandShell {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Sh => "sh",
-            Self::Bash => "bash",
-            Self::PowerShell => "powershell",
-            Self::Cmd => "cmd",
-        }
-    }
-
-    fn candidates(self) -> &'static [&'static str] {
-        match self {
-            Self::Sh => &["sh"],
-            Self::Bash => &["bash"],
-            Self::PowerShell => &["pwsh", "powershell"],
-            Self::Cmd => &["cmd"],
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AvailableShell {
-    pub kind: CommandShell,
-    pub program: String,
-}
-
-fn shell_command(
-    shell: CommandShell,
-    program: &str,
-    command: &str,
-    working_directory: &Path,
-) -> Result<std::process::Output> {
-    match shell {
-        CommandShell::Sh => Command::new(program)
-            .args(["-lc", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn sh"),
-        CommandShell::Bash => Command::new(program)
-            .args(["-lc", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn bash"),
-        CommandShell::PowerShell => Command::new(program)
-            .args(["-NoProfile", "-Command", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn powershell"),
-        CommandShell::Cmd => Command::new(program)
-            .args(["/C", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn cmd"),
-    }
-}
-
-fn detect_available_shells() -> Result<Vec<AvailableShell>> {
-    let mut available = Vec::new();
-    for kind in [
-        CommandShell::PowerShell,
-        CommandShell::Cmd,
-        CommandShell::Bash,
-        CommandShell::Sh,
-    ] {
-        if let Some(program) = resolve_shell_program(kind) {
-            available.push(AvailableShell { kind, program });
-        }
-    }
-    if available.is_empty() {
-        bail!("failed to detect any runnable shell in current PATH");
-    }
-    Ok(available)
-}
-
 fn load_skills_for_workspace(working_directory: &Path) -> Result<(Vec<SkillEntry>, Injection)> {
     let config = MarchConfig::load_for_workspace(working_directory)?;
     let loader = SkillLoader::new(working_directory.to_path_buf(), user_home_dir()?);
@@ -1441,96 +1306,6 @@ fn upsert_injection(injections: &mut Vec<Injection>, next: Injection) {
     }
 }
 
-fn resolve_shell_program(shell: CommandShell) -> Option<String> {
-    resolve_shell_program_with(shell, executable_in_path, shell_probe_succeeds)
-}
-
-fn resolve_shell_program_with<L, P>(
-    shell: CommandShell,
-    locate_program: L,
-    probe_program: P,
-) -> Option<String>
-where
-    L: Fn(&str) -> Option<PathBuf>,
-    P: Fn(CommandShell, &Path) -> bool,
-{
-    shell.candidates().iter().find_map(|candidate| {
-        let executable = locate_program(candidate)?;
-        // Only advertise shells that can complete a minimal command round-trip.
-        // This filters out PATH stubs such as WindowsApps\bash.exe when WSL is not installed.
-        probe_program(shell, &executable).then(|| (*candidate).to_string())
-    })
-}
-
-fn shell_probe_succeeds(shell: CommandShell, program: &Path) -> bool {
-    let mut command = Command::new(program);
-    match shell {
-        CommandShell::Sh | CommandShell::Bash => {
-            command.args(["-lc", "exit 0"]);
-        }
-        CommandShell::PowerShell => {
-            command.args(["-NoProfile", "-Command", "exit 0"]);
-        }
-        CommandShell::Cmd => {
-            command.args(["/C", "exit 0"]);
-        }
-    }
-    command.output().is_ok_and(|output| output.status.success())
-}
-
-fn executable_in_path(program: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    let path_exts = executable_extensions();
-    for dir in env::split_paths(&path) {
-        for candidate in candidate_paths(&dir, program, &path_exts) {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-fn candidate_paths(dir: &Path, program: &str, extensions: &[OsString]) -> Vec<PathBuf> {
-    let mut candidates = vec![dir.join(program)];
-    if Path::new(program).extension().is_none() {
-        for ext in extensions {
-            let ext = ext.to_string_lossy();
-            let suffix = if ext.starts_with('.') {
-                ext.to_string()
-            } else {
-                format!(".{ext}")
-            };
-            candidates.push(dir.join(format!("{program}{suffix}")));
-        }
-    }
-    candidates
-}
-
-fn executable_extensions() -> Vec<OsString> {
-    #[cfg(windows)]
-    {
-        env::var_os("PATHEXT")
-            .map(|value| {
-                value
-                    .to_string_lossy()
-                    .split(';')
-                    .filter(|ext| !ext.is_empty())
-                    .map(OsString::from)
-                    .collect()
-            })
-            .unwrap_or_else(|| {
-                vec![".COM", ".EXE", ".BAT", ".CMD"]
-                    .into_iter()
-                    .map(OsString::from)
-                    .collect()
-            })
-    }
-    #[cfg(not(windows))]
-    {
-        Vec::new()
-    }
-}
 
 fn normalize_open_files_for_workspace(
     working_directory: &Path,
@@ -1572,98 +1347,6 @@ fn absolutize_workspace_path(working_directory: &Path, path: PathBuf) -> PathBuf
     }
 }
 
-fn parse_shell(shell: &str) -> Result<CommandShell> {
-    match shell {
-        "sh" => Ok(CommandShell::Sh),
-        "bash" => Ok(CommandShell::Bash),
-        "powershell" | "pwsh" => Ok(CommandShell::PowerShell),
-        "cmd" => Ok(CommandShell::Cmd),
-        other => bail!("unsupported shell {}", other),
-    }
-}
-
-fn edit_lines<F>(path: &Path, mutate: F) -> Result<()>
-where
-    F: FnOnce(&mut Vec<String>) -> Result<()>,
-{
-    let content =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let trailing_newline = content.ends_with('\n');
-    let mut lines = if content.is_empty() {
-        Vec::new()
-    } else {
-        content
-            .split('\n')
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-    };
-    if lines.last().is_some_and(|line| line.is_empty()) {
-        lines.pop();
-    }
-    mutate(&mut lines)?;
-    let mut output = lines.join("\n");
-    if trailing_newline {
-        output.push('\n');
-    }
-    fs::write(path, output).with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(())
-}
-
-fn replace_line_range(
-    lines: &mut Vec<String>,
-    start_line: usize,
-    end_line: usize,
-    new_content: &str,
-) -> Result<()> {
-    validate_line_range(lines, start_line, end_line)?;
-    let replacement = new_content
-        .trim_end_matches('\n')
-        .split('\n')
-        .filter(|part| !part.is_empty() || !new_content.is_empty())
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-    lines.splice((start_line - 1)..end_line, replacement);
-    Ok(())
-}
-
-fn insert_line_block(lines: &mut Vec<String>, after_line: usize, new_content: &str) -> Result<()> {
-    if after_line > lines.len() {
-        bail!(
-            "insert_lines after_line {} is out of range for {} lines",
-            after_line,
-            lines.len()
-        );
-    }
-    let insertion = if new_content.is_empty() {
-        Vec::new()
-    } else {
-        new_content
-            .trim_end_matches('\n')
-            .split('\n')
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-    };
-    lines.splice(after_line..after_line, insertion);
-    Ok(())
-}
-
-fn delete_line_range(lines: &mut Vec<String>, start_line: usize, end_line: usize) -> Result<()> {
-    validate_line_range(lines, start_line, end_line)?;
-    lines.drain((start_line - 1)..end_line);
-    Ok(())
-}
-
-fn validate_line_range(lines: &[String], start_line: usize, end_line: usize) -> Result<()> {
-    if start_line == 0 || end_line == 0 || start_line > end_line || end_line > lines.len() {
-        bail!(
-            "invalid line range {}-{} for {} lines",
-            start_line,
-            end_line,
-            lines.len()
-        );
-    }
-    Ok(())
-}
 
 #[derive(Debug, Deserialize)]
 struct RunCommandArgs {
@@ -1725,8 +1408,9 @@ mod tests {
     use super::{
         AGENTS_FILENAME, AgentConfig, AgentSession, CommandShell,
         append_assistant_tool_call_message, decode_command_output, default_system_core,
-        normalize_open_files_for_workspace, resolve_shell_program_with,
+        normalize_open_files_for_workspace,
     };
+    use super::shells::resolve_shell_program_with;
     use crate::context::{ConversationHistory, Hint, NoteEntry};
     use crate::provider::{ProviderToolCall, RequestMessage};
     use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource};
