@@ -309,7 +309,7 @@
 }
 
 @utility chat-row {
-  @apply mb-2 flex items-start gap-1.5;
+  @apply mb-2 flex w-full min-w-0 items-start gap-1.5;
 }
 
 @utility chat-row-user {
@@ -321,7 +321,7 @@
 }
 
 @utility message-stack {
-  @apply flex min-w-0 max-w-[83%] flex-col gap-0.75;
+  @apply flex min-w-0 max-w-[min(83%,calc(100%-2.25rem))] flex-col gap-0.75;
 }
 
 @utility message-meta {
@@ -769,6 +769,22 @@
 
 @utility open-file-glyph-unlocked {
   @apply text-text-dim hover:text-text-muted;
+}
+
+@utility open-files-tree-row {
+  @apply flex min-h-7 items-center gap-1.5 rounded-md py-0.75 pr-2 transition hover:bg-bg-secondary;
+}
+
+@utility open-files-tree-row-directory {
+  @apply text-left;
+}
+
+@utility open-files-tree-arrow {
+  @apply inline-flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px];
+}
+
+@utility open-files-tree-lock {
+  @apply shrink-0 text-[10px];
 }
 
 @utility context-divider {

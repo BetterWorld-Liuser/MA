@@ -224,7 +224,7 @@ export function useWorkspaceApp() {
     });
   }
 
-  async function sendMessage(payload: { content: string; directories: string[] }) {
+  async function sendMessage(payload: { content: string; directories: string[]; files: string[] }) {
     if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
       return;
     }
@@ -244,6 +244,15 @@ export function useWorkspaceApp() {
     sendingTaskId.value = taskId;
 
     try {
+      if (payload.files.length) {
+        snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
+          input: {
+            taskId,
+            paths: payload.files,
+          },
+        });
+      }
+
       const nextSnapshot = await invoke<BackendWorkspaceSnapshot>('send_message', {
         input: {
           taskId,
@@ -306,7 +315,7 @@ export function useWorkspaceApp() {
     }
   }
 
-  function augmentComposerMessage(payload: { content: string; directories: string[] }) {
+  function augmentComposerMessage(payload: { content: string; directories: string[]; files: string[] }) {
     const base = payload.content.trim();
     if (!payload.directories.length) {
       return base;

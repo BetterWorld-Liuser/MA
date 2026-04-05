@@ -1,5 +1,5 @@
 <template>
-  <div ref="scrollContainer" class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+  <div ref="scrollContainer" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2.5 py-2">
     <div v-if="!chat.length" class="empty-state">
       <p class="text-[12px] text-text">No messages yet.</p>
       <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>

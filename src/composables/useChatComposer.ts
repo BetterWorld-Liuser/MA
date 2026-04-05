@@ -13,9 +13,8 @@ export function useChatComposer(options: {
   disabled: Ref<boolean>;
   sending: Ref<boolean>;
   taskId: Ref<number | null | undefined>;
-  onOpenFiles: (paths: string[]) => void;
 }) {
-  const { disabled, sending, taskId, onOpenFiles } = options;
+  const { disabled, sending, taskId } = options;
 
   const draft = ref('');
   const mentions = ref<MentionItem[]>([]);
@@ -171,10 +170,6 @@ export function useChatComposer(options: {
         kind: entry.kind,
       },
     ];
-
-    if (entry.kind === 'file') {
-      onOpenFiles([entry.path]);
-    }
 
     if (mentionQueryRange.value) {
       const { start, end } = mentionQueryRange.value;

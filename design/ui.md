@@ -163,21 +163,33 @@ plan     1. 读现有结构 2. 拆接口层     [编辑] [×]
 
 ### 监控文件区
 
+以可折叠的虚拟目录树展示当前被打开的文件，从 `open_files` 路径集合动态构建，不展示未打开的文件。
+
 ```
-[监控文件]
-  src/auth.rs        2.8k tok  ← 高饱和
-  src/lib.rs         1.9k tok  ← 高饱和
-  src/models.rs      0.9k tok  ← 中饱和
-🔒 config/prod.toml  0.3k tok  ← 低饱和
-                     [+ 打开文件]
+[监控文件]  8 files · 5.9k tok
+  ▾ src/
+    ▾ auth/
+        mod.rs          1.2k tok
+        middleware.rs   0.8k tok
+        session.rs      0.6k tok
+    ▸ api/                              1.4k tok
+      lib.rs            0.5k tok
+  🔒 AGENTS.md          0.5k tok
+  ▾ config/
+    🔒 prod.toml        0.3k tok
+      dev.toml          0.6k tok
+                                   [+ 打开文件]
 ```
 
-- 顺序与 AI 实际收到的上下文顺序一致
-- 次信息优先展示该文件的估算 token 消耗，而不是时间戳
-- 文件名的文字饱和度仍可作为轻量辅助视觉，用来区分 locked / 非 locked 或内容状态，但不单独渲染时间
-- 锁定图标表示 locked，close 操作被禁用
-- 右键菜单：关闭文件、锁定/解锁
+- 文件夹可折叠，折叠态显示目录 token 汇总，展开态各文件独立显示
+- 🔒 图标在文件名前标识 locked 状态，close 操作被禁用
+- 同级排序：目录在前、文件在后，同类按字母排序
+- 只有单个子目录的中间层做路径压缩（如 `src/services/auth/` 合并为一行）
+- 工作目录外的文件归入「外部文件」分组
+- 右键菜单：文件（关闭、锁定/解锁、在编辑器中打开）、目录（关闭目录下所有文件、折叠/展开）
 - `+ 打开文件` 弹出文件选择器
+
+详见 → [监控文件区目录树](ui-open-files-tree.md)
 
 ### 提示区（Hints）
 

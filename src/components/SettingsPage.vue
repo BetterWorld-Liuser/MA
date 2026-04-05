@@ -1,16 +1,23 @@
 <template>
   <section class="settings-shell">
     <header class="settings-header">
-      <div>
-        <p class="text-[11px] uppercase tracking-[0.18em] text-text-dim">Settings</p>
-        <h2 class="mt-1 text-[22px] font-semibold tracking-[-0.02em] text-text">应用设置</h2>
-        <p class="mt-2 max-w-[720px] text-[13px] leading-6 text-text-muted">
-          外观和 provider 都放在这里。主题会立即生效并保存在本地，provider 配置仍然由用户目录下的设置库统一管理。
-        </p>
+      <div class="flex items-start gap-3">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="mt-0.5 rounded-xl border border-[color:var(--ma-line-soft)]"
+          @click="emit('close')"
+        >
+          <Icon :icon="arrowLeftIcon" class="h-4 w-4" />
+        </Button>
+        <div>
+          <p class="text-[11px] uppercase tracking-[0.18em] text-text-dim">Settings</p>
+          <h2 class="mt-1 text-[22px] font-semibold tracking-[-0.02em] text-text">应用设置</h2>
+          <p class="mt-2 max-w-[720px] text-[13px] leading-6 text-text-muted">
+            外观和 provider 都放在这里。主题会立即生效并保存在本地，provider 配置仍然由用户目录下的设置库统一管理。
+          </p>
+        </div>
       </div>
-      <Button variant="ghost" size="icon" class="rounded-xl border border-[color:var(--ma-line-soft)]" @click="emit('close')">
-        <Icon :icon="xIcon" class="h-4 w-4" />
-      </Button>
     </header>
 
     <div class="settings-layout">
@@ -353,12 +360,12 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
+import arrowLeftIcon from '@iconify-icons/lucide/arrow-left';
 import checkIcon from '@iconify-icons/lucide/check';
 import moonIcon from '@iconify-icons/lucide/moon-star';
 import slidersHorizontalIcon from '@iconify-icons/lucide/sliders-horizontal';
 import serverIcon from '@iconify-icons/lucide/server-cog';
 import sunIcon from '@iconify-icons/lucide/sun-medium';
-import xIcon from '@iconify-icons/lucide/x';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { ThemeMode } from '@/composables/useAppearanceSettings';

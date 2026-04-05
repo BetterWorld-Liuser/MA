@@ -43,13 +43,13 @@
           :cancelling="isActiveTaskCancelling"
           @send="sendMessage"
           @cancel-turn="cancelCurrentTurn"
-          @open-files="openFilesFromComposer"
           @set-model="setTaskModel"
           @set-working-directory="setTaskWorkingDirectory"
         />
         <ContextPanel
           :notes="workspace.notes"
           :open-files="workspace.openFiles"
+          :working-directory="workspace.workingDirectory"
           :hints="workspace.hints"
           :skills="workspace.skills"
           :usage="workspace.contextUsage"

@@ -236,8 +236,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [payload: { content: string; directories: string[] }];
-  openFiles: [paths: string[]];
+  send: [payload: { content: string; directories: string[]; files: string[] }];
   setModel: [selection: { providerId?: number | null; model: string }];
   setWorkingDirectory: [path?: string | null];
   cancelTurn: [];
@@ -276,7 +275,6 @@ const {
   disabled: disabledRef,
   sending: interactionLockedRef,
   taskId: taskIdRef,
-  onOpenFiles: (paths) => emit('openFiles', paths),
 });
 
 const modelMenuAnchorRef = ref<HTMLElement | null>(null);
@@ -607,9 +605,11 @@ function submit() {
   }
 
   const directories = mentions.value.filter((item) => item.kind === 'directory').map((item) => item.path);
+  const files = mentions.value.filter((item) => item.kind === 'file').map((item) => item.path);
   emit('send', {
     content,
     directories,
+    files,
   });
   resetComposer();
   closeModelMenu();

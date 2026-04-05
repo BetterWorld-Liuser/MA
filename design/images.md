@@ -4,7 +4,11 @@
 
 ## 前提
 
-模型必须支持图片输入（multimodal vision）。March 在 session 初始化时检测当前模型是否支持图片，不支持时禁用图片相关能力并向用户提示。
+模型必须支持图片输入（multimodal vision）。March 在 session 初始化时通过 `ModelCapabilities.supports_vision` 判断当前模型是否支持图片（详见 → [模型能力解析](provider.md#模型能力解析)）。不支持时：
+
+- `view_image` 工具不注入 tools 列表，AI 不会尝试调用
+- 聊天框的图片粘贴/拖入入口禁用或隐藏
+- 用户 `@` 引用图片文件时，March 返回提示：当前模型不支持图片输入
 
 ---
 

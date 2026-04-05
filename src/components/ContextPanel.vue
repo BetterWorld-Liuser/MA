@@ -18,6 +18,7 @@
 
       <ContextOpenFilesSection
         :open-files="openFiles"
+        :workspace-root="workingDirectory"
         :busy="busy"
         @toggle-file-lock="(path, locked) => $emit('toggle-file-lock', path, locked)"
         @close-file="$emit('close-file', $event)"
@@ -290,6 +291,7 @@ import type { ContextUsage, DebugRoundItem, HintItem, NoteItem, OpenFileItem, Sk
 withDefaults(defineProps<{
   notes: NoteItem[];
   openFiles: OpenFileItem[];
+  workingDirectory?: string;
   hints: HintItem[];
   skills: SkillItem[];
   usage: ContextUsage;
@@ -298,6 +300,7 @@ withDefaults(defineProps<{
 }>(), {
   notes: () => [],
   openFiles: () => [],
+  workingDirectory: undefined,
   hints: () => [],
   skills: () => [],
   busy: false,

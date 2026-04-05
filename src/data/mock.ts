@@ -46,6 +46,10 @@ export type OpenFileItem = {
   tokenUsage: string;
   freshness: 'high' | 'medium' | 'low';
   locked: boolean;
+  state?: {
+    kind: 'available' | 'deleted' | 'moved';
+    newPath?: string;
+  };
 };
 
 export type HintItem = {
@@ -432,6 +436,7 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       tokenUsage: formatOpenFileTokenUsage(file.snapshot),
       freshness: file.locked ? 'low' : file.snapshot ? 'high' : 'medium',
       locked: file.locked,
+      state: mapOpenFileState(file.snapshot),
     })) ?? [],
     hints: activeTask?.hints.map((hint, index) => ({
       source: `Hint ${index + 1}`,
@@ -529,6 +534,27 @@ function formatHintTime(expiresAt?: number | null) {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return `${minutes}m${String(remainder).padStart(2, '0')}s`;
+}
+
+function mapOpenFileState(snapshot: BackendWorkspaceSnapshot['active_task'] extends infer T
+  ? T extends { open_files: Array<infer OpenFile> }
+    ? OpenFile extends { snapshot?: infer Snapshot }
+      ? Snapshot | undefined
+      : never
+    : never
+  : never) {
+  if (!snapshot || 'Available' in snapshot) {
+    return { kind: 'available' as const };
+  }
+
+  if ('Moved' in snapshot) {
+    return {
+      kind: 'moved' as const,
+      newPath: normalizePath(snapshot.Moved.new_path),
+    };
+  }
+
+  return { kind: 'deleted' as const };
 }
 
 function formatContextUsage(

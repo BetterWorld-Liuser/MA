@@ -77,6 +77,15 @@ struct ProviderModel {
     display_name: String,  // 界面展示名；genai 已知 provider 由 March 内置，compat 由用户填写
 }
 
+/// 模型能力描述，session 初始化时一次性解析，各模块按需消费
+struct ModelCapabilities {
+    context_window: u32,         // 最大输入 token 数
+    max_output_tokens: u32,      // 最大输出 token 数
+    supports_vision: bool,       // 图片输入
+    supports_audio: bool,        // 音频输入（预留）
+    supports_pdf: bool,          // PDF 原生输入（预留）
+}
+
 struct DefaultModel {
     provider_id: i64,
     model_id:    String,
@@ -105,13 +114,19 @@ CREATE TABLE providers (
     created_at    INTEGER NOT NULL
 );
 
--- genai 已知 provider 的模型列表由 March 内置，不存表
--- openai_compat 的可用模型由用户手动维护
+-- genai 已知 provider 的模型列表及能力由 March 内置，不存表
+-- openai_compat 的可用模型及能力由用户手动维护
+-- 已知 provider 中用户手填的未知 model_id 也存这里
 CREATE TABLE provider_models (
-    id           INTEGER PRIMARY KEY,
-    provider_id  INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-    model_id     TEXT    NOT NULL,
-    display_name TEXT    NOT NULL
+    id               INTEGER PRIMARY KEY,
+    provider_id      INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+    model_id         TEXT    NOT NULL,
+    display_name     TEXT    NOT NULL,
+    context_window   INTEGER NOT NULL DEFAULT 131072,  -- tokens
+    max_output       INTEGER NOT NULL DEFAULT 4096,    -- tokens
+    supports_vision  INTEGER NOT NULL DEFAULT 0,       -- boolean
+    supports_audio   INTEGER NOT NULL DEFAULT 0,       -- boolean
+    supports_pdf     INTEGER NOT NULL DEFAULT 0        -- boolean
 );
 
 -- 全局键值设置
@@ -135,20 +150,35 @@ CREATE TABLE settings (
 
 内置列表随 March 版本更新维护，不做自动 API 拉取（避免冷启动依赖网络）。
 
-## 上下文窗口元数据
+## 模型能力解析
 
-右侧的 context usage 预算应优先来自**当前模型的真实上下文窗口**，而不是固定常量。
+模型能力（上下文窗口、输入模态、输出上限等）统一收敛到 `ModelCapabilities`，在 session 初始化时一次性解析好，写入 session 状态，各模块按需消费。
 
-运行时按以下优先级确定 `context_window`：
+### 解析优先级
+
+所有能力字段共用同一条 fallback 链：
 
 ```
-1. provider `/models` 返回的模型元数据（如 `context_window` / `max_input_tokens`）
-2. March 内置的模型能力表（已知模型）
-3. 环境变量手动覆盖（便于兼容非标准 provider）
-4. 保守默认值
+1. 用户在设置页的手动覆盖（compat provider 的能力勾选、已知 provider 的自定义值）
+2. March 内置的模型能力表（已知 provider 的已知模型）
+3. provider `/models` 返回的元数据（best-effort 解析）
+4. 保守默认值（纯文本、128K context、4K output）
 ```
+
+已知 provider（Anthropic / OpenAI / Gemini）的内置模型，能力随 March 版本更新维护，正常情况下用户不需要手动配置。`/models` 解析作为第三优先级，主要服务于用户手填了一个内置表里没有的新模型 ID 的场景。
 
 注意：不同 OpenAI-compatible provider 对 `/models` 的扩展字段并不统一，因此需要做 best-effort 解析，拿不到时明确走 fallback，而不是假装是 provider 官方值。
+
+### 消费方
+
+| 消费方 | 使用的能力字段 |
+|--------|-------------|
+| 上下文预算（右侧面板 context usage） | `context_window` |
+| 工具集动态裁剪 | `supports_vision` → 决定是否注入 `view_image` 工具 |
+| 图片输入通道 | `supports_vision` → 决定是否允许粘贴/拖入图片、`@` 引用图片文件 |
+| 输出截断 | `max_output_tokens` |
+
+**工具集不是固定的，而是根据当前模型能力动态裁剪。** 模型不支持图片时，`view_image` 不出现在 tools 列表里，聊天框的图片粘贴入口也应禁用或隐藏，避免用户提交一个必然无法处理的输入。
 
 ---
 
@@ -283,9 +313,27 @@ Probe  [claude-sonnet-4-5 ∨]  （优先展示供应商模型列表，也支持
 Base URL [http://localhost:11434/v1]  （必填）
 
 可用模型
-  qwen2.5-coder:32b    [删除]
-  [+ 添加模型 ID]
+  qwen2.5-coder:32b    [编辑] [删除]
+  [+ 添加模型]
 ```
+
+点击 **[+ 添加模型]** 或 **[编辑]** 展开模型配置：
+
+```
+模型 ID      [qwen2.5-coder:32b    ]
+显示名称     [Qwen 2.5 Coder 32B   ]  （可选，留空则用 model_id）
+上下文窗口   [131072                ]  tokens
+最大输出     [8192                  ]  tokens
+
+输入能力
+  [✓] 图片    [ ] 音频    [ ] PDF
+
+                              [取消]  [确定]
+```
+
+- 能力勾选默认全部关闭（保守假设纯文本），用户按实际模型能力手动开启
+- 上下文窗口和最大输出有合理默认值（128K / 4K），用户可按需调整
+- 已知 provider 的内置模型不需要这些字段，能力由 March 内置表提供；但如果用户对已知 provider 手填了一个内置表里没有的 model_id，同样展示这些配置项
 
 ---
 
