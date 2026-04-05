@@ -1,12 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::context::ToolSummary;
 use crate::provider::ProviderToolCall;
+use crate::settings::SettingsStorage;
 
 use super::editing::{delete_line_range, edit_lines, insert_line_block, replace_line_range};
 use super::prompting::format_tool_output;
@@ -170,6 +171,98 @@ impl AgentSession {
                     format!("移除了 note {}", args.id),
                 ))
             }
+            "create_agent" => {
+                let args: CreateAgentArgs =
+                    serde_json::from_value(args).context("invalid create_agent args")?;
+                if args.name.trim().eq_ignore_ascii_case(crate::agents::MARCH_AGENT_NAME) {
+                    bail!("cannot create march via create_agent");
+                }
+                let settings = SettingsStorage::open()?;
+                let profile = settings.upsert_agent_profile(
+                    args.name,
+                    args.display_name,
+                    args.system_prompt,
+                    args.avatar_color.unwrap_or_default(),
+                    args.provider_id,
+                    args.model,
+                )?;
+                self.refresh_agent_profiles()?;
+                Ok(simple_tool(
+                    format!("created agent {}", profile.name),
+                    "create_agent",
+                    format!("创建了角色 {}", profile.display_name),
+                ))
+            }
+            "update_agent" => {
+                let args: UpdateAgentArgs =
+                    serde_json::from_value(args).context("invalid update_agent args")?;
+                let settings = SettingsStorage::open()?;
+                let name = args.name.trim().to_ascii_lowercase();
+                if name.is_empty() {
+                    bail!("agent name cannot be empty");
+                }
+
+                if name == crate::agents::MARCH_AGENT_NAME {
+                    let current_prompt = settings
+                        .snapshot()?
+                        .custom_system_core
+                        .unwrap_or_else(|| self.config.system_core.clone());
+                    let next_prompt = args.system_prompt.unwrap_or(current_prompt);
+                    settings.set_custom_system_core(Some(next_prompt), true)?;
+                    self.refresh_agent_profiles()?;
+                    return Ok(simple_tool(
+                        "updated march system prompt".to_string(),
+                        "update_agent",
+                        "更新了 March 角色提示词".to_string(),
+                    ));
+                }
+
+                let existing = settings
+                    .load_agent_profile_by_name(&name)?
+                    .ok_or_else(|| anyhow!("agent {} not found", name))?;
+                let clear_model_binding = args.clear_model_binding.unwrap_or(false);
+                let profile = settings.upsert_agent_profile(
+                    existing.name.clone(),
+                    args.display_name.unwrap_or(existing.display_name),
+                    args.system_prompt.unwrap_or(existing.system_prompt),
+                    args.avatar_color.unwrap_or(existing.avatar_color),
+                    if clear_model_binding {
+                        None
+                    } else {
+                        args.provider_id.or(existing.provider_id)
+                    },
+                    if clear_model_binding {
+                        None
+                    } else {
+                        args.model.or(existing.model_id)
+                    },
+                )?;
+                self.refresh_agent_profiles()?;
+                Ok(simple_tool(
+                    format!("updated agent {}", profile.name),
+                    "update_agent",
+                    format!("更新了角色 {}", profile.display_name),
+                ))
+            }
+            "delete_agent" => {
+                let args: DeleteAgentArgs =
+                    serde_json::from_value(args).context("invalid delete_agent args")?;
+                let name = args.name.trim().to_ascii_lowercase();
+                if name == crate::agents::MARCH_AGENT_NAME {
+                    bail!("cannot delete march");
+                }
+                if self.active_agent_name() == name {
+                    bail!("cannot delete the currently active agent {}", name);
+                }
+                let settings = SettingsStorage::open()?;
+                settings.delete_agent_profile(&name)?;
+                self.refresh_agent_profiles()?;
+                Ok(simple_tool(
+                    format!("deleted agent {}", name),
+                    "delete_agent",
+                    format!("删除了角色 {}", name),
+                ))
+            }
             other => bail!("unknown tool call: {}", other),
         }
     }
@@ -273,6 +366,14 @@ pub(super) fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
                 format!("{name} {id}")
             }
         }
+        "create_agent" | "update_agent" | "delete_agent" => {
+            let agent_name = args.get("name").and_then(Value::as_str).unwrap_or("");
+            if agent_name.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name} {agent_name}")
+            }
+        }
         _ => name.to_string(),
     }
 }
@@ -359,4 +460,32 @@ struct WriteNoteArgs {
 #[derive(Debug, Deserialize)]
 struct RemoveNoteArgs {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct CreateAgentArgs {
+    name: String,
+    display_name: String,
+    system_prompt: String,
+    avatar_color: Option<String>,
+    provider_id: Option<i64>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct UpdateAgentArgs {
+    name: String,
+    display_name: Option<String>,
+    system_prompt: Option<String>,
+    avatar_color: Option<String>,
+    provider_id: Option<i64>,
+    model: Option<String>,
+    clear_model_binding: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteAgentArgs {
+    name: String,
 }

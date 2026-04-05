@@ -182,7 +182,11 @@ impl MaStorage {
                 ",
             )
             .context("failed to initialize sqlite schema")?;
-        self.ensure_task_columns()
+        self.ensure_task_columns()?;
+        self.ensure_conversation_turn_columns()?;
+        self.ensure_note_columns()?;
+        self.ensure_open_file_columns()?;
+        Ok(())
     }
 
     fn delete_expired_hints(&self) -> Result<()> {
@@ -302,6 +306,81 @@ impl MaStorage {
             .context("failed to backfill tasks.active_agent column")?;
 
         Ok(())
+    }
+
+    fn ensure_conversation_turn_columns(&self) -> Result<()> {
+        let columns = self.table_columns("conversation_turns")?;
+        if !columns.iter().any(|column| column == "agent") {
+            self.connection
+                .execute(
+                    "ALTER TABLE conversation_turns ADD COLUMN agent TEXT NOT NULL DEFAULT 'march'",
+                    [],
+                )
+                .context("failed to add conversation_turns.agent column")?;
+        }
+        self.connection
+            .execute(
+                "UPDATE conversation_turns
+                 SET agent = ?1
+                 WHERE agent IS NULL OR TRIM(agent) = ''",
+                params![MARCH_AGENT_NAME],
+            )
+            .context("failed to backfill conversation_turns.agent column")?;
+        Ok(())
+    }
+
+    fn ensure_note_columns(&self) -> Result<()> {
+        let columns = self.table_columns("notes")?;
+        if !columns.iter().any(|column| column == "scope") {
+            self.connection
+                .execute(
+                    "ALTER TABLE notes ADD COLUMN scope TEXT NOT NULL DEFAULT 'shared'",
+                    [],
+                )
+                .context("failed to add notes.scope column")?;
+        }
+        self.connection
+            .execute(
+                "UPDATE notes
+                 SET scope = 'shared'
+                 WHERE scope IS NULL OR TRIM(scope) = ''",
+                [],
+            )
+            .context("failed to backfill notes.scope column")?;
+        Ok(())
+    }
+
+    fn ensure_open_file_columns(&self) -> Result<()> {
+        let columns = self.table_columns("open_files")?;
+        if !columns.iter().any(|column| column == "scope") {
+            self.connection
+                .execute(
+                    "ALTER TABLE open_files ADD COLUMN scope TEXT NOT NULL DEFAULT 'shared'",
+                    [],
+                )
+                .context("failed to add open_files.scope column")?;
+        }
+        self.connection
+            .execute(
+                "UPDATE open_files
+                 SET scope = 'shared'
+                 WHERE scope IS NULL OR TRIM(scope) = ''",
+                [],
+            )
+            .context("failed to backfill open_files.scope column")?;
+        Ok(())
+    }
+
+    fn table_columns(&self, table: &str) -> Result<Vec<String>> {
+        let mut statement = self
+            .connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .with_context(|| format!("failed to prepare {table} table_info query"))?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .with_context(|| format!("failed to query {table} table_info"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("failed to decode {table} table_info rows"))
     }
 }
 

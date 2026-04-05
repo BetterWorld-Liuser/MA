@@ -100,6 +100,9 @@ export function useWorkspaceApp() {
     deleteProvider,
     saveProviderModel,
     deleteProviderModel,
+    saveAgent,
+    deleteAgent,
+    restoreMarchPrompt,
     saveDefaultProvider,
     loadProviderModelsForSettings,
     loadProbeModels,
@@ -543,6 +546,19 @@ export function useWorkspaceApp() {
     });
   }
 
+  function confirmDeleteAgent(name: string) {
+    openConfirmDialog({
+      title: '删除角色',
+      description: '删除后，这个角色将无法继续通过 @mention 召唤。',
+      body: `确认删除角色「${name}」吗？`,
+      confirmLabel: '删除角色',
+      action: async () => {
+        await deleteAgent(name);
+        closeConfirmDialog();
+      },
+    });
+  }
+
   async function runWorkspaceAction(action: () => Promise<void>) {
     busy.value = true;
     try {
@@ -704,6 +720,9 @@ export function useWorkspaceApp() {
     testProviderConnection,
     saveProviderModel,
     deleteProviderModel,
+    saveAgent,
+    confirmDeleteAgent,
+    restoreMarchPrompt,
     requestProbeModels,
     confirmDeleteProvider,
     saveDefaultProvider,

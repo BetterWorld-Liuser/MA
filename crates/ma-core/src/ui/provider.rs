@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::agent::DEFAULT_CONTEXT_WINDOW_TOKENS;
+use crate::agent::{AgentSession, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::model_capabilities::get_model_capabilities;
 use crate::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use crate::settings::{ProviderModelRecord, ProviderType, SettingsStorage};
@@ -55,6 +55,34 @@ pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompat
         config.model = model.clone();
     }
     Ok(config)
+}
+
+pub(super) fn provider_config_for_session(
+    task: &TaskRecord,
+    session: &AgentSession,
+) -> Result<OpenAiCompatibleConfig> {
+    if let Some(profile) = session.active_agent_profile() {
+        let settings = SettingsStorage::open()?;
+        if let Some(provider_id) = profile.provider_id {
+            if let Ok(provider) = settings.load_provider(provider_id) {
+                let model = profile
+                    .model_id
+                    .clone()
+                    .or_else(|| task.selected_model.clone())
+                    .or(settings.default_model()?)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("missing agent model in settings"))?;
+                return Ok(OpenAiCompatibleConfig {
+                    provider_type: provider.provider_type,
+                    base_url: provider.base_url,
+                    api_key: provider.api_key,
+                    model,
+                });
+            }
+        }
+    }
+
+    provider_config_for_task(task)
 }
 
 pub async fn fetch_provider_models_for_task(

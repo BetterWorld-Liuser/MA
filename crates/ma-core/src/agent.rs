@@ -644,6 +644,26 @@ impl AgentSession {
         self.agent_profiles.contains_key(name)
     }
 
+    pub fn agent_profiles(&self) -> impl Iterator<Item = &AgentProfile> {
+        self.agent_profiles.values()
+    }
+
+    pub fn active_agent_profile(&self) -> Option<&AgentProfile> {
+        self.agent_profiles.get(self.active_agent_name())
+    }
+
+    pub fn refresh_agent_profiles(&mut self) -> Result<()> {
+        let active_agent = self.active_agent.clone();
+        self.agent_profiles = load_agent_profiles(&self.working_directory)?
+            .into_iter()
+            .map(|profile| (profile.name.clone(), profile))
+            .collect::<IndexMap<_, _>>();
+        if !self.agent_profiles.contains_key(&active_agent) {
+            self.active_agent = MARCH_AGENT_NAME.to_string();
+        }
+        Ok(())
+    }
+
     pub fn open_file_in_scope(
         &mut self,
         scope: impl Into<String>,

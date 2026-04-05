@@ -9,6 +9,7 @@ use crate::context::{
 };
 use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
+use crate::agents::{AgentProfile, AgentProfileSource, MARCH_AGENT_NAME};
 use crate::settings::{ProviderModelRecord, ProviderRecord, ProviderSettingsSnapshot};
 use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
 
@@ -16,7 +17,7 @@ use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
 use super::{
     UiAgentStatusPhase, UiAgentToolStatus, UiContextPressureView, UiContextUsageSectionView,
     UiContextUsageView, UiDebugRoundView, UiDebugToolCallView, UiDebugTraceView,
-    UiFileSnapshotView, UiHintView, UiImageAttachmentView, UiModelCapabilitiesView,
+    UiAgentProfileView, UiFileSnapshotView, UiHintView, UiImageAttachmentView, UiModelCapabilitiesView,
     UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView, UiProviderSettingsView,
     UiProviderView, UiRoleView, UiRuntimeSnapshot, UiShellView, UiSkillView, UiSystemStatusView,
     UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
@@ -90,8 +91,50 @@ impl UiProviderSettingsView {
                 .into_iter()
                 .map(|provider| UiProviderView::from_record(provider, &provider_models))
                 .collect(),
+            agents: snapshot
+                .agent_profiles
+                .into_iter()
+                .map(UiAgentProfileView::from)
+                .collect(),
             default_provider_id: snapshot.default_provider_id,
             default_model: snapshot.default_model,
+        }
+    }
+}
+
+impl From<crate::settings::AgentProfileRecord> for UiAgentProfileView {
+    fn from(profile: crate::settings::AgentProfileRecord) -> Self {
+        Self {
+            id: Some(profile.id),
+            name: profile.name,
+            display_name: profile.display_name,
+            system_prompt: profile.system_prompt,
+            avatar_color: profile.avatar_color,
+            provider_id: profile.provider_id,
+            model_id: profile.model_id,
+            is_built_in: false,
+            source: "user".to_string(),
+        }
+    }
+}
+
+impl From<&AgentProfile> for UiAgentProfileView {
+    fn from(profile: &AgentProfile) -> Self {
+        Self {
+            id: None,
+            name: profile.name.clone(),
+            display_name: profile.display_name.clone(),
+            system_prompt: profile.system_prompt.clone(),
+            avatar_color: profile.avatar_color.clone(),
+            provider_id: profile.provider_id,
+            model_id: profile.model_id.clone(),
+            is_built_in: profile.name == MARCH_AGENT_NAME,
+            source: match profile.source {
+                AgentProfileSource::BuiltIn => "built_in",
+                AgentProfileSource::User => "user",
+                AgentProfileSource::Project => "project",
+            }
+            .to_string(),
         }
     }
 }

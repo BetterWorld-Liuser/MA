@@ -169,8 +169,23 @@ pub struct UiTaskModelSelectorView {
 pub struct UiProviderSettingsView {
     pub database_path: PathBuf,
     pub providers: Vec<UiProviderView>,
+    pub agents: Vec<UiAgentProfileView>,
     pub default_provider_id: Option<i64>,
     pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiAgentProfileView {
+    pub id: Option<i64>,
+    pub name: String,
+    pub display_name: String,
+    pub system_prompt: String,
+    pub avatar_color: String,
+    pub provider_id: Option<i64>,
+    pub model_id: Option<String>,
+    pub is_built_in: bool,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +264,28 @@ pub struct UiSetDefaultProviderRequest {
     pub provider_id: Option<i64>,
     pub model: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiUpsertAgentRequest {
+    pub name: String,
+    pub display_name: String,
+    pub system_prompt: String,
+    pub avatar_color: Option<String>,
+    pub provider_id: Option<i64>,
+    pub model_id: Option<String>,
+    pub use_custom_march_prompt: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiDeleteAgentRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiRestoreMarchPromptRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

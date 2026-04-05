@@ -105,8 +105,24 @@ pub struct ProviderModelRecord {
 pub struct ProviderSettingsSnapshot {
     pub providers: Vec<ProviderRecord>,
     pub provider_models: Vec<ProviderModelRecord>,
+    pub agent_profiles: Vec<AgentProfileRecord>,
     pub default_provider_id: Option<i64>,
     pub default_model: Option<String>,
+    pub custom_system_core: Option<String>,
+    pub use_custom_system_core: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentProfileRecord {
+    pub id: i64,
+    pub name: String,
+    pub display_name: String,
+    pub system_prompt: String,
+    pub avatar_color: String,
+    pub provider_id: Option<i64>,
+    pub model_id: Option<String>,
+    pub created_at: SystemTime,
+    pub updated_at: SystemTime,
 }
 
 pub struct SettingsStorage {
@@ -143,9 +159,218 @@ impl SettingsStorage {
         Ok(ProviderSettingsSnapshot {
             providers: self.list_providers()?,
             provider_models: self.list_provider_models()?,
+            agent_profiles: self.list_agent_profiles()?,
             default_provider_id: self.get_setting_i64("default_provider_id")?,
             default_model: self.get_setting("default_model")?,
+            custom_system_core: self.get_setting("custom_system_core")?,
+            use_custom_system_core: self
+                .get_setting("use_custom_system_core")?
+                .is_some_and(|value| value == "1"),
         })
+    }
+
+    pub fn list_agent_profiles(&self) -> Result<Vec<AgentProfileRecord>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, name, display_name, system_prompt, avatar_color,
+                        provider_id, model_id, created_at, updated_at
+                 FROM agent_profiles
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .context("failed to prepare agent profile list query")?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            })
+            .context("failed to query agent profiles")?;
+
+        let mut profiles = Vec::new();
+        for row in rows {
+            let row = row.context("failed to decode agent profile row")?;
+            profiles.push(AgentProfileRecord {
+                id: row.0,
+                name: row.1,
+                display_name: row.2,
+                system_prompt: row.3,
+                avatar_color: row.4,
+                provider_id: row.5,
+                model_id: normalize_optional_string(row.6),
+                created_at: system_time_from_unix(row.7)?,
+                updated_at: system_time_from_unix(row.8)?,
+            });
+        }
+        Ok(profiles)
+    }
+
+    pub fn load_agent_profile_by_name(&self, name: &str) -> Result<Option<AgentProfileRecord>> {
+        let normalized_name = name.trim().to_ascii_lowercase();
+        if normalized_name.is_empty() {
+            return Ok(None);
+        }
+
+        self.connection
+            .query_row(
+                "SELECT id, name, display_name, system_prompt, avatar_color,
+                        provider_id, model_id, created_at, updated_at
+                 FROM agent_profiles
+                 WHERE lower(name) = lower(?1)",
+                params![normalized_name],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                    ))
+                },
+            )
+            .optional()
+            .context("failed to load agent profile")
+            .and_then(|row| {
+                row.map(|row| {
+                    Ok(AgentProfileRecord {
+                        id: row.0,
+                        name: row.1,
+                        display_name: row.2,
+                        system_prompt: row.3,
+                        avatar_color: row.4,
+                        provider_id: row.5,
+                        model_id: normalize_optional_string(row.6),
+                        created_at: system_time_from_unix(row.7)?,
+                        updated_at: system_time_from_unix(row.8)?,
+                    })
+                })
+                .transpose()
+            })
+    }
+
+    pub fn upsert_agent_profile(
+        &self,
+        name: impl AsRef<str>,
+        display_name: impl AsRef<str>,
+        system_prompt: impl AsRef<str>,
+        avatar_color: impl AsRef<str>,
+        provider_id: Option<i64>,
+        model_id: Option<String>,
+    ) -> Result<AgentProfileRecord> {
+        let name = normalize_agent_name(name.as_ref());
+        if name.is_empty() {
+            bail!("agent name cannot be empty");
+        }
+        let display_name = display_name.as_ref().trim();
+        if display_name.is_empty() {
+            bail!("agent display_name cannot be empty");
+        }
+        let system_prompt = system_prompt.as_ref().trim();
+        if system_prompt.is_empty() {
+            bail!("agent system_prompt cannot be empty");
+        }
+        if let Some(provider_id) = provider_id {
+            self.load_provider(provider_id)?;
+        }
+        let model_id = model_id.and_then(normalize_optional_string);
+        let avatar_color = normalize_avatar_color(avatar_color.as_ref());
+        let now = SystemTime::now();
+        let now_ts = unix_timestamp(now)?;
+
+        if let Some(existing) = self.load_agent_profile_by_name(&name)? {
+            self.connection
+                .execute(
+                    "UPDATE agent_profiles
+                     SET display_name = ?2,
+                         system_prompt = ?3,
+                         avatar_color = ?4,
+                         provider_id = ?5,
+                         model_id = ?6,
+                         updated_at = ?7
+                     WHERE id = ?1",
+                    params![
+                        existing.id,
+                        display_name,
+                        system_prompt,
+                        avatar_color,
+                        provider_id,
+                        model_id.as_deref().unwrap_or_default(),
+                        now_ts,
+                    ],
+                )
+                .context("failed to update agent profile")?;
+        } else {
+            self.connection
+                .execute(
+                    "INSERT INTO agent_profiles (
+                        name, display_name, system_prompt, avatar_color,
+                        provider_id, model_id, created_at, updated_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        name,
+                        display_name,
+                        system_prompt,
+                        avatar_color,
+                        provider_id,
+                        model_id.as_deref().unwrap_or_default(),
+                        now_ts,
+                        now_ts,
+                    ],
+                )
+                .context("failed to insert agent profile")?;
+        }
+
+        self.load_agent_profile_by_name(&name)?
+            .ok_or_else(|| anyhow::anyhow!("agent {} was not persisted", name))
+    }
+
+    pub fn delete_agent_profile(&self, name: &str) -> Result<()> {
+        let normalized_name = normalize_agent_name(name);
+        if normalized_name.is_empty() {
+            bail!("agent name cannot be empty");
+        }
+
+        let affected = self
+            .connection
+            .execute(
+                "DELETE FROM agent_profiles WHERE lower(name) = lower(?1)",
+                params![normalized_name],
+            )
+            .context("failed to delete agent profile")?;
+        if affected == 0 {
+            bail!("agent {} not found", normalized_name);
+        }
+        Ok(())
+    }
+
+    pub fn set_custom_system_core(
+        &self,
+        system_prompt: Option<String>,
+        enabled: bool,
+    ) -> Result<()> {
+        match system_prompt.and_then(normalize_optional_string) {
+            Some(value) => set_setting(&self.connection, "custom_system_core", &value)?,
+            None => delete_setting(&self.connection, "custom_system_core")?,
+        }
+        set_setting(
+            &self.connection,
+            "use_custom_system_core",
+            if enabled { "1" } else { "0" },
+        )?;
+        Ok(())
     }
 
     pub fn list_providers(&self) -> Result<Vec<ProviderRecord>> {
@@ -620,6 +845,18 @@ impl SettingsStorage {
                     supports_audio    INTEGER NOT NULL DEFAULT 0,
                     supports_pdf      INTEGER NOT NULL DEFAULT 0
                 );
+
+                CREATE TABLE IF NOT EXISTS agent_profiles (
+                    id            INTEGER PRIMARY KEY,
+                    name          TEXT    NOT NULL UNIQUE,
+                    display_name  TEXT    NOT NULL,
+                    system_prompt TEXT    NOT NULL,
+                    avatar_color  TEXT    NOT NULL DEFAULT '#64748B',
+                    provider_id   INTEGER REFERENCES providers(id) ON DELETE SET NULL,
+                    model_id      TEXT    NOT NULL DEFAULT '',
+                    created_at    INTEGER NOT NULL,
+                    updated_at    INTEGER NOT NULL
+                );
                 ",
             )
             .context("failed to initialize settings schema")?;
@@ -711,6 +948,19 @@ fn normalize_optional_string(raw: String) -> Option<String> {
         None
     } else {
         Some(trimmed)
+    }
+}
+
+fn normalize_agent_name(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace(' ', "-")
+}
+
+fn normalize_avatar_color(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "#64748B".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 

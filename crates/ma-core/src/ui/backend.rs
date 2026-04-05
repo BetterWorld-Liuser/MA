@@ -8,6 +8,7 @@ use base64::Engine;
 use crate::agent::{
     AgentConfig, AgentProgressEvent, AgentSession, DebugRound, is_turn_cancelled_error,
 };
+use crate::agents::{MARCH_AGENT_NAME, load_agent_profiles};
 use crate::agents::SHARED_SCOPE;
 use crate::context::{ContentBlock, ConversationHistory, join_text_blocks};
 use crate::paths::{canonicalize_clean, clean_path};
@@ -15,17 +16,19 @@ use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
 use crate::settings::{ProviderType, SettingsStorage};
 use crate::storage::{PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource};
 
-use super::provider::provider_config_for_task;
+use super::provider::provider_config_for_session;
 use super::util::{resolve_context_window_fallback, system_time_to_unix};
 use super::{
     DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProgressEvent,
     UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock, UiCreateTaskRequest,
-    UiDebugTraceView, UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
-    UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiOpenFilesRequest, UiProviderSettingsView,
-    UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest, UiSendMessageRequest,
-    UiSetDefaultProviderRequest, UiSetTaskModelRequest, UiSetTaskWorkingDirectoryRequest,
-    UiTaskSnapshot, UiUpsertNoteRequest, UiUpsertProviderModelRequest, UiUpsertProviderRequest,
-    UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiAgentProfileView, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteNoteRequest,
+    UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
+    UiLoadWorkspaceImageRequest, UiOpenFilesRequest, UiProviderSettingsView,
+    UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
+    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest,
+    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
+    UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
 impl UiAppBackend {
@@ -229,7 +232,13 @@ impl UiAppBackend {
 
         let persisted_before = self.storage.load_task(task_id)?;
         let should_auto_title = should_auto_title(&persisted_before, &content_text);
-        let provider_config = provider_config_for_task(&persisted_before.task)?;
+        let mut session = self.load_session(task_id)?;
+        if let Some(agent_name) = detect_agent_mention(&content_text, &session) {
+            session.set_active_agent(agent_name);
+            self.storage
+                .update_task_active_agent(task_id, session.active_agent_name())?;
+        }
+        let provider_config = provider_config_for_session(&persisted_before.task, &session)?;
         let provider = OpenAiCompatibleClient::new(provider_config.clone());
         let context_budget_tokens =
             resolve_context_window_with_provider(&provider, &provider_config.model)
@@ -237,12 +246,6 @@ impl UiAppBackend {
                 .unwrap_or_else(|| {
                     resolve_context_window_fallback(Some(provider_config.model.as_str()))
                 });
-        let mut session = self.load_session(task_id)?;
-        if let Some(agent_name) = detect_agent_mention(&content_text, &session) {
-            session.set_active_agent(agent_name);
-            self.storage
-                .update_task_active_agent(task_id, session.active_agent_name())?;
-        }
         let turn_id = format!(
             "turn-{}-{}",
             task_id,
@@ -260,88 +263,55 @@ impl UiAppBackend {
             turn_id: turn_id.clone(),
             user_message: content_text.clone(),
         })?;
-        let result = session
+        let mut result = session
             .handle_user_message_with_events_and_cancel(
                 &provider,
                 content_blocks,
                 &is_cancelled,
                 |session, event| {
-                    match event {
-                        AgentProgressEvent::Status { phase, label } => {
-                            on_progress(UiAgentProgressEvent::Status {
-                                task_id,
-                                turn_id: turn_id.clone(),
-                                phase: phase.into(),
-                                label,
-                            })?;
-                        }
-                        AgentProgressEvent::ToolStarted {
-                            tool_call_id,
-                            tool_name,
-                            summary,
-                        } => {
-                            on_progress(UiAgentProgressEvent::ToolStarted {
-                                task_id,
-                                turn_id: turn_id.clone(),
-                                tool_call_id,
-                                tool_name,
-                                summary,
-                            })?;
-                        }
-                        AgentProgressEvent::ToolFinished {
-                            tool_call_id,
-                            status,
-                            summary,
-                            preview,
-                        } => {
-                            on_progress(UiAgentProgressEvent::ToolFinished {
-                                task_id,
-                                turn_id: turn_id.clone(),
-                                tool_call_id,
-                                status: status.into(),
-                                summary,
-                                preview,
-                            })?;
-                        }
-                        AgentProgressEvent::AssistantTextPreview { message } => {
-                            on_progress(UiAgentProgressEvent::AssistantTextPreview {
-                                task_id,
-                                turn_id: turn_id.clone(),
-                                message,
-                            })?;
-                        }
-                        AgentProgressEvent::FinalAssistantMessage(_) => {
-                            let task = Self::live_task_snapshot(
-                                progress_task.clone(),
-                                session,
-                                &progress_rounds,
-                                context_budget_tokens,
-                            )?;
-                            on_progress(UiAgentProgressEvent::FinalAssistantMessage {
-                                task_id,
-                                turn_id: turn_id.clone(),
-                                task,
-                            })?;
-                        }
-                        AgentProgressEvent::RoundCompleted(round) => {
-                            progress_rounds.push(round);
-                            let task = Self::live_task_snapshot(
-                                progress_task.clone(),
-                                session,
-                                &progress_rounds,
-                                context_budget_tokens,
-                            )?;
-                            on_progress(UiAgentProgressEvent::RoundComplete {
-                                task_id,
-                                turn_id: turn_id.clone(),
-                                task,
-                            })?;
-                        }
-                    }
-                    Ok(())
+                    Self::forward_progress_event(
+                        task_id,
+                        &turn_id,
+                        progress_task.clone(),
+                        session,
+                        &mut progress_rounds,
+                        context_budget_tokens,
+                        &mut on_progress,
+                        event,
+                    )
                 },
             )
             .await;
+        if let Ok(accumulated) = &mut result {
+            while let Some(agent_name) = accumulated
+                .final_messages
+                .last()
+                .and_then(|message| detect_agent_mention(&message.message, &session))
+                .filter(|agent_name| agent_name != session.active_agent_name())
+            {
+                session.set_active_agent(agent_name.clone());
+                self.storage
+                    .update_task_active_agent(task_id, session.active_agent_name())?;
+                let provider_config = provider_config_for_session(&persisted_before.task, &session)?;
+                let provider = OpenAiCompatibleClient::new(provider_config);
+                let continuation = session
+                    .continue_with_events_and_cancel(&provider, &is_cancelled, |session, event| {
+                        Self::forward_progress_event(
+                            task_id,
+                            &turn_id,
+                            progress_task.clone(),
+                            session,
+                            &mut progress_rounds,
+                            context_budget_tokens,
+                            &mut on_progress,
+                            event,
+                        )
+                    })
+                    .await?;
+                accumulated.final_messages.extend(continuation.final_messages);
+                accumulated.debug_rounds.extend(continuation.debug_rounds);
+            }
+        }
         if let Err(error) = &result {
             self.save_session(task_id, &session)?;
             if is_turn_cancelled_error(error) {
@@ -598,10 +568,61 @@ impl UiAppBackend {
 
     pub fn provider_settings(&self) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
-        Ok(UiProviderSettingsView::from_snapshot(
+        let mut view = UiProviderSettingsView::from_snapshot(
             settings.database_path().to_path_buf(),
             settings.snapshot()?,
-        ))
+        );
+        view.agents = load_agent_profiles(&self.workspace_path)?
+            .iter()
+            .map(UiAgentProfileView::from)
+            .collect();
+        Ok(view)
+    }
+
+    pub fn handle_upsert_agent(
+        &self,
+        request: UiUpsertAgentRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        let normalized_name = request.name.trim().to_ascii_lowercase();
+        if normalized_name == MARCH_AGENT_NAME {
+            settings.set_custom_system_core(
+                Some(request.system_prompt),
+                request.use_custom_march_prompt.unwrap_or(true),
+            )?;
+        } else {
+            settings.upsert_agent_profile(
+                normalized_name,
+                request.display_name,
+                request.system_prompt,
+                request.avatar_color.unwrap_or_default(),
+                request.provider_id,
+                request.model_id,
+            )?;
+        }
+        self.provider_settings()
+    }
+
+    pub fn handle_delete_agent(
+        &self,
+        request: UiDeleteAgentRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let name = request.name.trim().to_ascii_lowercase();
+        if name == MARCH_AGENT_NAME {
+            bail!("cannot delete March");
+        }
+        let settings = SettingsStorage::open()?;
+        settings.delete_agent_profile(&name)?;
+        self.provider_settings()
+    }
+
+    pub fn handle_restore_march_prompt(
+        &self,
+        _request: UiRestoreMarchPromptRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        settings.set_custom_system_core(None, false)?;
+        self.provider_settings()
     }
 
     pub fn handle_upsert_provider(
@@ -731,6 +752,89 @@ impl UiAppBackend {
 
     pub fn workspace_path(&self) -> &std::path::Path {
         &self.workspace_path
+    }
+}
+
+impl UiAppBackend {
+    fn forward_progress_event<F>(
+        task_id: i64,
+        turn_id: &str,
+        progress_task: TaskRecord,
+        session: &AgentSession,
+        progress_rounds: &mut Vec<DebugRound>,
+        context_budget_tokens: usize,
+        on_progress: &mut F,
+        event: AgentProgressEvent,
+    ) -> Result<()>
+    where
+        F: FnMut(UiAgentProgressEvent) -> Result<()>,
+    {
+        match event {
+            AgentProgressEvent::Status { phase, label } => on_progress(UiAgentProgressEvent::Status {
+                task_id,
+                turn_id: turn_id.to_string(),
+                phase: phase.into(),
+                label,
+            }),
+            AgentProgressEvent::ToolStarted {
+                tool_call_id,
+                tool_name,
+                summary,
+            } => on_progress(UiAgentProgressEvent::ToolStarted {
+                task_id,
+                turn_id: turn_id.to_string(),
+                tool_call_id,
+                tool_name,
+                summary,
+            }),
+            AgentProgressEvent::ToolFinished {
+                tool_call_id,
+                status,
+                summary,
+                preview,
+            } => on_progress(UiAgentProgressEvent::ToolFinished {
+                task_id,
+                turn_id: turn_id.to_string(),
+                tool_call_id,
+                status: status.into(),
+                summary,
+                preview,
+            }),
+            AgentProgressEvent::AssistantTextPreview { message } => {
+                on_progress(UiAgentProgressEvent::AssistantTextPreview {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    message,
+                })
+            }
+            AgentProgressEvent::FinalAssistantMessage(_) => {
+                let task = Self::live_task_snapshot(
+                    progress_task,
+                    session,
+                    progress_rounds,
+                    context_budget_tokens,
+                )?;
+                on_progress(UiAgentProgressEvent::FinalAssistantMessage {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    task,
+                })
+            }
+            AgentProgressEvent::RoundCompleted(round) => {
+                progress_rounds.push(round);
+                let task = Self::live_task_snapshot(
+                    progress_task,
+                    session,
+                    progress_rounds,
+                    context_budget_tokens,
+                )?;
+                on_progress(UiAgentProgressEvent::RoundComplete {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    task,
+                })
+            }
+        }
     }
 }
 

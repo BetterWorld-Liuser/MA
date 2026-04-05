@@ -86,9 +86,12 @@
         @update-theme="setTheme"
         @save-provider="saveProvider"
         @save-provider-model="saveProviderModel"
+        @save-agent="saveAgent"
         @test-provider="testProviderConnection"
         @delete-provider="confirmDeleteProvider"
         @delete-provider-model="deleteProviderModel"
+        @delete-agent="confirmDeleteAgent"
+        @restore-march-prompt="restoreMarchPrompt"
         @save-default-provider="saveDefaultProvider"
         @request-models="loadProviderModelsForSettings"
         @request-probe-models="requestProbeModels"
@@ -191,8 +194,11 @@ const {
   setTheme,
   saveProvider,
   saveProviderModel,
+  saveAgent,
   testProviderConnection,
   deleteProviderModel,
+  confirmDeleteAgent,
+  restoreMarchPrompt,
   requestProbeModels,
   confirmDeleteProvider,
   saveDefaultProvider,

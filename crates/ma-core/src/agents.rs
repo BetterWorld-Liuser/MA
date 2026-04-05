@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::paths::clean_path;
-use crate::settings::march_settings_dir;
+use crate::settings::{SettingsStorage, march_settings_dir};
 
 pub const MARCH_AGENT_NAME: &str = "march";
 pub const SHARED_SCOPE: &str = "shared";
@@ -18,6 +18,14 @@ pub struct AgentProfile {
     pub avatar_color: String,
     pub provider_id: Option<i64>,
     pub model_id: Option<String>,
+    pub source: AgentProfileSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentProfileSource {
+    BuiltIn,
+    User,
+    Project,
 }
 
 impl AgentProfile {
@@ -29,13 +37,36 @@ impl AgentProfile {
             avatar_color: "#64748B".to_string(),
             provider_id: None,
             model_id: None,
+            source: AgentProfileSource::BuiltIn,
         }
     }
 }
 
 pub fn load_agent_profiles(working_directory: &Path) -> Result<Vec<AgentProfile>> {
     let mut profiles = HashMap::new();
-    let march = AgentProfile::built_in_march();
+    let mut march = AgentProfile::built_in_march();
+    if let Ok(settings) = SettingsStorage::open() {
+        let snapshot = settings.snapshot()?;
+        if snapshot.use_custom_system_core {
+            if let Some(custom_system_core) = snapshot.custom_system_core {
+                march.system_prompt = custom_system_core;
+            }
+        }
+        for record in snapshot.agent_profiles {
+            profiles.insert(
+                record.name.clone(),
+                AgentProfile {
+                    name: record.name,
+                    display_name: record.display_name,
+                    system_prompt: record.system_prompt,
+                    avatar_color: record.avatar_color,
+                    provider_id: record.provider_id,
+                    model_id: record.model_id,
+                    source: AgentProfileSource::User,
+                },
+            );
+        }
+    }
     profiles.insert(march.name.clone(), march);
 
     let user_dir = march_settings_dir()?.join("agents");
@@ -138,6 +169,11 @@ fn parse_agent_profile(path: &Path, content: &str) -> Result<Option<AgentProfile
         avatar_color: avatar_color.unwrap_or_else(|| "#64748B".to_string()),
         provider_id: None,
         model_id,
+        source: if path.starts_with(march_settings_dir()?.join("agents")) {
+            AgentProfileSource::User
+        } else {
+            AgentProfileSource::Project
+        },
     }))
 }
 

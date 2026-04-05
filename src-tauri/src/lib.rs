@@ -9,15 +9,16 @@ use anyhow::Context;
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 use ma::ui::{
-    UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteNoteRequest,
-    UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
-    UiLoadWorkspaceImageRequest, UiOpenFilesRequest, UiProbeProviderModelsRequest,
-    UiProviderModelsView, UiProviderSettingsView, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteAgentRequest,
+    UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
+    UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiOpenFilesRequest,
+    UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
+    UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
+    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
     UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
-    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertNoteRequest,
-    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
-    UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_models,
+    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertAgentRequest,
+    UiUpsertNoteRequest, UiUpsertProviderModelRequest, UiUpsertProviderRequest,
+    UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_models,
     fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
@@ -368,6 +369,39 @@ fn set_default_provider(
 }
 
 #[tauri::command]
+fn upsert_agent(
+    state: tauri::State<'_, AppState>,
+    input: UiUpsertAgentRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_upsert_agent(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_agent(
+    state: tauri::State<'_, AppState>,
+    input: UiDeleteAgentRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_delete_agent(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_march_prompt(
+    state: tauri::State<'_, AppState>,
+    input: UiRestoreMarchPromptRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_restore_march_prompt(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn test_provider_connection(
     input: UiTestProviderConnectionRequest,
 ) -> Result<UiTestProviderConnectionResult, String> {
@@ -456,6 +490,9 @@ pub fn run() {
             upsert_provider_model,
             delete_provider_model,
             set_default_provider,
+            upsert_agent,
+            delete_agent,
+            restore_march_prompt,
             test_provider_connection,
             search_workspace_entries,
             load_workspace_image,

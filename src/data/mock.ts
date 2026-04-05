@@ -358,6 +358,17 @@ export type ProviderSettingsView = {
       };
     }>;
   }>;
+  agents: Array<{
+    id?: number | null;
+    name: string;
+    displayName: string;
+    systemPrompt: string;
+    avatarColor: string;
+    providerId?: number | null;
+    modelId?: string | null;
+    isBuiltIn: boolean;
+    source: string;
+  }>;
   defaultProviderId?: number | null;
   defaultModel?: string | null;
 };

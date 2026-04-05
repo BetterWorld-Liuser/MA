@@ -189,6 +189,38 @@ export function useProviderSettings({
     });
   }
 
+  async function saveAgent(input: {
+    name: string;
+    displayName: string;
+    systemPrompt: string;
+    avatarColor?: string;
+    providerId?: number | null;
+    modelId?: string | null;
+    useCustomMarchPrompt?: boolean;
+  }) {
+    await runWorkspaceAction(async () => {
+      providerSettings.value = await invoke<ProviderSettingsView>('upsert_agent', {
+        input,
+      });
+    });
+  }
+
+  async function deleteAgent(name: string) {
+    await runWorkspaceAction(async () => {
+      providerSettings.value = await invoke<ProviderSettingsView>('delete_agent', {
+        input: { name },
+      });
+    });
+  }
+
+  async function restoreMarchPrompt() {
+    await runWorkspaceAction(async () => {
+      providerSettings.value = await invoke<ProviderSettingsView>('restore_march_prompt', {
+        input: {},
+      });
+    });
+  }
+
   return {
     settingsOpen,
     providerSettings,
@@ -208,6 +240,9 @@ export function useProviderSettings({
     deleteProvider,
     saveProviderModel,
     deleteProviderModel,
+    saveAgent,
+    deleteAgent,
+    restoreMarchPrompt,
     saveDefaultProvider,
     loadProviderModelsForSettings,
     loadProbeModels,

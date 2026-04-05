@@ -22,6 +22,9 @@ impl ToolRuntime {
                 delete_lines_tool(),
                 write_note_tool(),
                 remove_note_tool(),
+                create_agent_tool(),
+                update_agent_tool(),
+                delete_agent_tool(),
             ],
         }
     }
@@ -316,6 +319,127 @@ fn remove_note_tool() -> ToolDefinition {
         notes: vec![
             "Use remove_note once the stored state becomes stale, solved, or irrelevant."
                 .to_string(),
+        ],
+    }
+}
+
+fn create_agent_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "create_agent",
+        description: "Create a reusable agent profile that can later be invoked with @agent_name in chat.",
+        parameters: vec![
+            ToolParameter {
+                name: "name",
+                kind: "string",
+                required: true,
+                description: "Stable agent name used in @mentions, usually lowercase and concise.",
+            },
+            ToolParameter {
+                name: "display_name",
+                kind: "string",
+                required: true,
+                description: "Human-friendly label shown in the UI.",
+            },
+            ToolParameter {
+                name: "system_prompt",
+                kind: "string",
+                required: true,
+                description: "The role instruction that defines how this agent behaves.",
+            },
+            ToolParameter {
+                name: "avatar_color",
+                kind: "string",
+                required: false,
+                description: "Optional hex color used to distinguish this agent in the UI.",
+            },
+            ToolParameter {
+                name: "provider_id",
+                kind: "integer",
+                required: false,
+                description: "Optional provider binding. Omit to follow the task default.",
+            },
+            ToolParameter {
+                name: "model",
+                kind: "string",
+                required: false,
+                description: "Optional model binding. Omit to follow the task default.",
+            },
+        ],
+        notes: vec![
+            "Use create_agent when the user asks you to create a reusable reviewer, architect, planner, or similar role.".to_string(),
+            "Agent names are normalized to lowercase mention names such as reviewer or architect.".to_string(),
+        ],
+    }
+}
+
+fn update_agent_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "update_agent",
+        description: "Update an existing agent profile, including its prompt, display name, color, or model binding.",
+        parameters: vec![
+            ToolParameter {
+                name: "name",
+                kind: "string",
+                required: true,
+                description: "The existing agent name to update.",
+            },
+            ToolParameter {
+                name: "display_name",
+                kind: "string",
+                required: false,
+                description: "Optional new UI label.",
+            },
+            ToolParameter {
+                name: "system_prompt",
+                kind: "string",
+                required: false,
+                description: "Optional replacement role instruction.",
+            },
+            ToolParameter {
+                name: "avatar_color",
+                kind: "string",
+                required: false,
+                description: "Optional replacement avatar color.",
+            },
+            ToolParameter {
+                name: "provider_id",
+                kind: "integer",
+                required: false,
+                description: "Optional provider binding. Use null with clear_model_binding to follow the task default.",
+            },
+            ToolParameter {
+                name: "model",
+                kind: "string",
+                required: false,
+                description: "Optional replacement model binding.",
+            },
+            ToolParameter {
+                name: "clear_model_binding",
+                kind: "boolean",
+                required: false,
+                description: "When true, clears provider/model binding so the agent follows the task default.",
+            },
+        ],
+        notes: vec![
+            "Use update_agent when refining an existing role after the user asks for prompt or model changes.".to_string(),
+            "If the target is march, only the system prompt is persisted as March customization; name itself cannot be renamed.".to_string(),
+        ],
+    }
+}
+
+fn delete_agent_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "delete_agent",
+        description: "Delete a reusable agent profile.",
+        parameters: vec![ToolParameter {
+            name: "name",
+            kind: "string",
+            required: true,
+            description: "The agent name to delete.",
+        }],
+        notes: vec![
+            "Do not delete the built-in march agent.".to_string(),
+            "Deleting the currently active non-March agent is rejected to avoid invalidating the running turn.".to_string(),
         ],
     }
 }

@@ -38,13 +38,43 @@ impl AgentSession {
         client: &OpenAiCompatibleClient,
         content: Vec<ContentBlock>,
         is_cancelled: C,
+        on_event: F,
+    ) -> Result<AgentRunResult>
+    where
+        F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
+        C: Fn() -> bool,
+    {
+        self.run_agent_loop(client, Some(content), is_cancelled, on_event)
+            .await
+    }
+
+    pub async fn continue_with_events_and_cancel<F, C>(
+        &mut self,
+        client: &OpenAiCompatibleClient,
+        is_cancelled: C,
+        on_event: F,
+    ) -> Result<AgentRunResult>
+    where
+        F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
+        C: Fn() -> bool,
+    {
+        self.run_agent_loop(client, None, is_cancelled, on_event).await
+    }
+
+    async fn run_agent_loop<F, C>(
+        &mut self,
+        client: &OpenAiCompatibleClient,
+        content: Option<Vec<ContentBlock>>,
+        is_cancelled: C,
         mut on_event: F,
     ) -> Result<AgentRunResult>
     where
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
         C: Fn() -> bool,
     {
-        self.add_user_turn(content);
+        if let Some(content) = content {
+            self.add_user_turn(content);
+        }
 
         let mut final_messages = Vec::new();
         let mut summaries = Vec::new();
