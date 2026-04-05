@@ -27,7 +27,7 @@ Schema 及 Provider 数据结构详见 → [Provider 设计](provider.md)
 
 ```toml
 [context]
-recent_turns       = 3   # recent_chat 保留轮数，默认 3
+recent_turns       = 10  # recent_chat 保留轮数，默认 10
 pressure_threshold = 80  # 上下文用量达到多少 % 时向 AI 发出压力提示，默认 80
 ```
 

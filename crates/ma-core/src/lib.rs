@@ -2,6 +2,7 @@ pub mod agent;
 pub mod config;
 pub mod context;
 pub mod model_capabilities;
+pub mod paths;
 pub mod provider;
 pub mod settings;
 pub mod skills;

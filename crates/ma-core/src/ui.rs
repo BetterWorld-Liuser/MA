@@ -14,7 +14,7 @@ pub use provider::{
 };
 
 const DEFAULT_TASK_NAME: &str = "默认任务";
-const UI_MAX_RECENT_TURNS: usize = 4;
+const UI_MAX_RECENT_TURNS: usize = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

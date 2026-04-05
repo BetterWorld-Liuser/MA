@@ -19,7 +19,7 @@
       <ContextOpenFilesSection
         :open-files="openFiles"
         :busy="busy"
-        @toggle-file-lock="$emit('toggle-file-lock', $event[0], $event[1])"
+        @toggle-file-lock="(path, locked) => $emit('toggle-file-lock', path, locked)"
         @close-file="$emit('close-file', $event)"
       />
 

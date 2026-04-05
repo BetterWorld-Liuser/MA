@@ -6,7 +6,9 @@ use genai::chat::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::context::{AgentContext, render_file_snapshot_for_prompt};
+use crate::context::{
+    AgentContext, render_chat_turn_for_prompt, render_file_snapshot_for_prompt,
+};
 use crate::tools::{ToolDefinition, ToolParameter};
 
 /// RequestMessage 保持显式结构，方便 tool loop 在同一轮里累积 assistant/tool 消息。
@@ -238,7 +240,7 @@ fn render_context_body(context: &AgentContext) -> String {
 
     output.push_str("\n# Recent Chat\n");
     for turn in &context.recent_chat {
-        output.push_str(&format!("{:?}: {}\n", turn.role, turn.content));
+        output.push_str(&format!("{}\n", render_chat_turn_for_prompt(turn)));
     }
 
     output

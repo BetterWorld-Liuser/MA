@@ -6,6 +6,7 @@ use crate::agent::{AgentSession, AgentStatusPhase, AgentToolStatus, DebugRound, 
 use crate::context::{
     ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus, ToolSummary,
 };
+use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
 use crate::settings::{ProviderRecord, ProviderSettingsSnapshot};
 use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
@@ -77,7 +78,7 @@ impl UiTaskSnapshot {
 impl UiProviderSettingsView {
     pub fn from_snapshot(database_path: PathBuf, snapshot: ProviderSettingsSnapshot) -> Self {
         Self {
-            database_path,
+            database_path: clean_path(database_path),
             providers: snapshot
                 .providers
                 .into_iter()
@@ -147,7 +148,7 @@ impl From<TaskRecord> for UiTaskSummary {
             name: task.name,
             title_source: task.title_source.as_db_value().to_string(),
             title_locked: task.title_locked,
-            working_directory: task.working_directory,
+            working_directory: clean_path(task.working_directory),
             selected_model: task.selected_model,
             created_at: system_time_to_unix(task.created_at),
             last_active: system_time_to_unix(task.last_active),
@@ -233,7 +234,7 @@ impl From<DebugToolCall> for UiDebugToolCallView {
 impl From<PersistedOpenFile> for UiOpenFileView {
     fn from(open_file: PersistedOpenFile) -> Self {
         Self {
-            path: open_file.path,
+            path: clean_path(open_file.path),
             locked: open_file.locked,
             snapshot: None,
         }
@@ -249,7 +250,7 @@ impl From<FileSnapshot> for UiFileSnapshotView {
                 last_modified,
                 last_modified_by,
             } => Self::Available {
-                path,
+                path: clean_path(path),
                 content,
                 last_modified_at: system_time_to_unix(last_modified),
                 modified_by: last_modified_by.into(),
@@ -259,7 +260,7 @@ impl From<FileSnapshot> for UiFileSnapshotView {
                 last_seen_at,
                 last_modified_by,
             } => Self::Deleted {
-                path,
+                path: clean_path(path),
                 last_seen_at: system_time_to_unix(last_seen_at),
                 modified_by: last_modified_by.into(),
             },
@@ -269,8 +270,8 @@ impl From<FileSnapshot> for UiFileSnapshotView {
                 last_seen_at,
                 last_modified_by,
             } => Self::Moved {
-                path,
-                new_path,
+                path: clean_path(path),
+                new_path: clean_path(new_path),
                 last_seen_at: system_time_to_unix(last_seen_at),
                 modified_by: last_modified_by.into(),
             },
@@ -301,7 +302,7 @@ impl From<ContextPressure> for UiContextPressureView {
 impl UiSystemStatusView {
     pub fn from_system_status(status: SystemStatus) -> Self {
         Self {
-            locked_files: status.locked_files,
+            locked_files: status.locked_files.into_iter().map(clean_path).collect(),
             context_pressure: status.context_pressure.map(Into::into),
         }
     }

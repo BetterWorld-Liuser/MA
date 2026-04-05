@@ -8,6 +8,7 @@ use indexmap::IndexMap;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::context::{FileSnapshot, ModifiedBy};
+use crate::paths::{canonicalize_clean, clean_path};
 
 /// watcher 的内存态存储。
 /// 这里不负责“如何执行命令”，只负责维护当前被 watch 文件的真实快照和最近的 agent 写入窗口。
@@ -273,10 +274,7 @@ fn snapshot_from_disk(path: &Path, modified_by: ModifiedBy) -> Result<FileSnapsh
 
 /// 统一做 canonicalize，避免同一文件因为相对/绝对路径差异在 store 中出现重复 key。
 fn normalize_path(path: PathBuf) -> Result<PathBuf> {
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize {}", path.display()))?;
-    Ok(clean_path(canonical))
+    canonicalize_clean(&path)
 }
 
 fn normalize_path_lossy(path: PathBuf) -> PathBuf {
@@ -308,22 +306,6 @@ fn resolve_tracked_path(state: &Arc<RwLock<WatchState>>, incoming_path: &Path) -
                 && (tracked == &&direct || tracked.ends_with(incoming_path))
         })
         .cloned()
-}
-
-/// Windows 的 canonical path 可能带 `\\?\` 前缀，内部逻辑能处理，
-/// 但打印到 prompt 和日志里会很刺眼，所以在展示层提前清理掉。
-fn clean_path(path: PathBuf) -> PathBuf {
-    #[cfg(windows)]
-    {
-        use std::path::Path;
-
-        let raw = path.to_string_lossy();
-        if let Some(stripped) = raw.strip_prefix(r"\\?\") {
-            return Path::new(stripped).to_path_buf();
-        }
-    }
-
-    path
 }
 
 #[cfg(test)]

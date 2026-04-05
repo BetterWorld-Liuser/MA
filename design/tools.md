@@ -112,7 +112,7 @@ Only choose from the shells listed above.
 **两个层次的"历史"需要区分清楚：**
 
 - **轮内消息历史**：从用户发消息到本轮不再产生新的 tool calls、agent loop 自然结束之间，agent loop 产生的所有 API 交互——中间 assistant 消息、tool_calls、tool_results——构成本轮的消息历史，每次 API 请求都带上完整的轮内历史以维持连贯性。
-- **recent_chat**（跨轮）：只记录外层对话：用户消息 + 本轮最终 assistant 输出，最近 3 轮。轮内的中间过程不进入 `recent_chat`。
+- **recent_chat**（跨轮）：只记录外层对话：用户消息 + 本轮最终 assistant 输出，最近 10 轮，并携带每条消息时间。轮内的中间过程不进入 `recent_chat`。
 
 **`tool_calls.is_empty()` + `message.content` 的处理**：如果 API 返回了文本内容且没有工具调用，当前实现会将这段文本视为**本轮最终回复**。Ma 的处理方式：
 

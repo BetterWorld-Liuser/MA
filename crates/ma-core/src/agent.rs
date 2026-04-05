@@ -9,6 +9,7 @@ use crate::context::{
     DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SessionStatus, SystemStatus,
     ToolSummary,
 };
+use crate::paths::clean_path;
 use crate::storage::{PersistedOpenFile, PersistedTask, PersistedTaskState};
 use crate::tools::ToolRuntime;
 use crate::ui::{
@@ -60,7 +61,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             system_core: default_system_core().to_string(),
-            max_recent_turns: 3,
+            max_recent_turns: 10,
         }
     }
 }
@@ -317,7 +318,7 @@ impl AgentSession {
             .notes(self.notes.clone())
             .session_status(self.session_status())
             .runtime_status(SystemStatus {
-                locked_files: self.locked_files.clone(),
+                locked_files: clean_unique_paths(&self.locked_files),
                 context_pressure: self.estimate_context_pressure(DEFAULT_CONTEXT_WINDOW_TOKENS),
             })
             .hints(self.hints.clone())
@@ -411,7 +412,7 @@ impl AgentSession {
 
     pub fn ui_system_status(&self, context_budget_tokens: usize) -> UiSystemStatusView {
         UiSystemStatusView {
-            locked_files: self.locked_files.clone(),
+            locked_files: clean_unique_paths(&self.locked_files),
             context_pressure: self.estimate_context_pressure(context_budget_tokens).map(
                 |pressure| UiContextPressureView {
                     used_percent: pressure.used_percent,
@@ -487,14 +488,14 @@ impl AgentSession {
             .iter()
             .map(|skill| UiSkillView {
                 name: skill.name.clone(),
-                path: skill.path.clone(),
+                path: clean_path(skill.path.clone()),
                 description: skill.description.clone(),
                 opened: open_file_snapshots.contains_key(&skill.path),
             })
             .collect::<Vec<_>>();
 
         UiRuntimeSnapshot::new(
-            self.working_directory.clone(),
+            clean_path(self.working_directory.clone()),
             available_shells,
             open_files,
             skills,
@@ -509,7 +510,7 @@ impl AgentSession {
 
     fn session_status(&self) -> SessionStatus {
         SessionStatus {
-            workspace_root: self.working_directory.clone(),
+            workspace_root: clean_path(self.working_directory.clone()),
             platform: platform_label().to_string(),
             shell: self
                 .available_shells
@@ -580,6 +581,16 @@ fn estimate_token_count(text: &str) -> usize {
     let ascii_chars = text.chars().filter(|ch| ch.is_ascii()).count();
     let non_ascii_chars = text.chars().count().saturating_sub(ascii_chars);
     ascii_chars.div_ceil(4) + non_ascii_chars
+}
+
+fn clean_unique_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for path in paths.iter().cloned().map(clean_path) {
+        if !unique.iter().any(|existing| existing == &path) {
+            unique.push(path);
+        }
+    }
+    unique
 }
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ async fn main() -> Result<()> {
     let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
     let cli_request = (!cli_args.is_empty()).then(|| cli_args.join(" "));
     let config = AgentConfig {
-        max_recent_turns: 4,
+        max_recent_turns: 10,
         ..AgentConfig::default()
     };
 

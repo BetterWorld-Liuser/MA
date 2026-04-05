@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 
 use crate::context::{Role, ToolSummary};
+use crate::paths::canonicalize_clean;
 
 use super::TaskTitleSource;
 
@@ -28,7 +29,7 @@ pub fn optional_system_time(timestamp: Option<i64>) -> Result<Option<SystemTime>
 }
 
 pub fn normalize_working_directory(path: &Path) -> Result<PathBuf> {
-    std::fs::canonicalize(path)
+    canonicalize_clean(path)
         .with_context(|| format!("failed to resolve working directory {}", path.display()))
 }
 

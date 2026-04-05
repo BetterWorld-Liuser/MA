@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use chrono::{DateTime, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -277,6 +278,15 @@ pub struct ChatTurn {
     pub timestamp: SystemTime,
 }
 
+pub fn render_chat_turn_for_prompt(turn: &ChatTurn) -> String {
+    format!(
+        "{:?} @ {}: {}",
+        turn.role,
+        format_prompt_timestamp(turn.timestamp),
+        turn.content
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     System,
@@ -293,7 +303,7 @@ pub struct ContextBuildConfig {
 impl Default for ContextBuildConfig {
     fn default() -> Self {
         Self {
-            max_recent_chat_turns: 3,
+            max_recent_chat_turns: 10,
         }
     }
 }
@@ -474,6 +484,11 @@ fn truncate_line_for_prompt(line: &str) -> String {
     format!("{truncated}...[+{} chars]", char_count - MAX_LINE_CHARS)
 }
 
+fn format_prompt_timestamp(timestamp: SystemTime) -> String {
+    let datetime = DateTime::<Local>::from(timestamp);
+    datetime.format("%Y-%m-%d %H:%M:%S %:z").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,10 +505,24 @@ mod tests {
 
         let context = AgentContextBuilder::new("system").history(history).build();
 
-        assert_eq!(context.recent_chat.len(), 3);
-        assert_eq!(context.recent_chat[0].content, "second");
-        assert_eq!(context.recent_chat[1].content, "third");
-        assert_eq!(context.recent_chat[2].content, "fourth");
+        assert_eq!(context.recent_chat.len(), 4);
+        assert_eq!(context.recent_chat[0].content, "first");
+        assert_eq!(context.recent_chat[1].content, "second");
+        assert_eq!(context.recent_chat[2].content, "third");
+        assert_eq!(context.recent_chat[3].content, "fourth");
+    }
+
+    #[test]
+    fn prompt_chat_render_includes_role_and_timestamp() {
+        let rendered = render_chat_turn_for_prompt(&ChatTurn {
+            role: Role::User,
+            content: "hello".to_string(),
+            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(42),
+        });
+
+        assert!(rendered.starts_with("User @ "));
+        assert!(rendered.ends_with(": hello"));
+        assert!(!rendered.contains("unix:"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::agent::{
 };
 use crate::context::ConversationHistory;
 use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
+use crate::paths::{canonicalize_clean, clean_path};
 use crate::settings::{ProviderType, SettingsStorage};
 use crate::storage::{PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource};
 
@@ -25,7 +26,7 @@ use super::{
 
 impl UiAppBackend {
     pub fn open(workspace_path: impl Into<PathBuf>) -> Result<Self> {
-        let workspace_path = workspace_path.into();
+        let workspace_path = clean_path(workspace_path.into());
         let storage = crate::storage::MaStorage::open(&workspace_path)?;
         Ok(Self {
             workspace_path,
@@ -159,7 +160,7 @@ impl UiAppBackend {
         });
 
         Ok(UiWorkspaceSnapshot {
-            workspace_path: self.workspace_path.clone(),
+            workspace_path: clean_path(self.workspace_path.clone()),
             database_path: self.storage.database_path().to_path_buf(),
             tasks,
             active_task,
@@ -560,8 +561,8 @@ impl UiAppBackend {
 
     fn normalize_task_working_directory(&self, path: Option<PathBuf>) -> Result<PathBuf> {
         let requested = path.unwrap_or_else(|| self.workspace_path.clone());
-        let normalized = std::fs::canonicalize(&requested)
-            .with_context(|| format!("failed to resolve {}", requested.display()))?;
+        let normalized =
+            canonicalize_clean(&requested).with_context(|| format!("failed to resolve {}", requested.display()))?;
         if !normalized.is_dir() {
             bail!(
                 "working directory must be a directory: {}",

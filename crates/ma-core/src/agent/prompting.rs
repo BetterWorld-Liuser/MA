@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config::MarchConfig;
-use crate::context::{AgentContext, Injection, render_file_snapshot_for_prompt};
+use crate::context::{
+    AgentContext, Injection, render_chat_turn_for_prompt, render_file_snapshot_for_prompt,
+};
+use crate::paths::clean_path;
 use crate::provider::{
     ApiToolCallRequest, ApiToolFunctionCallRequest, ProviderToolCall, RequestMessage,
 };
@@ -37,7 +40,13 @@ Behavior:
 
 Tool use:
 - For any request that depends on the current workspace, repository, codebase, files, tests, configuration, build system, or local environment, you must inspect the workspace with one or more tools before giving a substantive answer.
+- If the user says or strongly implies “check”, “look”, “inspect”, “run”, “try”, “verify”, “use the tool”, “use the command line”, or criticizes you for not using tools, you must perform at least one relevant tool call before replying substantively, unless the request is purely conversational and unrelated to the workspace.
+- Treat messages such as “马上查”, “你倒是调用工具呀”, “直接看一下”, “先跑测试”, or “为什么不调用命令行工具呢？” in an execution context as instructions to begin tool use now, not as requests for explanation or permission handling.
+- Do not ask for permission before non-destructive inspection steps such as `git status`, `rg`, directory listing, opening workspace files, or running the relevant build/test command the user already asked for.
+- If the user asked you to inspect the workspace but did not specify an exact command, choose a safe first inspection step yourself and execute it immediately.
+- Preferred first inspection steps include `git status --short`, `rg --files`, a directory listing command, opening the most relevant workspace file, or the relevant non-destructive build/test command when the user already mentioned build or test failures.
 - Do not end the turn with only a preamble, intention, or plan such as “I’ll inspect the repo first”.
+- Do not reply with text such as “if you agree, I can now...” or “I can check if you want” after the user has already asked you to inspect, run tools, or verify something in the workspace.
 - If the answer depends on filesystem or environment evidence, gather that evidence first via tools.
 - Prefer the open-files context layer for file contents that are already tracked; do not re-read the same file through shell commands unless you need a view that open files cannot provide.
 - Only finish without tool use if the user's request can be fully and safely answered without inspecting the workspace.
@@ -144,7 +153,7 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
     }
     output.push_str("\n# Recent Chat\n");
     for turn in &context.recent_chat {
-        output.push_str(&format!("{:?}: {}\n", turn.role, turn.content));
+        output.push_str(&format!("{}\n", render_chat_turn_for_prompt(turn)));
     }
     output
 }
@@ -208,7 +217,7 @@ pub(super) fn normalize_open_files_for_workspace(
     let mut seen = std::collections::HashSet::new();
 
     for open_file in open_files {
-        let path = absolutize_workspace_path(working_directory, open_file.path);
+        let path = clean_path(absolutize_workspace_path(working_directory, open_file.path));
         if !path.exists() || !seen.insert(path.clone()) {
             continue;
         }
@@ -218,7 +227,7 @@ pub(super) fn normalize_open_files_for_workspace(
         });
     }
 
-    let agents_path = working_directory.join(AGENTS_FILENAME);
+    let agents_path = clean_path(working_directory.join(AGENTS_FILENAME));
     if agents_path.exists() && seen.insert(agents_path.clone()) {
         normalized.insert(
             0,
@@ -245,8 +254,8 @@ fn to_request_tool_call(tool_call: &ProviderToolCall) -> ApiToolCallRequest {
 
 fn absolutize_workspace_path(working_directory: &Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() {
-        path
+        clean_path(path)
     } else {
-        working_directory.join(path)
+        clean_path(working_directory.join(path))
     }
 }

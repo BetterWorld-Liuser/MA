@@ -7,6 +7,7 @@ use indexmap::IndexMap;
 use rusqlite::{Connection, params};
 
 use crate::context::{ConversationHistory, Hint, NoteEntry};
+use crate::paths::clean_path;
 
 mod codec;
 mod persist;
@@ -84,8 +85,8 @@ impl MaStorage {
             .context("failed to enable sqlite foreign_keys")?;
 
         let mut storage = Self {
-            workspace_root: workdir.to_path_buf(),
-            db_path,
+            workspace_root: clean_path(workdir.to_path_buf()),
+            db_path: clean_path(db_path),
             connection,
         };
         storage.initialize_schema()?;
