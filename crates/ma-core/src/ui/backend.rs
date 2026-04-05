@@ -13,7 +13,9 @@ use crate::agents::{MARCH_AGENT_NAME, load_agent_profiles};
 use crate::context::{ContentBlock, ConversationHistory, join_text_blocks};
 use crate::paths::{canonicalize_clean, clean_path};
 use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
-use crate::settings::{ProviderType, SettingsStorage};
+use crate::settings::{
+    ProviderType, ServerToolCapability, ServerToolConfig, ServerToolFormat, SettingsStorage,
+};
 use crate::storage::{PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource};
 
 use super::provider::provider_config_for_session;
@@ -678,6 +680,20 @@ impl UiAppBackend {
         request: UiUpsertProviderModelRequest,
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
+        let server_tools = request
+            .server_tools
+            .into_iter()
+            .map(|tool| {
+                let capability =
+                    ServerToolCapability::from_db_value(&tool.capability).ok_or_else(|| {
+                        anyhow::anyhow!("unsupported server tool capability {}", tool.capability)
+                    })?;
+                let format = ServerToolFormat::from_db_value(&tool.format).ok_or_else(|| {
+                    anyhow::anyhow!("unsupported server tool format {}", tool.format)
+                })?;
+                Ok(ServerToolConfig { capability, format })
+            })
+            .collect::<Result<Vec<_>>>()?;
         settings.upsert_provider_model(
             request.id,
             request.provider_id,
@@ -689,6 +705,7 @@ impl UiAppBackend {
             request.supports_vision,
             request.supports_audio,
             request.supports_pdf,
+            server_tools,
         )?;
         Ok(UiProviderSettingsView::from_snapshot(
             settings.database_path().to_path_buf(),

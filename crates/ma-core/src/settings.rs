@@ -77,6 +77,64 @@ impl ProviderType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerToolCapability {
+    WebSearch,
+    CodeExecution,
+    FileSearch,
+}
+
+impl ServerToolCapability {
+    pub fn as_db_value(self) -> &'static str {
+        match self {
+            Self::WebSearch => "web_search",
+            Self::CodeExecution => "code_execution",
+            Self::FileSearch => "file_search",
+        }
+    }
+
+    pub fn from_db_value(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "web_search" => Some(Self::WebSearch),
+            "code_execution" => Some(Self::CodeExecution),
+            "file_search" => Some(Self::FileSearch),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerToolFormat {
+    Anthropic,
+    OpenAi,
+    Gemini,
+}
+
+impl ServerToolFormat {
+    pub fn as_db_value(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+            Self::Gemini => "gemini",
+        }
+    }
+
+    pub fn from_db_value(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "anthropic" => Some(Self::Anthropic),
+            "openai" => Some(Self::OpenAi),
+            "gemini" => Some(Self::Gemini),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerToolConfig {
+    pub capability: ServerToolCapability,
+    pub format: ServerToolFormat,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderRecord {
     pub id: i64,
@@ -99,6 +157,7 @@ pub struct ProviderModelRecord {
     pub supports_vision: bool,
     pub supports_audio: bool,
     pub supports_pdf: bool,
+    pub server_tools: Vec<ServerToolConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -444,24 +503,37 @@ impl SettingsStorage {
 
         let rows = statement
             .query_map([], |row| {
-                Ok(ProviderModelRecord {
-                    id: row.get::<_, i64>(0)?,
-                    provider_id: row.get::<_, i64>(1)?,
-                    model_id: row.get::<_, String>(2)?,
-                    display_name: normalize_optional_string(row.get::<_, String>(3)?),
-                    context_window: row.get::<_, i64>(4)? as usize,
-                    max_output_tokens: row.get::<_, i64>(5)? as usize,
-                    supports_tool_use: row.get::<_, i64>(6)? != 0,
-                    supports_vision: row.get::<_, i64>(7)? != 0,
-                    supports_audio: row.get::<_, i64>(8)? != 0,
-                    supports_pdf: row.get::<_, i64>(9)? != 0,
-                })
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    normalize_optional_string(row.get::<_, String>(3)?),
+                    row.get::<_, i64>(4)? as usize,
+                    row.get::<_, i64>(5)? as usize,
+                    row.get::<_, i64>(6)? != 0,
+                    row.get::<_, i64>(7)? != 0,
+                    row.get::<_, i64>(8)? != 0,
+                    row.get::<_, i64>(9)? != 0,
+                ))
             })
             .context("failed to query provider models")?;
 
         let mut provider_models = Vec::new();
         for row in rows {
-            provider_models.push(row.context("failed to decode provider model row")?);
+            let row = row.context("failed to decode provider model row")?;
+            provider_models.push(ProviderModelRecord {
+                id: row.0,
+                provider_id: row.1,
+                model_id: row.2.clone(),
+                display_name: row.3,
+                context_window: row.4,
+                max_output_tokens: row.5,
+                supports_tool_use: row.6,
+                supports_vision: row.7,
+                supports_audio: row.8,
+                supports_pdf: row.9,
+                server_tools: self.load_server_tools_for_model(row.1, &row.2)?,
+            });
         }
         Ok(provider_models)
     }
@@ -497,22 +569,40 @@ impl SettingsStorage {
                  WHERE provider_id = ?1 AND lower(model_id) = lower(?2)",
                 params![provider_id, normalized_model],
                 |row| {
-                    Ok(ProviderModelRecord {
-                        id: row.get::<_, i64>(0)?,
-                        provider_id: row.get::<_, i64>(1)?,
-                        model_id: row.get::<_, String>(2)?,
-                        display_name: normalize_optional_string(row.get::<_, String>(3)?),
-                        context_window: row.get::<_, i64>(4)? as usize,
-                        max_output_tokens: row.get::<_, i64>(5)? as usize,
-                        supports_tool_use: row.get::<_, i64>(6)? != 0,
-                        supports_vision: row.get::<_, i64>(7)? != 0,
-                        supports_audio: row.get::<_, i64>(8)? != 0,
-                        supports_pdf: row.get::<_, i64>(9)? != 0,
-                    })
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        normalize_optional_string(row.get::<_, String>(3)?),
+                        row.get::<_, i64>(4)? as usize,
+                        row.get::<_, i64>(5)? as usize,
+                        row.get::<_, i64>(6)? != 0,
+                        row.get::<_, i64>(7)? != 0,
+                        row.get::<_, i64>(8)? != 0,
+                        row.get::<_, i64>(9)? != 0,
+                    ))
                 },
             )
             .optional()
             .context("failed to load provider model")
+            .and_then(|row| {
+                row.map(|row| {
+                    Ok(ProviderModelRecord {
+                        id: row.0,
+                        provider_id: row.1,
+                        model_id: row.2.clone(),
+                        display_name: row.3,
+                        context_window: row.4,
+                        max_output_tokens: row.5,
+                        supports_tool_use: row.6,
+                        supports_vision: row.7,
+                        supports_audio: row.8,
+                        supports_pdf: row.9,
+                        server_tools: self.load_server_tools_for_model(row.1, &row.2)?,
+                    })
+                })
+                .transpose()
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -528,6 +618,7 @@ impl SettingsStorage {
         supports_vision: bool,
         supports_audio: bool,
         supports_pdf: bool,
+        server_tools: Vec<ServerToolConfig>,
     ) -> Result<ProviderModelRecord> {
         self.load_provider(provider_id)?;
         let model_id = model_id.as_ref().trim();
@@ -544,6 +635,7 @@ impl SettingsStorage {
 
         match provider_model_id {
             Some(id) => {
+                let existing = self.load_provider_model(id)?;
                 let affected = self
                     .connection
                     .execute(
@@ -575,6 +667,10 @@ impl SettingsStorage {
                 if affected == 0 {
                     bail!("provider model {} not found", id);
                 }
+                if existing.provider_id != provider_id || existing.model_id != model_id {
+                    self.delete_server_tools_for_model(existing.provider_id, &existing.model_id)?;
+                }
+                self.sync_server_tools_for_model(provider_id, model_id, &server_tools)?;
                 self.load_provider_model(id)
             }
             None => {
@@ -599,12 +695,15 @@ impl SettingsStorage {
                     )
                     .context("failed to insert provider model")?;
                 let id = self.connection.last_insert_rowid();
+                self.sync_server_tools_for_model(provider_id, model_id, &server_tools)?;
                 self.load_provider_model(id)
             }
         }
     }
 
     pub fn delete_provider_model(&self, provider_model_id: i64) -> Result<()> {
+        let existing = self.load_provider_model(provider_model_id)?;
+        self.delete_server_tools_for_model(existing.provider_id, &existing.model_id)?;
         let affected = self
             .connection
             .execute(
@@ -786,7 +885,8 @@ impl SettingsStorage {
     }
 
     pub fn load_provider_model(&self, provider_model_id: i64) -> Result<ProviderModelRecord> {
-        self.connection
+        let row = self
+            .connection
             .query_row(
                 "SELECT id, provider_id, model_id, display_name,
                         context_window, max_output, supports_tool_use,
@@ -795,23 +895,37 @@ impl SettingsStorage {
                  WHERE id = ?1",
                 params![provider_model_id],
                 |row| {
-                    Ok(ProviderModelRecord {
-                        id: row.get::<_, i64>(0)?,
-                        provider_id: row.get::<_, i64>(1)?,
-                        model_id: row.get::<_, String>(2)?,
-                        display_name: normalize_optional_string(row.get::<_, String>(3)?),
-                        context_window: row.get::<_, i64>(4)? as usize,
-                        max_output_tokens: row.get::<_, i64>(5)? as usize,
-                        supports_tool_use: row.get::<_, i64>(6)? != 0,
-                        supports_vision: row.get::<_, i64>(7)? != 0,
-                        supports_audio: row.get::<_, i64>(8)? != 0,
-                        supports_pdf: row.get::<_, i64>(9)? != 0,
-                    })
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        normalize_optional_string(row.get::<_, String>(3)?),
+                        row.get::<_, i64>(4)? as usize,
+                        row.get::<_, i64>(5)? as usize,
+                        row.get::<_, i64>(6)? != 0,
+                        row.get::<_, i64>(7)? != 0,
+                        row.get::<_, i64>(8)? != 0,
+                        row.get::<_, i64>(9)? != 0,
+                    ))
                 },
             )
             .optional()
             .context("failed to load provider model")?
-            .ok_or_else(|| anyhow::anyhow!("provider model {} not found", provider_model_id))
+            .ok_or_else(|| anyhow::anyhow!("provider model {} not found", provider_model_id))?;
+
+        Ok(ProviderModelRecord {
+            id: row.0,
+            provider_id: row.1,
+            model_id: row.2.clone(),
+            display_name: row.3,
+            context_window: row.4,
+            max_output_tokens: row.5,
+            supports_tool_use: row.6,
+            supports_vision: row.7,
+            supports_audio: row.8,
+            supports_pdf: row.9,
+            server_tools: self.load_server_tools_for_model(row.1, &row.2)?,
+        })
     }
 
     fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -860,6 +974,15 @@ impl SettingsStorage {
                     supports_vision   INTEGER NOT NULL DEFAULT 0,
                     supports_audio    INTEGER NOT NULL DEFAULT 0,
                     supports_pdf      INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS model_server_tools (
+                    id            INTEGER PRIMARY KEY,
+                    provider_id   INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                    model_id      TEXT    NOT NULL,
+                    capability    TEXT    NOT NULL,
+                    format        TEXT    NOT NULL,
+                    UNIQUE(provider_id, model_id, capability)
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_profiles (
@@ -913,6 +1036,76 @@ impl SettingsStorage {
                 .context("failed to add agent_profiles.description column")?;
         }
 
+        Ok(())
+    }
+
+    fn load_server_tools_for_model(
+        &self,
+        provider_id: i64,
+        model_id: &str,
+    ) -> Result<Vec<ServerToolConfig>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT capability, format
+                 FROM model_server_tools
+                 WHERE provider_id = ?1 AND lower(model_id) = lower(?2)
+                 ORDER BY id ASC",
+            )
+            .context("failed to prepare model server tools query")?;
+
+        let rows = statement
+            .query_map(params![provider_id, model_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("failed to query model server tools")?;
+
+        let mut tools = Vec::new();
+        for row in rows {
+            let (capability_raw, format_raw) = row.context("failed to decode model server tool")?;
+            let capability =
+                ServerToolCapability::from_db_value(&capability_raw).ok_or_else(|| {
+                    anyhow::anyhow!("unsupported server tool capability {capability_raw}")
+                })?;
+            let format = ServerToolFormat::from_db_value(&format_raw)
+                .ok_or_else(|| anyhow::anyhow!("unsupported server tool format {format_raw}"))?;
+            tools.push(ServerToolConfig { capability, format });
+        }
+        Ok(tools)
+    }
+
+    fn delete_server_tools_for_model(&self, provider_id: i64, model_id: &str) -> Result<()> {
+        self.connection
+            .execute(
+                "DELETE FROM model_server_tools
+                 WHERE provider_id = ?1 AND lower(model_id) = lower(?2)",
+                params![provider_id, model_id],
+            )
+            .context("failed to delete model server tools")?;
+        Ok(())
+    }
+
+    fn sync_server_tools_for_model(
+        &self,
+        provider_id: i64,
+        model_id: &str,
+        server_tools: &[ServerToolConfig],
+    ) -> Result<()> {
+        self.delete_server_tools_for_model(provider_id, model_id)?;
+        for tool in server_tools {
+            self.connection
+                .execute(
+                    "INSERT INTO model_server_tools (provider_id, model_id, capability, format)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        provider_id,
+                        model_id,
+                        tool.capability.as_db_value(),
+                        tool.format.as_db_value(),
+                    ],
+                )
+                .context("failed to insert model server tool")?;
+        }
         Ok(())
     }
 }
@@ -998,11 +1191,7 @@ fn normalize_avatar_color(raw: &str) -> String {
     }
 }
 
-fn normalize_agent_description(
-    raw: String,
-    display_name: &str,
-    system_prompt: &str,
-) -> String {
+fn normalize_agent_description(raw: String, display_name: &str, system_prompt: &str) -> String {
     let trimmed = raw.trim().to_string();
     if !trimmed.is_empty() {
         return trimmed;

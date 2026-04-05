@@ -339,6 +339,10 @@ export type TaskModelSelectorView = {
     supportsVision: boolean;
     supportsAudio: boolean;
     supportsPdf: boolean;
+    serverTools: Array<{
+      capability: string;
+      format: string;
+    }>;
   };
   providers: Array<{
     providerId?: number | null;
@@ -377,6 +381,10 @@ export type ProviderSettingsView = {
         supportsVision: boolean;
         supportsAudio: boolean;
         supportsPdf: boolean;
+        serverTools: Array<{
+          capability: string;
+          format: string;
+        }>;
       };
     }>;
   }>;

@@ -1,31 +1,26 @@
-use anyhow::{Context, Result, bail};
-use genai::chat::{
-    ChatMessage, ChatRequest, ContentPart, MessageContent, Tool as GenAiTool,
-    ToolCall as GenAiToolCall, ToolResponse as GenAiToolResponse,
-};
+use anyhow::Result;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::context::{AgentContext, ChatTurn, ContentBlock, render_file_snapshot_for_prompt};
+use crate::settings::{ServerToolCapability, ServerToolConfig, ServerToolFormat};
 use crate::tools::{ToolDefinition, ToolParameter};
 
-/// RequestMessage 保持显式结构，方便 tool loop 在同一轮里累积 assistant/tool 消息。
+/// RequestMessage 保持 March 自己的结构，避免上下文层先翻译成第三方 SDK 类型，
+/// 再被二次翻译成 provider wire format。
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestMessage {
-    role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<MessageContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    tool_calls: Vec<ApiToolCallRequest>,
+    pub role: String,
+    pub content: Option<MessageContent>,
+    pub tool_call_id: Option<String>,
+    pub tool_calls: Vec<ApiToolCallRequest>,
 }
 
 impl RequestMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: "system".to_string(),
-            content: Some(MessageContent::from_text(content.into())),
+            content: Some(MessageContent::from_text(content)),
             tool_call_id: None,
             tool_calls: Vec::new(),
         }
@@ -68,9 +63,108 @@ impl RequestMessage {
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: "tool".to_string(),
-            content: Some(MessageContent::from_text(content.into())),
+            content: Some(MessageContent::from_text(content)),
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MessageContent {
+    parts: Vec<MessageContentPart>,
+}
+
+impl MessageContent {
+    pub fn from_text(text: impl Into<String>) -> Self {
+        Self {
+            parts: vec![MessageContentPart::Text(text.into())],
+        }
+    }
+
+    pub fn from_parts(parts: Vec<MessageContentPart>) -> Self {
+        Self { parts }
+    }
+
+    pub fn parts(&self) -> &[MessageContentPart] {
+        &self.parts
+    }
+
+    pub fn into_parts(self) -> Vec<MessageContentPart> {
+        self.parts
+    }
+
+    pub fn joined_texts(&self) -> Option<String> {
+        let text = self
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                MessageContentPart::Text(text) => Some(text.as_str()),
+                MessageContentPart::Image { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        (!text.trim().is_empty()).then_some(text)
+    }
+}
+
+impl From<String> for MessageContent {
+    fn from(value: String) -> Self {
+        Self::from_text(value)
+    }
+}
+
+impl From<&str> for MessageContent {
+    fn from(value: &str) -> Self {
+        Self::from_text(value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum MessageContentPart {
+    Text(String),
+    Image {
+        media_type: String,
+        data_base64: String,
+        name: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiToolCallRequest {
+    pub id: String,
+    pub tool_type: String,
+    pub function: ApiToolFunctionCallRequest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiToolFunctionCallRequest {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestOptions {
+    pub model: String,
+    pub stream: bool,
+    pub temperature: f32,
+    pub max_output_tokens: Option<u32>,
+}
+
+impl RequestOptions {
+    pub fn for_chat(model: impl Into<String>, stream: bool) -> Self {
+        Self {
+            model: model.into(),
+            stream,
+            temperature: 0.2,
+            max_output_tokens: None,
         }
     }
 }
@@ -91,61 +185,60 @@ pub fn build_messages(context: &AgentContext) -> Vec<RequestMessage> {
     messages
 }
 
-pub fn build_chat_request(
-    context: &AgentContext,
-    conversation: &[RequestMessage],
-) -> Result<ChatRequest> {
-    let mut request = ChatRequest::default();
+pub fn function_tools_for_context(context: &AgentContext) -> Vec<FunctionToolDefinition> {
+    context
+        .tools
+        .iter()
+        .map(translate_tool_definition)
+        .collect()
+}
 
-    for message in conversation {
-        let content = message.content.clone().unwrap_or_default();
-        match message.role.as_str() {
-            "system" => {
-                let content_text = content.into_joined_texts().unwrap_or_default();
-                if request.system.is_none() {
-                    request = request.with_system(content_text);
-                } else {
-                    request = request.append_message(ChatMessage::system(content_text));
-                }
-            }
-            "user" => request = request.append_message(ChatMessage::user(content)),
-            "assistant" => {
-                let assistant_message = build_assistant_message(content, &message.tool_calls)?;
-                request = request.append_message(assistant_message);
-            }
-            "tool" => {
-                let tool_call_id = message
-                    .tool_call_id
-                    .clone()
-                    .context("tool message missing tool_call_id")?;
-                request = request.append_message(ChatMessage::from(GenAiToolResponse::new(
-                    tool_call_id,
-                    content.into_joined_texts().unwrap_or_default(),
-                )));
-            }
-            other => bail!("unsupported request role {other}"),
+pub fn server_tool_definition(tool: &ServerToolConfig) -> Value {
+    match (tool.capability, tool.format) {
+        (ServerToolCapability::WebSearch, ServerToolFormat::OpenAi) => {
+            json!({ "type": "web_search_preview" })
+        }
+        (ServerToolCapability::CodeExecution, ServerToolFormat::OpenAi) => {
+            json!({ "type": "code_interpreter" })
+        }
+        (ServerToolCapability::FileSearch, ServerToolFormat::OpenAi) => {
+            json!({ "type": "file_search" })
+        }
+        (ServerToolCapability::WebSearch, ServerToolFormat::Anthropic) => {
+            json!({ "type": "web_search_20250305" })
+        }
+        (ServerToolCapability::CodeExecution, ServerToolFormat::Anthropic) => {
+            json!({ "type": "code_execution_20250522" })
+        }
+        (ServerToolCapability::WebSearch, ServerToolFormat::Gemini) => {
+            json!({ "googleSearch": {} })
+        }
+        (ServerToolCapability::CodeExecution, ServerToolFormat::Gemini) => {
+            json!({ "codeExecution": {} })
+        }
+        // UI 已经避免非法组合；这里保留保守 fallback，避免旧数据直接炸掉整个请求。
+        (ServerToolCapability::FileSearch, ServerToolFormat::Anthropic)
+        | (ServerToolCapability::FileSearch, ServerToolFormat::Gemini) => {
+            json!({ "type": "file_search" })
         }
     }
+}
 
-    if !context.tools.is_empty() {
-        request = request.with_tools(context.tools.iter().map(translate_tool_definition));
+pub fn serialize_tool_arguments(arguments_json: &str) -> Value {
+    serde_json::from_str(arguments_json)
+        .unwrap_or_else(|_| Value::String(arguments_json.to_string()))
+}
+
+pub fn render_tool_description(tool: &ToolDefinition) -> String {
+    if tool.notes.is_empty() {
+        return tool.description.to_string();
     }
 
-    Ok(request)
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct ApiToolCallRequest {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub tool_type: String,
-    pub function: ApiToolFunctionCallRequest,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct ApiToolFunctionCallRequest {
-    pub name: String,
-    pub arguments: String,
+    format!(
+        "{}\n\nUsage notes:\n- {}",
+        tool.description,
+        tool.notes.join("\n- ")
+    )
 }
 
 fn render_injections(context: &AgentContext) -> String {
@@ -245,27 +338,6 @@ fn render_context_body(context: &AgentContext) -> String {
     output
 }
 
-fn build_assistant_message(
-    content: MessageContent,
-    tool_calls: &[ApiToolCallRequest],
-) -> Result<ChatMessage> {
-    if tool_calls.is_empty() {
-        return Ok(ChatMessage::assistant(content));
-    }
-
-    let mut parts = content.into_parts();
-    for tool_call in tool_calls {
-        parts.push(ContentPart::ToolCall(GenAiToolCall {
-            call_id: tool_call.id.clone(),
-            fn_name: tool_call.function.name.clone(),
-            fn_arguments: parse_tool_arguments(&tool_call.function.arguments),
-            thought_signatures: None,
-        }));
-    }
-
-    Ok(ChatMessage::assistant(MessageContent::from_parts(parts)))
-}
-
 fn request_message_from_chat_turn(turn: &ChatTurn) -> RequestMessage {
     let content = message_content_from_blocks(&turn.content);
     match turn.role {
@@ -280,43 +352,28 @@ fn message_content_from_blocks(blocks: &[ContentBlock]) -> MessageContent {
         blocks
             .iter()
             .map(|block| match block {
-                ContentBlock::Text { text } => ContentPart::Text(text.clone()),
+                ContentBlock::Text { text } => MessageContentPart::Text(text.clone()),
                 ContentBlock::Image {
                     media_type,
                     data_base64,
                     name,
                     ..
-                } => ContentPart::from_binary_base64(
-                    media_type.clone(),
-                    data_base64.clone(),
-                    name.clone(),
-                ),
+                } => MessageContentPart::Image {
+                    media_type: media_type.clone(),
+                    data_base64: data_base64.clone(),
+                    name: name.clone(),
+                },
             })
             .collect::<Vec<_>>(),
     )
 }
 
-fn parse_tool_arguments(arguments_json: &str) -> Value {
-    serde_json::from_str(arguments_json)
-        .unwrap_or_else(|_| Value::String(arguments_json.to_string()))
-}
-
-fn translate_tool_definition(tool: &ToolDefinition) -> GenAiTool {
-    GenAiTool::new(tool.name.to_string())
-        .with_description(render_tool_description(tool))
-        .with_schema(build_parameters_schema(&tool.parameters))
-}
-
-fn render_tool_description(tool: &ToolDefinition) -> String {
-    if tool.notes.is_empty() {
-        return tool.description.to_string();
+fn translate_tool_definition(tool: &ToolDefinition) -> FunctionToolDefinition {
+    FunctionToolDefinition {
+        name: tool.name.to_string(),
+        description: render_tool_description(tool),
+        parameters: build_parameters_schema(&tool.parameters),
     }
-
-    format!(
-        "{}\n\nUsage notes:\n- {}",
-        tool.description,
-        tool.notes.join("\n- ")
-    )
 }
 
 fn build_parameters_schema(parameters: &[ToolParameter]) -> Value {
@@ -353,4 +410,13 @@ fn json_type_for_parameter(parameter: &ToolParameter) -> &'static str {
         "path" => "string",
         _ => "string",
     }
+}
+
+pub fn validate_messages(messages: &[RequestMessage]) -> Result<()> {
+    for message in messages {
+        if message.role == "tool" && message.tool_call_id.is_none() {
+            anyhow::bail!("tool message missing tool_call_id");
+        }
+    }
+    Ok(())
 }

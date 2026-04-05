@@ -377,6 +377,36 @@
                   </div>
                 </div>
 
+                <div class="dialog-field">
+                  <label class="dialog-label">Server-side Tools</label>
+                  <div class="space-y-3">
+                    <div
+                      v-for="tool in serverToolDefinitions"
+                      :key="tool.capability"
+                      class="grid gap-3 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-3 md:grid-cols-[minmax(0,1fr)_220px]"
+                    >
+                      <label class="flex items-center gap-2 text-[12px] text-text">
+                        <input
+                          :checked="isServerToolEnabled(tool.capability)"
+                          type="checkbox"
+                          @change="onServerToolToggle(tool.capability, $event)"
+                        />
+                        <span>{{ tool.label }}</span>
+                      </label>
+                      <SettingsSelect
+                        :model-value="providerModelServerTools[tool.capability] ?? ''"
+                        :options="serverToolFormatOptions(tool.capability)"
+                        placeholder="选择格式"
+                        :disabled="!isServerToolEnabled(tool.capability)"
+                        @update:model-value="setServerToolFormat(tool.capability, $event)"
+                      />
+                    </div>
+                  </div>
+                  <p class="dialog-hint">
+                    这些工具由 provider 侧执行，March 只负责保存能力配置并在后续请求翻译层中注入对应定义。
+                  </p>
+                </div>
+
                 <div class="flex items-center justify-end gap-2">
                   <Button variant="ghost" type="button" @click="resetProviderModelForm">清空</Button>
                   <Button type="submit" :disabled="busy || !providerModelId.trim()">
@@ -660,6 +690,10 @@ const emit = defineEmits<{
     supportsVision: boolean;
     supportsAudio: boolean;
     supportsPdf: boolean;
+    serverTools: Array<{
+      capability: string;
+      format: string;
+    }>;
   }];
   testProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string; probeModel?: string }];
   deleteProvider: [providerId: number];
@@ -697,6 +731,7 @@ const providerModelSupportsToolUse = ref(false);
 const providerModelSupportsVision = ref(false);
 const providerModelSupportsAudio = ref(false);
 const providerModelSupportsPdf = ref(false);
+const providerModelServerTools = ref<Record<string, string>>({});
 const defaultProviderIdString = ref('');
 const defaultModelLocal = ref('');
 const activeAgentName = ref('');
@@ -785,6 +820,18 @@ const providerTypeOptions = [
   { value: 'cohere', label: 'Cohere' },
   { value: 'ollama', label: 'Ollama' },
 ];
+
+const serverToolDefinitions = [
+  { capability: 'web_search', label: 'Web Search', formats: ['anthropic', 'openai', 'gemini'] },
+  { capability: 'code_execution', label: 'Code Execution', formats: ['anthropic', 'openai', 'gemini'] },
+  { capability: 'file_search', label: 'File Search', formats: ['openai'] },
+] as const;
+
+const serverToolFormatLabels: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+};
 
 const agentProviderOptions = computed(() => [
   { value: '', label: '跟随任务默认' },
@@ -1053,6 +1100,7 @@ function startCreateProviderModel() {
   providerModelSupportsVision.value = false;
   providerModelSupportsAudio.value = false;
   providerModelSupportsPdf.value = false;
+  providerModelServerTools.value = {};
 }
 
 function startEditProviderModel(model: NonNullable<typeof activeEditorProvider.value>['models'][number]) {
@@ -1065,6 +1113,9 @@ function startEditProviderModel(model: NonNullable<typeof activeEditorProvider.v
   providerModelSupportsVision.value = model.capabilities.supportsVision;
   providerModelSupportsAudio.value = model.capabilities.supportsAudio;
   providerModelSupportsPdf.value = model.capabilities.supportsPdf;
+  providerModelServerTools.value = Object.fromEntries(
+    model.capabilities.serverTools.map((tool) => [tool.capability, tool.format]),
+  );
 }
 
 function resetProviderModelForm() {
@@ -1076,6 +1127,13 @@ function submitProviderModel() {
     return;
   }
 
+  const serverTools = serverToolDefinitions
+    .map((tool) => ({
+      capability: tool.capability,
+      format: providerModelServerTools.value[tool.capability]?.trim() ?? '',
+    }))
+    .filter((tool) => tool.format);
+
   emit('saveProviderModel', {
     id: activeProviderModelId.value ?? undefined,
     providerId: activeEditorProvider.value.id,
@@ -1083,10 +1141,11 @@ function submitProviderModel() {
     displayName: providerModelDisplayName.value,
     contextWindow: Math.max(1, Number(providerModelContextWindow.value) || 131072),
     maxOutputTokens: Math.max(1, Number(providerModelMaxOutputTokens.value) || 4096),
-    supportsToolUse: providerModelSupportsToolUse.value,
+    supportsToolUse: providerModelSupportsToolUse.value || serverTools.length > 0,
     supportsVision: providerModelSupportsVision.value,
     supportsAudio: providerModelSupportsAudio.value,
     supportsPdf: providerModelSupportsPdf.value,
+    serverTools,
   });
   resetProviderModelForm();
 }
@@ -1164,6 +1223,77 @@ function scheduleProbeModelsRequest() {
   }, 350);
 }
 
+function serverToolFormatOptions(capability: string) {
+  const definition = serverToolDefinitions.find((tool) => tool.capability === capability);
+  return (definition?.formats ?? []).map((format) => ({
+    value: format,
+    label: serverToolFormatOptionLabel(capability, format),
+  }));
+}
+
+function serverToolFormatOptionLabel(capability: string, format: string) {
+  const providerLabel = serverToolFormatLabels[format] ?? format;
+  if (capability === 'web_search' && format === 'openai') {
+    return `${providerLabel} (web_search_preview)`;
+  }
+  if (capability === 'web_search' && format === 'anthropic') {
+    return `${providerLabel} (web_search_20250305)`;
+  }
+  if (capability === 'web_search' && format === 'gemini') {
+    return `${providerLabel} (google_search)`;
+  }
+  if (capability === 'code_execution' && format === 'openai') {
+    return `${providerLabel} (code_interpreter)`;
+  }
+  if (capability === 'code_execution' && format === 'anthropic') {
+    return `${providerLabel} (code_execution_20250522)`;
+  }
+  if (capability === 'code_execution' && format === 'gemini') {
+    return `${providerLabel} (code_execution)`;
+  }
+  if (capability === 'file_search' && format === 'openai') {
+    return `${providerLabel} (file_search)`;
+  }
+  return providerLabel;
+}
+
+function isServerToolEnabled(capability: string) {
+  return Boolean(providerModelServerTools.value[capability]);
+}
+
+function toggleServerTool(capability: string, enabled: boolean) {
+  if (enabled) {
+    const [firstFormat] = serverToolFormatOptions(capability);
+    if (firstFormat) {
+      providerModelServerTools.value = {
+        ...providerModelServerTools.value,
+        [capability]: providerModelServerTools.value[capability] || firstFormat.value,
+      };
+      providerModelSupportsToolUse.value = true;
+    }
+    return;
+  }
+
+  const next = { ...providerModelServerTools.value };
+  delete next[capability];
+  providerModelServerTools.value = next;
+}
+
+function setServerToolFormat(capability: string, format: string) {
+  if (!format) {
+    toggleServerTool(capability, false);
+    return;
+  }
+  providerModelServerTools.value = {
+    ...providerModelServerTools.value,
+    [capability]: format,
+  };
+}
+
+function onServerToolToggle(capability: string, event: Event) {
+  toggleServerTool(capability, (event.target as HTMLInputElement | null)?.checked ?? false);
+}
+
 function formatCapabilitiesSummary(capabilities: {
   contextWindow: number;
   maxOutputTokens: number;
@@ -1171,12 +1301,29 @@ function formatCapabilitiesSummary(capabilities: {
   supportsVision: boolean;
   supportsAudio: boolean;
   supportsPdf: boolean;
+  serverTools: Array<{
+    capability: string;
+    format: string;
+  }>;
 }) {
+  const serverToolLabels = capabilities.serverTools.map((tool) => {
+    if (tool.capability === 'web_search') {
+      return '搜索';
+    }
+    if (tool.capability === 'code_execution') {
+      return '代码执行';
+    }
+    if (tool.capability === 'file_search') {
+      return '文件检索';
+    }
+    return tool.capability;
+  });
   const featureLabels = [
     capabilities.supportsToolUse ? '工具' : null,
     capabilities.supportsVision ? '图片' : null,
     capabilities.supportsAudio ? '音频' : null,
     capabilities.supportsPdf ? 'PDF' : null,
+    ...serverToolLabels,
   ].filter(Boolean);
   const summary = featureLabels.length ? featureLabels.join(' · ') : '纯文本';
   return `${formatTokenMetric(capabilities.contextWindow)} context · ${formatTokenMetric(capabilities.maxOutputTokens)} output · ${summary}`;

@@ -198,6 +198,7 @@ pub struct UiModelCapabilitiesView {
     pub supports_vision: bool,
     pub supports_audio: bool,
     pub supports_pdf: bool,
+    pub server_tools: Vec<UiServerToolView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +225,13 @@ pub struct UiProviderModelView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiServerToolView {
+    pub capability: String,
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiUpsertProviderRequest {
     pub id: Option<i64>,
     pub provider_type: String,
@@ -245,6 +253,7 @@ pub struct UiUpsertProviderModelRequest {
     pub supports_vision: bool,
     pub supports_audio: bool,
     pub supports_pdf: bool,
+    pub server_tools: Vec<UiServerToolView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

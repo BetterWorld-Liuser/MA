@@ -1,25 +1,23 @@
 use crate::context::AgentContext;
-use crate::settings::ProviderType;
+use crate::settings::{ProviderType, ServerToolConfig};
 use anyhow::{Context, Result};
-use genai::chat::{ChatOptions, ChatRequest};
-use genai::resolver::ServiceTargetResolver;
-use genai::{Client as GenAiClient, ServiceTarget};
 use reqwest::Client as HttpClient;
 
 mod delivery;
 mod messages;
 mod title;
 mod transport;
+mod wire;
 
 use delivery::{
     DeliveryPath, remember_stream_failure, remember_stream_success, stream_preference_for,
 };
-use messages::build_chat_request;
+use messages::{RequestOptions, function_tools_for_context};
 use title::{sanitize_task_title, summarize_probe_reply};
-use transport::{build_service_target, list_model_descriptors};
+use transport::list_model_descriptors;
 
 pub use messages::{
-    ApiToolCallRequest, ApiToolFunctionCallRequest, RequestMessage, build_messages,
+    ApiToolCallRequest, ApiToolFunctionCallRequest, MessageContent, RequestMessage, build_messages,
 };
 pub use title::{fallback_task_title, format_provider_response_for_debug};
 
@@ -29,6 +27,7 @@ pub struct RuntimeProviderConfig {
     pub base_url: Option<String>,
     pub api_key: String,
     pub model: String,
+    pub server_tools: Vec<ServerToolConfig>,
 }
 
 impl RuntimeProviderConfig {
@@ -45,6 +44,7 @@ impl RuntimeProviderConfig {
             base_url: Some(base_url.trim_end_matches('/').to_string()),
             api_key,
             model,
+            server_tools: Vec::new(),
         })
     }
 }
@@ -52,8 +52,8 @@ impl RuntimeProviderConfig {
 #[derive(Clone)]
 pub struct ProviderClient {
     http: HttpClient,
-    client: GenAiClient,
     config: RuntimeProviderConfig,
+    function_tools: Vec<messages::FunctionToolDefinition>,
 }
 
 pub type OpenAiCompatibleClient = ProviderClient;
@@ -61,50 +61,31 @@ pub type OpenAiCompatibleConfig = RuntimeProviderConfig;
 
 impl ProviderClient {
     pub fn new(config: RuntimeProviderConfig) -> Self {
-        let resolver_config = config.clone();
-        let target_resolver = ServiceTargetResolver::from_resolver_fn(
-            move |_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
-                Ok(build_service_target(&resolver_config))
-            },
-        );
-
-        let client = GenAiClient::builder()
-            .with_service_target_resolver(target_resolver)
-            .build();
-
         Self {
             http: HttpClient::new(),
-            client,
             config,
+            function_tools: Vec::new(),
         }
     }
 
     pub async fn list_models(&self) -> Result<Vec<String>> {
-        match self.config.provider_type {
-            ProviderType::OpenAiCompat => Ok(self
-                .list_model_descriptors()
-                .await?
-                .into_iter()
-                .map(|model| model.id)
-                .collect()),
-            other => {
-                let mut models = self
-                    .client
-                    .all_model_names(transport_adapter_kind(other, &self.config.model))
-                    .await
-                    .context("failed to load provider model list")?;
-                models.sort();
-                models.dedup();
-                Ok(models)
-            }
+        let mut models = self
+            .list_model_descriptors()
+            .await?
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+
+        if models.is_empty() && !self.config.model.trim().is_empty() {
+            models.push(self.config.model.clone());
         }
+
+        models.sort();
+        models.dedup();
+        Ok(models)
     }
 
     pub async fn resolve_model_context_window(&self, model_id: &str) -> Result<Option<usize>> {
-        if self.config.provider_type != ProviderType::OpenAiCompat {
-            return Ok(None);
-        }
-
         let descriptors = self.list_model_descriptors().await?;
         Ok(descriptors
             .into_iter()
@@ -134,29 +115,48 @@ impl ProviderClient {
     where
         F: FnMut(ProviderProgressEvent) -> Result<()>,
     {
-        let request = build_chat_request(context, &conversation)?;
-        let request_json =
-            serde_json::to_string_pretty(&request).context("failed to encode provider request")?;
-        let mode = stream_preference_for(&self.config);
+        let mut provider = self.clone();
+        provider.function_tools = function_tools_for_context(context);
+
+        let mode = stream_preference_for(&provider.config);
+        let stream_options = RequestOptions::for_chat(provider.config.model.clone(), true);
+        let request_preview = wire::adapter_for(&provider.config).build_request(
+            &provider.config,
+            &conversation,
+            &provider.function_tools,
+            &provider.config.server_tools,
+            &stream_options,
+        )?;
+        let request_json = serde_json::to_string_pretty(&request_preview.body)
+            .context("failed to encode provider request")?;
+
         if mode == delivery::ProviderDeliveryMode::NonStreaming {
-            return self
-                .complete_non_streaming(request, request_json, DeliveryPath::NonStreamingCached)
+            let options = RequestOptions::for_chat(provider.config.model.clone(), false);
+            return provider
+                .complete_non_streaming(
+                    &conversation,
+                    &options,
+                    request_json,
+                    DeliveryPath::NonStreamingCached,
+                )
                 .await;
         }
 
-        match self
-            .complete_via_stream(request.clone(), &request_json, &mut on_event)
+        match provider
+            .complete_via_stream(&conversation, &stream_options, &request_json, &mut on_event)
             .await
         {
             Ok(response) => {
-                remember_stream_success(&self.config);
+                remember_stream_success(&provider.config);
                 Ok(response)
             }
             Err(stream_failure) => {
-                remember_stream_failure(&self.config);
-                match self
+                remember_stream_failure(&provider.config);
+                let fallback_options = RequestOptions::for_chat(provider.config.model.clone(), false);
+                match provider
                     .complete_non_streaming(
-                        request,
+                        &conversation,
+                        &fallback_options,
                         request_json,
                         DeliveryPath::NonStreamingFallback {
                             stream_failure: stream_failure.summary(),
@@ -231,8 +231,8 @@ impl ProviderClient {
             return Ok(None);
         }
 
-        let request = ChatRequest::from_user(format!("First user message:\n{}", trimmed))
-            .with_system(
+        let messages = vec![
+            RequestMessage::system(
                 "You generate concise task titles for a coding workspace.\n\
                  Return only the title text.\n\
                  Rules:\n\
@@ -241,16 +241,25 @@ impl ProviderClient {
                  - Keep the concrete object, such as a file, module, or bug.\n\
                  - Remove filler like '帮我', '请你', '看一下', '继续'.\n\
                  - Do not use quotes, numbering, or trailing punctuation.",
-            );
-        let options = ChatOptions::default().with_temperature(0.1);
+            ),
+            RequestMessage::user(format!("First user message:\n{}", trimmed)),
+        ];
         let response = self
-            .client
-            .exec_chat(&self.config.model, request, Some(&options))
+            .complete_simple_request(
+                messages,
+                RequestOptions {
+                    model: self.config.model.clone(),
+                    stream: false,
+                    temperature: 0.1,
+                    max_output_tokens: Some(64),
+                },
+            )
             .await
             .context("failed to request suggested title")?;
 
         Ok(response
-            .first_text()
+            .content
+            .as_deref()
             .and_then(sanitize_task_title)
             .or_else(|| fallback_task_title(trimmed)))
     }
@@ -300,25 +309,62 @@ impl ProviderClient {
     }
 
     async fn run_probe_request(&self, model: &str) -> Result<String> {
-        let request = ChatRequest::from_user(
-            "Return exactly `MARCH_OK` and nothing else. Do not call tools.",
-        );
-        let options = ChatOptions::default()
-            .with_temperature(0.0)
-            .with_max_tokens(16)
-            .with_capture_content(true);
         let response = self
-            .client
-            .exec_chat(model, request, Some(&options))
+            .complete_simple_request_with_model(
+                model,
+                vec![RequestMessage::user(
+                    "Return exactly `MARCH_OK` and nothing else. Do not call tools.",
+                )],
+                RequestOptions {
+                    model: model.to_string(),
+                    stream: false,
+                    temperature: 0.0,
+                    max_output_tokens: Some(16),
+                },
+            )
             .await
             .context("failed to run provider probe request")?;
         let reply = response
-            .first_text()
+            .content
+            .as_deref()
             .map(str::trim)
             .filter(|text| !text.is_empty())
             .ok_or_else(|| anyhow::anyhow!("provider probe response did not contain text"))?;
 
         Ok(summarize_probe_reply(reply))
+    }
+
+    async fn complete_simple_request(
+        &self,
+        messages: Vec<RequestMessage>,
+        options: RequestOptions,
+    ) -> Result<ProviderResponse> {
+        let model = options.model.clone();
+        self.complete_simple_request_with_model(&model, messages, options)
+            .await
+    }
+
+    async fn complete_simple_request_with_model(
+        &self,
+        model: &str,
+        messages: Vec<RequestMessage>,
+        mut options: RequestOptions,
+    ) -> Result<ProviderResponse> {
+        let mut provider = self.clone();
+        provider.function_tools = Vec::new();
+        options.model = model.to_string();
+        let request_preview = wire::adapter_for(&provider.config).build_request(
+            &provider.config,
+            &messages,
+            &provider.function_tools,
+            &[],
+            &options,
+        )?;
+        let request_json = serde_json::to_string_pretty(&request_preview.body)
+            .context("failed to encode provider request")?;
+        provider
+            .complete_non_streaming(&messages, &options, request_json, DeliveryPath::NonStreamingCached)
+            .await
     }
 }
 
@@ -370,27 +416,6 @@ pub enum ConversationDelta {
 pub enum ModelResponse {
     AssistantMessage(String),
     ToolCalls(Vec<RequestedToolCall>),
-}
-
-fn transport_adapter_kind(provider_type: ProviderType, model: &str) -> genai::adapter::AdapterKind {
-    match provider_type {
-        ProviderType::OpenAiCompat => genai::adapter::AdapterKind::OpenAI,
-        ProviderType::OpenAi => genai::adapter::AdapterKind::from_model(model)
-            .unwrap_or(genai::adapter::AdapterKind::OpenAI),
-        ProviderType::Anthropic => genai::adapter::AdapterKind::Anthropic,
-        ProviderType::Gemini => genai::adapter::AdapterKind::Gemini,
-        ProviderType::Fireworks => genai::adapter::AdapterKind::Fireworks,
-        ProviderType::Together => genai::adapter::AdapterKind::Together,
-        ProviderType::Groq => genai::adapter::AdapterKind::Groq,
-        ProviderType::Mimo => genai::adapter::AdapterKind::Mimo,
-        ProviderType::Nebius => genai::adapter::AdapterKind::Nebius,
-        ProviderType::Xai => genai::adapter::AdapterKind::Xai,
-        ProviderType::DeepSeek => genai::adapter::AdapterKind::DeepSeek,
-        ProviderType::Zai => genai::adapter::AdapterKind::Zai,
-        ProviderType::BigModel => genai::adapter::AdapterKind::BigModel,
-        ProviderType::Cohere => genai::adapter::AdapterKind::Cohere,
-        ProviderType::Ollama => genai::adapter::AdapterKind::Ollama,
-    }
 }
 
 #[cfg(test)]
@@ -476,6 +501,7 @@ mod tests {
             base_url: Some("http://localhost:11434/v1".to_string()),
             api_key: String::new(),
             model: "qwen2.5-coder:32b".to_string(),
+            server_tools: Vec::new(),
         };
 
         assert_eq!(

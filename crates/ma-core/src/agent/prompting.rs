@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use genai::chat::MessageContent;
 
 use crate::config::MarchConfig;
 use crate::context::{
@@ -9,7 +8,8 @@ use crate::context::{
 };
 use crate::paths::clean_path;
 use crate::provider::{
-    ApiToolCallRequest, ApiToolFunctionCallRequest, ProviderToolCall, RequestMessage,
+    ApiToolCallRequest, ApiToolFunctionCallRequest, MessageContent, ProviderToolCall,
+    RequestMessage,
 };
 use crate::settings::user_home_dir;
 use crate::skills::{SkillEntry, SkillLoader};

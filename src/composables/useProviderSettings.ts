@@ -173,6 +173,10 @@ export function useProviderSettings({
     supportsVision: boolean;
     supportsAudio: boolean;
     supportsPdf: boolean;
+    serverTools: Array<{
+      capability: string;
+      format: string;
+    }>;
   }) {
     await runWorkspaceAction(async () => {
       providerSettings.value = await invoke<ProviderSettingsView>('upsert_provider_model', {

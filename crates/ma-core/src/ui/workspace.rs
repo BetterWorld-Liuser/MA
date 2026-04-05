@@ -82,8 +82,13 @@ pub(super) fn search_mentions(
     let agents = load_agent_profiles(working_directory)?
         .into_iter()
         .filter_map(|profile| {
-            rank_agent_profile(&profile.name, &profile.display_name, &profile.description, &query)
-                .map(|score| {
+            rank_agent_profile(
+                &profile.name,
+                &profile.display_name,
+                &profile.description,
+                &query,
+            )
+            .map(|score| {
                 (
                     score,
                     UiMentionTargetView::Agent {
@@ -98,7 +103,7 @@ pub(super) fn search_mentions(
                         },
                     },
                 )
-                })
+            })
         })
         .collect::<Vec<_>>();
 

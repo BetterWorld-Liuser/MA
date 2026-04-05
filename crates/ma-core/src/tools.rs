@@ -278,7 +278,8 @@ fn delete_lines_tool() -> ToolDefinition {
             },
         ],
         notes: vec![
-            "Use delete_lines for pure removal — dropping imports, dead code, or empty blocks.".to_string(),
+            "Use delete_lines for pure removal — dropping imports, dead code, or empty blocks."
+                .to_string(),
             "Subsequent line numbers shift up by the number of deleted lines.".to_string(),
         ],
     }

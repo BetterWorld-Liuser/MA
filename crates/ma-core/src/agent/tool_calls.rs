@@ -211,9 +211,7 @@ impl AgentSession {
                     let current_prompt = settings
                         .snapshot()?
                         .custom_system_core
-                        .unwrap_or_else(|| {
-                            crate::agent::default_march_prompt().to_string()
-                        });
+                        .unwrap_or_else(|| crate::agent::default_march_prompt().to_string());
                     let next_prompt = args.system_prompt.unwrap_or(current_prompt);
                     settings.set_custom_system_core(Some(next_prompt), true)?;
                     self.refresh_agent_profiles()?;

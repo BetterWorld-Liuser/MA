@@ -27,8 +27,8 @@ mod tool_calls;
 
 #[cfg(test)]
 use prompting::append_assistant_tool_call_message;
-pub(crate) use prompting::{base_instructions, default_march_prompt, default_system_core};
 use prompting::normalize_open_files_for_workspace;
+pub(crate) use prompting::{base_instructions, default_march_prompt, default_system_core};
 use prompting::{load_skills_for_workspace, render_prompt, upsert_injection};
 pub use runner::is_turn_cancelled_error;
 use shells::decode_command_output;
@@ -964,9 +964,8 @@ mod tests {
         // Has roster with inline (you) marker on active agent
         assert!(prompt.contains("# Available Agents"));
         assert!(
-            prompt.contains(
-                "- reviewer | Code Reviewer | Focus on implementation risks first (you)"
-            )
+            prompt
+                .contains("- reviewer | Code Reviewer | Focus on implementation risks first (you)")
         );
         assert!(!prompt.contains("active_agent:"));
 

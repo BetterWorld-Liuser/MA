@@ -2,18 +2,16 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
+use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
-use genai::chat::{
-    ChatOptions, ChatRequest, ChatResponse, ChatStreamEvent, MessageContent,
-    ToolCall as GenAiToolCall,
-};
 use serde::Serialize;
 use serde_json::Value;
 
 use super::title::debug_structured_response;
+use super::wire::{WireResponse, WireStreamDelta, adapter_for};
 use super::{
     ProviderClient, ProviderProgressEvent, ProviderResponse, ProviderToolCall,
-    ProviderToolCallDelta, RuntimeProviderConfig,
+    ProviderToolCallDelta, RequestMessage, RequestOptions, RuntimeProviderConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,93 +86,61 @@ struct StreamToolCallAccumulator {
 }
 
 impl StreamCollector {
-    fn ingest_tool_call(&mut self, tool_call: GenAiToolCall) -> Result<()> {
-        let arguments_json = serde_json::to_string(&tool_call.fn_arguments)
-            .context("failed to encode streamed tool call arguments")?;
-        if let Some(existing) = self
-            .tool_calls
-            .iter_mut()
-            .find(|existing| existing.id.as_deref() == Some(tool_call.call_id.as_str()))
-        {
-            existing.name = tool_call.fn_name;
-            existing.arguments_json = arguments_json;
-            existing.id = Some(tool_call.call_id);
-            return Ok(());
-        }
-
-        self.tool_calls.push(StreamToolCallAccumulator {
-            id: Some(tool_call.call_id),
-            name: tool_call.fn_name,
-            arguments_json,
-        });
-        Ok(())
-    }
-
-    fn absorb_captured_content(&mut self, content: Option<MessageContent>) {
-        let Some(content) = content else {
-            return;
-        };
-
-        if let Some(text) = content.joined_texts() {
-            self.content = text;
-        }
-
-        let captured_tool_calls = content.into_tool_calls();
-        if captured_tool_calls.is_empty() {
-            return;
-        }
-
-        self.tool_calls.clear();
-        for tool_call in captured_tool_calls {
-            let arguments_json =
-                serde_json::to_string(&tool_call.fn_arguments).unwrap_or_else(|_| "{}".to_string());
-            self.tool_calls.push(StreamToolCallAccumulator {
-                id: Some(tool_call.call_id),
-                name: tool_call.fn_name,
-                arguments_json,
-            });
+    fn ingest_delta(&mut self, delta: WireStreamDelta) {
+        match delta {
+            WireStreamDelta::ContentDelta(text) => self.content.push_str(&text),
+            WireStreamDelta::ToolCallDelta {
+                index,
+                id,
+                name,
+                arguments_fragment,
+            } => {
+                while self.tool_calls.len() <= index {
+                    self.tool_calls.push(StreamToolCallAccumulator::default());
+                }
+                let slot = &mut self.tool_calls[index];
+                if let Some(id) = id {
+                    slot.id = Some(id);
+                }
+                if let Some(name) = name {
+                    slot.name = name;
+                }
+                slot.arguments_json.push_str(&arguments_fragment);
+            }
+            WireStreamDelta::Done => {}
         }
     }
 
-    fn finish(self) -> Result<ProviderResponse> {
-        let tool_calls = self
-            .tool_calls
-            .into_iter()
+    fn finish(&self) -> Result<Vec<ProviderToolCall>> {
+        self.tool_calls
+            .iter()
             .map(|tool_call| {
                 let id = tool_call
                     .id
+                    .clone()
                     .filter(|value| !value.trim().is_empty())
-                    .context("streamed tool call missing id")?;
+                    .unwrap_or_else(|| format!("tool-call-{}", tool_call.name));
                 if tool_call.name.trim().is_empty() {
                     bail!("streamed tool call missing function name");
                 }
+                let arguments_json = normalized_arguments_json(&tool_call.arguments_json);
                 Ok(ProviderToolCall {
                     id,
-                    name: tool_call.name,
-                    arguments_json: tool_call.arguments_json,
+                    name: tool_call.name.clone(),
+                    arguments_json,
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(ProviderResponse {
-            content: if self.content.trim().is_empty() {
-                None
-            } else {
-                Some(self.content)
-            },
-            tool_calls,
-            request_json: String::new(),
-            raw_response: String::new(),
-        })
+            .collect()
     }
 
     fn tool_call_deltas(&self) -> Vec<ProviderToolCallDelta> {
         self.tool_calls
             .iter()
+            .filter(|tool_call| !tool_call.name.trim().is_empty() || tool_call.id.is_some())
             .map(|tool_call| ProviderToolCallDelta {
                 id: tool_call.id.clone(),
                 name: tool_call.name.clone(),
-                arguments_json: tool_call.arguments_json.clone(),
+                arguments_json: normalized_arguments_json(&tool_call.arguments_json),
             })
             .collect()
     }
@@ -198,81 +164,114 @@ impl DeliveryPath {
 }
 
 impl ProviderClient {
-    pub(super) fn chat_options() -> ChatOptions {
-        ChatOptions::default()
-            .with_temperature(0.2)
-            .with_capture_content(true)
-            .with_capture_tool_calls(true)
-    }
-
     pub(super) async fn complete_via_stream<F>(
         &self,
-        request: ChatRequest,
+        conversation: &[RequestMessage],
+        options: &RequestOptions,
         request_json: &str,
         on_event: &mut F,
     ) -> std::result::Result<ProviderResponse, StreamAttemptFailure>
     where
         F: FnMut(ProviderProgressEvent) -> Result<()>,
     {
-        let options = Self::chat_options();
-        let mut stream = self
-            .client
-            .exec_chat_stream(&self.config.model, request, Some(&options))
+        let adapter = adapter_for(&self.config);
+        let request = adapter
+            .build_request(
+                &self.config,
+                conversation,
+                &self.function_tools,
+                &self.config.server_tools,
+                options,
+            )
+            .map_err(|error| StreamAttemptFailure {
+                kind: StreamFailureKind::Start,
+                source: error,
+            })?;
+
+        let response = self
+            .http
+            .post(&request.url)
+            .headers(request.headers)
+            .json(&request.body)
+            .send()
             .await
+            .map_err(|error| StreamAttemptFailure {
+                kind: StreamFailureKind::Start,
+                source: error.into(),
+            })?
+            .error_for_status()
             .map_err(|error| StreamAttemptFailure {
                 kind: StreamFailureKind::Start,
                 source: error.into(),
             })?;
 
+        let mut stream = response.bytes_stream().eventsource();
         let mut collector = StreamCollector::default();
-        while let Some(event) = stream.stream.next().await {
+
+        while let Some(event) = stream.next().await {
             let event = event.map_err(|error| StreamAttemptFailure {
                 kind: StreamFailureKind::ReadEvent,
                 source: error.into(),
             })?;
-            match event {
-                ChatStreamEvent::Start => {}
-                ChatStreamEvent::Chunk(chunk) => {
-                    if !chunk.content.is_empty() {
-                        collector.content.push_str(&chunk.content);
-                        on_event(ProviderProgressEvent::ContentDelta(chunk.content)).map_err(
-                            |error| StreamAttemptFailure {
+            let event_name = (!event.event.trim().is_empty()).then_some(event.event.as_str());
+            let deltas = adapter
+                .parse_stream_event(event_name, &event.data)
+                .map_err(|error| StreamAttemptFailure {
+                    kind: StreamFailureKind::ReadEvent,
+                    source: error,
+                })?;
+
+            for delta in deltas {
+                collector.ingest_delta(delta.clone());
+                match delta {
+                    WireStreamDelta::ContentDelta(text) => {
+                        on_event(ProviderProgressEvent::ContentDelta(text)).map_err(|error| {
+                            StreamAttemptFailure {
                                 kind: StreamFailureKind::ReadEvent,
                                 source: error,
-                            },
-                        )?;
+                            }
+                        })?;
                     }
-                }
-                ChatStreamEvent::ToolCallChunk(chunk) => {
-                    collector
-                        .ingest_tool_call(chunk.tool_call)
+                    WireStreamDelta::ToolCallDelta { .. } => {
+                        on_event(ProviderProgressEvent::ToolCallsUpdated(
+                            collector.tool_call_deltas(),
+                        ))
                         .map_err(|error| StreamAttemptFailure {
                             kind: StreamFailureKind::ReadEvent,
                             source: error,
                         })?;
-                    on_event(ProviderProgressEvent::ToolCallsUpdated(
-                        collector.tool_call_deltas(),
+                    }
+                    WireStreamDelta::Done => {}
+                }
+            }
+
+            if adapter.is_stream_done(event_name, &event.data) {
+                let tool_calls = collector.finish().map_err(|error| StreamAttemptFailure {
+                    kind: StreamFailureKind::ReadEvent,
+                    source: error,
+                })?;
+                let content = if collector.content.trim().is_empty() {
+                    None
+                } else {
+                    Some(collector.content.clone())
+                };
+                let response = ProviderResponse {
+                    content: content.clone(),
+                    tool_calls: tool_calls.clone(),
+                    request_json: request_json.to_string(),
+                    raw_response: serde_json::to_string_pretty(&debug_structured_response(
+                        &ProviderResponse {
+                            content,
+                            tool_calls,
+                            request_json: String::new(),
+                            raw_response: String::new(),
+                        },
+                        DeliveryPath::Streaming,
+                        None,
                     ))
-                    .map_err(|error| StreamAttemptFailure {
-                        kind: StreamFailureKind::ReadEvent,
-                        source: error,
-                    })?;
-                }
-                ChatStreamEvent::ReasoningChunk(_) | ChatStreamEvent::ThoughtSignatureChunk(_) => {}
-                ChatStreamEvent::End(end) => {
-                    collector.absorb_captured_content(end.captured_content);
-                    let mut response =
-                        collector.finish().map_err(|error| StreamAttemptFailure {
-                            kind: StreamFailureKind::ReadEvent,
-                            source: error,
-                        })?;
-                    response.request_json = request_json.to_string();
-                    response.raw_response = serde_json::to_string_pretty(
-                        &debug_structured_response(&response, DeliveryPath::Streaming, None),
-                    )
-                    .unwrap_or_else(|_| "(failed to format provider response)".to_string());
-                    return Ok(response);
-                }
+                    .unwrap_or_else(|_| "(failed to format provider response)".to_string()),
+                };
+                return Ok(response);
             }
         }
 
@@ -284,60 +283,80 @@ impl ProviderClient {
 
     pub(super) async fn complete_non_streaming(
         &self,
-        request: ChatRequest,
+        conversation: &[RequestMessage],
+        options: &RequestOptions,
         request_json: String,
         delivery_path: DeliveryPath,
     ) -> Result<ProviderResponse> {
-        let options = Self::chat_options().with_capture_raw_body(true);
-        let response = self
-            .client
-            .exec_chat(&self.config.model, request, Some(&options))
+        let adapter = adapter_for(&self.config);
+        let request = adapter.build_request(
+            &self.config,
+            conversation,
+            &self.function_tools,
+            &self.config.server_tools,
+            options,
+        )?;
+        let body = self
+            .http
+            .post(&request.url)
+            .headers(request.headers)
+            .json(&request.body)
+            .send()
             .await
-            .context("failed to request provider non-stream response")?;
-        build_provider_response_from_chat_response(response, request_json, delivery_path)
+            .context("failed to request provider non-stream response")?
+            .error_for_status()
+            .context("provider non-stream request failed")?
+            .json::<Value>()
+            .await
+            .context("failed to decode provider non-stream JSON response")?;
+
+        build_provider_response_from_wire_response(
+            adapter.parse_response(&body)?,
+            request_json,
+            delivery_path,
+            Some(body),
+        )
     }
 }
 
-fn build_provider_response_from_chat_response(
-    response: ChatResponse,
+fn build_provider_response_from_wire_response(
+    response: WireResponse,
     request_json: String,
     delivery_path: DeliveryPath,
+    captured_raw_body: Option<Value>,
 ) -> Result<ProviderResponse> {
-    let content = response
-        .content
-        .joined_texts()
-        .filter(|text| !text.trim().is_empty());
-    let tool_calls = response
-        .content
-        .tool_calls()
-        .into_iter()
-        .map(|tool_call| {
-            Ok(ProviderToolCall {
-                id: tool_call.call_id.clone(),
-                name: tool_call.fn_name.clone(),
-                arguments_json: serde_json::to_string(&tool_call.fn_arguments)
-                    .context("failed to encode provider tool call arguments")?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
     let provider_response = ProviderResponse {
-        content,
-        tool_calls,
+        content: response.content,
+        tool_calls: response
+            .tool_calls
+            .into_iter()
+            .map(|tool_call| ProviderToolCall {
+                id: tool_call.id,
+                name: tool_call.name,
+                arguments_json: normalized_arguments_json(&tool_call.arguments_json),
+            })
+            .collect(),
         request_json,
         raw_response: String::new(),
     };
-    let debug_payload = debug_structured_response(
-        &provider_response,
-        delivery_path,
-        response.captured_raw_body,
-    );
+    let debug_payload = debug_structured_response(&provider_response, delivery_path, captured_raw_body);
 
     Ok(ProviderResponse {
         raw_response: serde_json::to_string_pretty(&debug_payload)
             .unwrap_or_else(|_| "(failed to format provider response)".to_string()),
         ..provider_response
     })
+}
+
+fn normalized_arguments_json(arguments_json: &str) -> String {
+    let trimmed = arguments_json.trim();
+    if trimmed.is_empty() {
+        "{}".to_string()
+    } else if serde_json::from_str::<Value>(trimmed).is_ok() {
+        trimmed.to_string()
+    } else {
+        serde_json::to_string(trimmed).unwrap_or_else(|_| "\"\"".to_string())
+    }
 }
 
 fn stream_capability_cache() -> &'static Mutex<HashMap<String, ProviderDeliveryMode>> {

@@ -10,7 +10,9 @@ use crate::context::{
 };
 use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
-use crate::settings::{ProviderModelRecord, ProviderRecord, ProviderSettingsSnapshot};
+use crate::settings::{
+    ProviderModelRecord, ProviderRecord, ProviderSettingsSnapshot, ServerToolConfig,
+};
 use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
 
 use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
@@ -19,8 +21,9 @@ use super::{
     UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView, UiDebugToolCallView,
     UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
     UiModelCapabilitiesView, UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView,
-    UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot, UiShellView,
-    UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
+    UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot, UiServerToolView,
+    UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary, UiToolSummaryView,
+    UiTurnView,
 };
 
 impl UiTaskSnapshot {
@@ -219,7 +222,21 @@ impl From<ProviderModelRecord> for UiProviderModelView {
                 supports_vision: model.supports_vision,
                 supports_audio: model.supports_audio,
                 supports_pdf: model.supports_pdf,
+                server_tools: model
+                    .server_tools
+                    .into_iter()
+                    .map(UiServerToolView::from)
+                    .collect(),
             },
+        }
+    }
+}
+
+impl From<ServerToolConfig> for UiServerToolView {
+    fn from(tool: ServerToolConfig) -> Self {
+        Self {
+            capability: tool.capability.as_db_value().to_string(),
+            format: tool.format.as_db_value().to_string(),
         }
     }
 }

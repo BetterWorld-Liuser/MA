@@ -29,7 +29,8 @@ pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompat
                 provider_type: provider.provider_type,
                 base_url: provider.base_url,
                 api_key: provider.api_key,
-                model,
+                model: model.clone(),
+                server_tools: resolve_server_tools(&settings, provider.id, &model)?,
             });
         }
     }
@@ -46,7 +47,8 @@ pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompat
             provider_type: provider.provider_type,
             base_url: provider.base_url,
             api_key: provider.api_key,
-            model,
+            model: model.clone(),
+            server_tools: resolve_server_tools(&settings, provider.id, &model)?,
         });
     }
 
@@ -76,7 +78,8 @@ pub(super) fn provider_config_for_session(
                     provider_type: provider.provider_type,
                     base_url: provider.base_url,
                     api_key: provider.api_key,
-                    model,
+                    model: model.clone(),
+                    server_tools: resolve_server_tools(&settings, provider.id, &model)?,
                 });
             }
         }
@@ -148,6 +151,7 @@ pub async fn fetch_task_model_selector(
             base_url: provider.base_url.clone(),
             api_key: provider.api_key.clone(),
             model: provider_current_model.clone(),
+            server_tools: resolve_server_tools(&settings, provider.id, &provider_current_model)?,
         });
         let mut available_models = client.list_models().await.unwrap_or_default();
         let persisted_models = settings
@@ -208,6 +212,7 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
         base_url: provider.base_url,
         api_key: provider.api_key,
         model: current_model.clone(),
+        server_tools: resolve_server_tools(&settings, provider_id, &current_model)?,
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
     available_models.extend(
@@ -262,6 +267,7 @@ pub async fn fetch_probe_models(
         base_url,
         api_key,
         model: current_model.clone(),
+        server_tools: Vec::new(),
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
     if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
@@ -310,6 +316,7 @@ pub async fn test_provider_connection(
         base_url: normalize_ui_optional_string(request.base_url),
         api_key,
         model: model.clone(),
+        server_tools: Vec::new(),
     });
     let message = provider.test_connection().await?;
     Ok(UiTestProviderConnectionResult {
@@ -334,7 +341,8 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
                     provider_type: provider.provider_type,
                     base_url: provider.base_url,
                     api_key: provider.api_key,
-                    model,
+                    model: model.clone(),
+                    server_tools: resolve_server_tools(&settings, provider.id, &model)?,
                 });
             }
         }
@@ -350,7 +358,8 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
             provider_type: provider.provider_type,
             base_url: provider.base_url,
             api_key: provider.api_key,
-            model,
+            model: model.clone(),
+            server_tools: resolve_server_tools(&settings, provider.id, &model)?,
         });
     }
 
@@ -362,6 +371,17 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
         config.model = model;
     }
     Ok(config)
+}
+
+fn resolve_server_tools(
+    settings: &SettingsStorage,
+    provider_id: i64,
+    model: &str,
+) -> Result<Vec<crate::settings::ServerToolConfig>> {
+    Ok(settings
+        .load_provider_model_by_model_id(provider_id, model)?
+        .map(|record| record.server_tools)
+        .unwrap_or_default())
 }
 
 fn provider_cache_key(provider_type: &ProviderType, base_url: Option<&str>) -> String {
@@ -406,6 +426,14 @@ fn resolve_model_capabilities(
             supports_vision: model.supports_vision,
             supports_audio: model.supports_audio,
             supports_pdf: model.supports_pdf,
+            server_tools: model
+                .server_tools
+                .iter()
+                .map(|tool| super::UiServerToolView {
+                    capability: tool.capability.as_db_value().to_string(),
+                    format: tool.format.as_db_value().to_string(),
+                })
+                .collect(),
         };
     }
 
@@ -437,6 +465,7 @@ fn resolve_model_capabilities(
         supports_vision,
         supports_audio: false,
         supports_pdf: false,
+        server_tools: Vec::new(),
     }
 }
 
