@@ -16,3 +16,4 @@ anyhow = "1.0"
 dotenvy = "0.15"
 ma = { package = "ma-core", path = "../crates/ma-core" }
 tauri = { version = "2.0.0", features = [] }
+tauri-plugin-dialog = "2.0.0"

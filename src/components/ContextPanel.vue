@@ -24,6 +24,7 @@
       />
 
       <ContextHintsSection v-if="hints.length" :hints="hints" />
+      <ContextSkillsSection :skills="skills" :busy="busy" @refresh="$emit('refresh-skills')" />
 
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">
@@ -282,17 +283,25 @@ import xIcon from '@iconify-icons/lucide/x';
 import ContextHintsSection from '@/components/context/ContextHintsSection.vue';
 import ContextNotesSection from '@/components/context/ContextNotesSection.vue';
 import ContextOpenFilesSection from '@/components/context/ContextOpenFilesSection.vue';
+import ContextSkillsSection from '@/components/context/ContextSkillsSection.vue';
 import { Dialog, DialogClose, DialogContent, DialogTitle } from './ui/dialog';
-import type { ContextUsage, DebugRoundItem, HintItem, NoteItem, OpenFileItem } from '../data/mock';
+import type { ContextUsage, DebugRoundItem, HintItem, NoteItem, OpenFileItem, SkillItem } from '../data/mock';
 
-const props = defineProps<{
+withDefaults(defineProps<{
   notes: NoteItem[];
   openFiles: OpenFileItem[];
   hints: HintItem[];
+  skills: SkillItem[];
   usage: ContextUsage;
   debugRounds: DebugRoundItem[];
   busy?: boolean;
-}>();
+}>(), {
+  notes: () => [],
+  openFiles: () => [],
+  hints: () => [],
+  skills: () => [],
+  busy: false,
+});
 
 defineEmits<{
   'add-note': [];
@@ -300,6 +309,7 @@ defineEmits<{
   'delete-note': [noteId: string];
   'toggle-file-lock': [path: string, locked: boolean];
   'close-file': [path: string];
+  'refresh-skills': [];
 }>();
 
 const debugTabs = ['Overview', 'Context', 'Request', 'Response', 'Tools'] as const;

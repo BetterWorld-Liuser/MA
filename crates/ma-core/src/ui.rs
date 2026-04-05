@@ -1,28 +1,36 @@
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{
     AgentConfig, AgentProgressEvent, AgentSession, AgentStatusPhase, AgentToolStatus,
-    DEFAULT_CONTEXT_WINDOW_TOKENS, DebugRound, DebugToolCall, is_turn_cancelled_error,
+    DebugRound, DebugToolCall, is_turn_cancelled_error,
 };
 use crate::context::{
     ContextPressure, ConversationHistory, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role,
     SystemStatus, ToolSummary,
 };
-use crate::model_capabilities::get_model_capabilities;
 use crate::provider::{
-    OpenAiCompatibleClient, OpenAiCompatibleConfig, fallback_task_title,
-    format_provider_response_for_debug,
+    OpenAiCompatibleClient, fallback_task_title, format_provider_response_for_debug,
 };
 use crate::settings::{ProviderRecord, ProviderSettingsSnapshot, ProviderType, SettingsStorage};
 use crate::storage::{
     PersistedOpenFile, PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource,
 };
+
+mod provider;
+mod util;
+mod workspace;
+
+pub use provider::{
+    fetch_probe_models, fetch_provider_models_for_provider, fetch_provider_models_for_task,
+    fetch_task_model_selector, test_provider_connection,
+};
+use provider::provider_config_for_task;
+use util::{mask_api_key, pretty_json_or_original, resolve_context_window_fallback, system_time_to_unix};
 
 const DEFAULT_TASK_NAME: &str = "默认任务";
 const UI_MAX_RECENT_TURNS: usize = 4;
@@ -70,7 +78,15 @@ pub struct UiSetTaskModelRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiSetTaskWorkingDirectoryRequest {
+    pub task_id: Option<i64>,
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiSearchWorkspaceEntriesRequest {
+    pub task_id: Option<i64>,
     pub query: String,
     pub kind: Option<UiWorkspaceEntryKind>,
     pub limit: Option<usize>,
@@ -122,6 +138,7 @@ pub struct UiTaskSummary {
     pub name: String,
     pub title_source: String,
     pub title_locked: bool,
+    pub working_directory: PathBuf,
     pub selected_model: Option<String>,
     pub created_at: i64,
     pub last_active: i64,
@@ -256,6 +273,7 @@ pub struct UiRuntimeSnapshot {
     pub working_directory: PathBuf,
     pub available_shells: Vec<UiShellView>,
     pub open_files: Vec<UiFileSnapshotView>,
+    pub skills: Vec<UiSkillView>,
     pub system_status: UiSystemStatusView,
     pub context_usage: UiContextUsageView,
 }
@@ -370,6 +388,14 @@ pub enum UiAgentFailureStage {
 pub struct UiShellView {
     pub kind: String,
     pub program: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiSkillView {
+    pub name: String,
+    pub path: PathBuf,
+    pub description: String,
+    pub opened: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,10 +556,16 @@ impl UiAppBackend {
             name,
             title_source,
             title_locked,
+            self.workspace_path.clone(),
             defaults.default_provider_id,
             defaults.default_model,
         )?;
-        let session = AgentSession::new(ui_agent_config(), ConversationHistory::default(), [])?;
+        let session = AgentSession::new(
+            ui_agent_config(),
+            ConversationHistory::default(),
+            [],
+            self.workspace_path.clone(),
+        )?;
         self.save_session(task.id, &session)?;
         Ok(task)
     }
@@ -1004,6 +1036,37 @@ impl UiAppBackend {
         self.workspace_snapshot(Some(task_id))
     }
 
+    pub fn handle_set_task_working_directory(
+        &mut self,
+        request: UiSetTaskWorkingDirectoryRequest,
+    ) -> Result<UiWorkspaceSnapshot> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        let working_directory = self.normalize_task_working_directory(request.path)?;
+        self.storage
+            .update_task_working_directory(task_id, working_directory)?;
+        let task = self.storage.load_task(task_id)?;
+        let session = AgentSession::restore(ui_agent_config(), task)?;
+        self.save_session(task_id, &session)?;
+        self.workspace_snapshot(Some(task_id))
+    }
+
+    fn normalize_task_working_directory(&self, path: Option<PathBuf>) -> Result<PathBuf> {
+        let requested = path.unwrap_or_else(|| self.workspace_path.clone());
+        let normalized = std::fs::canonicalize(&requested)
+            .with_context(|| format!("failed to resolve {}", requested.display()))?;
+        if !normalized.is_dir() {
+            bail!("working directory must be a directory: {}", normalized.display());
+        }
+        Ok(normalized)
+    }
+
+    fn working_directory_for_task(&self, task_id: Option<i64>) -> Result<PathBuf> {
+        match task_id {
+            Some(task_id) => Ok(self.storage.load_task(task_id)?.task.working_directory),
+            None => Ok(self.workspace_path.clone()),
+        }
+    }
+
     pub fn provider_settings(&self) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
         Ok(UiProviderSettingsView::from_snapshot(
@@ -1065,63 +1128,9 @@ impl UiAppBackend {
         &self,
         request: UiSearchWorkspaceEntriesRequest,
     ) -> Result<Vec<UiWorkspaceEntryView>> {
-        let query = request.query.trim().to_lowercase();
         let limit = request.limit.unwrap_or(12).clamp(1, 50);
-        let mut files = git_visible_files(&self.workspace_path)?;
-        files.sort();
-        files.dedup();
-
-        let mut directories = files
-            .iter()
-            .flat_map(|path| collect_parent_directories(path))
-            .collect::<Vec<_>>();
-        directories.sort();
-        directories.dedup();
-
-        let entries = match request.kind {
-            Some(UiWorkspaceEntryKind::File) => files
-                .into_iter()
-                .map(|path| UiWorkspaceEntryView {
-                    path,
-                    kind: UiWorkspaceEntryKind::File,
-                })
-                .collect::<Vec<_>>(),
-            Some(UiWorkspaceEntryKind::Directory) => directories
-                .into_iter()
-                .map(|path| UiWorkspaceEntryView {
-                    path,
-                    kind: UiWorkspaceEntryKind::Directory,
-                })
-                .collect::<Vec<_>>(),
-            None => {
-                let mut combined = files
-                    .into_iter()
-                    .map(|path| UiWorkspaceEntryView {
-                        path,
-                        kind: UiWorkspaceEntryKind::File,
-                    })
-                    .collect::<Vec<_>>();
-                combined.extend(directories.into_iter().map(|path| UiWorkspaceEntryView {
-                    path,
-                    kind: UiWorkspaceEntryKind::Directory,
-                }));
-                combined
-            }
-        };
-
-        let mut ranked = entries
-            .into_iter()
-            .filter_map(|entry| {
-                rank_workspace_entry(&entry.path, &query).map(|score| (score, entry))
-            })
-            .collect::<Vec<_>>();
-        ranked.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.path.cmp(&right.1.path))
-        });
-        ranked.truncate(limit);
-        Ok(ranked.into_iter().map(|(_, entry)| entry).collect())
+        let working_directory = self.working_directory_for_task(request.task_id)?;
+        workspace::search_workspace_entries(&working_directory, &request.query, request.kind, limit)
     }
 }
 
@@ -1207,6 +1216,7 @@ impl UiRuntimeSnapshot {
         working_directory: PathBuf,
         available_shells: Vec<UiShellView>,
         open_files: Vec<UiFileSnapshotView>,
+        skills: Vec<UiSkillView>,
         system_status: UiSystemStatusView,
         context_usage: UiContextUsageView,
     ) -> Self {
@@ -1214,6 +1224,7 @@ impl UiRuntimeSnapshot {
             working_directory,
             available_shells,
             open_files,
+            skills,
             system_status,
             context_usage,
         }
@@ -1254,388 +1265,12 @@ impl From<TaskRecord> for UiTaskSummary {
             name: task.name,
             title_source: task.title_source.as_db_value().to_string(),
             title_locked: task.title_locked,
+            working_directory: task.working_directory,
             selected_model: task.selected_model,
             created_at: system_time_to_unix(task.created_at),
             last_active: system_time_to_unix(task.last_active),
         }
     }
-}
-
-fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
-    let settings = SettingsStorage::open()?;
-
-    if let Some(provider_id) = task.selected_provider_id {
-        if let Ok(provider) = settings.load_provider(provider_id) {
-            let model = task
-                .selected_model
-                .clone()
-                .or(settings.default_model()?)
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| anyhow::anyhow!("missing task model in settings"))?;
-
-            return Ok(OpenAiCompatibleConfig {
-                provider_type: provider.provider_type,
-                base_url: provider.base_url,
-                api_key: provider.api_key,
-                model,
-            });
-        }
-    }
-
-    if let Some(provider) = settings.default_provider()? {
-        let model = task
-            .selected_model
-            .clone()
-            .or(settings.default_model()?)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
-
-        return Ok(OpenAiCompatibleConfig {
-            provider_type: provider.provider_type,
-            base_url: provider.base_url,
-            api_key: provider.api_key,
-            model,
-        });
-    }
-
-    let mut config = OpenAiCompatibleConfig::from_env()?;
-    if let Some(model) = &task.selected_model {
-        config.model = model.clone();
-    }
-    Ok(config)
-}
-
-pub async fn fetch_provider_models_for_task(
-    task: Option<&TaskRecord>,
-) -> Result<UiProviderModelsView> {
-    let config = resolve_active_provider_config(task)?;
-    let current_model = config.model.clone();
-    let suggested_models = suggested_models_for_provider_type(config.provider_type);
-    // UI 侧按 provider 维度缓存模型列表，因此 base_url 仍可作为稳定缓存键。
-    let provider_cache_key = provider_cache_key(&config.provider_type, config.base_url.as_deref());
-    let client = OpenAiCompatibleClient::new(config);
-    let mut available_models = client.list_models().await.unwrap_or_default();
-    if !available_models.iter().any(|model| model == &current_model) {
-        available_models.insert(0, current_model.clone());
-    }
-    available_models.sort();
-    available_models.dedup();
-
-    Ok(UiProviderModelsView {
-        current_model,
-        available_models,
-        suggested_models,
-        provider_cache_key,
-    })
-}
-
-pub async fn fetch_task_model_selector(
-    task: Option<&TaskRecord>,
-) -> Result<UiTaskModelSelectorView> {
-    let settings = SettingsStorage::open()?;
-    let snapshot = settings.snapshot()?;
-    let default_model = settings.default_model()?.unwrap_or_default();
-    let current_provider_id = task
-        .and_then(|value| value.selected_provider_id)
-        .or(snapshot.default_provider_id);
-    let current_model = task
-        .and_then(|value| value.selected_model.clone())
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| (!default_model.trim().is_empty()).then(|| default_model.clone()))
-        .or_else(|| {
-            resolve_active_provider_config(task)
-                .ok()
-                .map(|config| config.model)
-                .filter(|value| !value.trim().is_empty())
-        })
-        .unwrap_or_default();
-
-    let mut providers = Vec::new();
-    for provider in snapshot.providers {
-        let suggested_models = suggested_models_for_provider_type(provider.provider_type);
-        let provider_current_model = if Some(provider.id) == current_provider_id {
-            current_model.clone()
-        } else if !default_model.trim().is_empty() {
-            default_model.clone()
-        } else if let Some(first_suggested) = suggested_models.first() {
-            first_suggested.clone()
-        } else {
-            default_probe_model(provider.provider_type).to_string()
-        };
-        let provider_cache_key =
-            provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
-        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
-            provider_type: provider.provider_type,
-            base_url: provider.base_url.clone(),
-            api_key: provider.api_key.clone(),
-            model: provider_current_model.clone(),
-        });
-        let mut available_models = client.list_models().await.unwrap_or_default();
-        if !provider_current_model.is_empty()
-            && !available_models.iter().any(|model| model == &provider_current_model)
-        {
-            available_models.insert(0, provider_current_model);
-        }
-        available_models.sort();
-        available_models.dedup();
-
-        providers.push(UiProviderModelGroupView {
-            provider_id: Some(provider.id),
-            provider_name: provider.name,
-            provider_type: provider.provider_type.as_db_value().to_string(),
-            provider_cache_key,
-            available_models,
-            suggested_models,
-        });
-    }
-
-    if providers.is_empty() {
-        let fallback = fetch_provider_models_for_task(task).await?;
-        providers.push(UiProviderModelGroupView {
-            provider_id: None,
-            provider_name: "当前环境".to_string(),
-            provider_type: "env".to_string(),
-            provider_cache_key: fallback.provider_cache_key,
-            available_models: fallback.available_models,
-            suggested_models: fallback.suggested_models,
-        });
-    }
-
-    Ok(UiTaskModelSelectorView {
-        current_provider_id,
-        current_model,
-        providers,
-    })
-}
-
-pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiProviderModelsView> {
-    let settings = SettingsStorage::open()?;
-    let provider = settings.load_provider(provider_id)?;
-    let current_model = settings.default_model()?.unwrap_or_default();
-    let suggested_models = suggested_models_for_provider_type(provider.provider_type);
-    let provider_cache_key =
-        provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
-    let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
-        provider_type: provider.provider_type,
-        base_url: provider.base_url,
-        api_key: provider.api_key,
-        model: current_model.clone(),
-    });
-    let mut available_models = client.list_models().await.unwrap_or_default();
-    if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
-        available_models.insert(0, current_model.clone());
-    }
-    available_models.sort();
-    available_models.dedup();
-
-    Ok(UiProviderModelsView {
-        current_model,
-        available_models,
-        suggested_models,
-        provider_cache_key,
-    })
-}
-
-pub async fn fetch_probe_models(
-    request: UiProbeProviderModelsRequest,
-) -> Result<UiProviderModelsView> {
-    let provider_type = ProviderType::from_db_value(&request.provider_type)
-        .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
-    let settings = SettingsStorage::open()?;
-    let persisted_api_key = match request.id {
-        Some(id) => settings.load_provider(id)?.api_key,
-        None => String::new(),
-    };
-    let api_key = if request.api_key.trim().is_empty() {
-        persisted_api_key
-    } else {
-        request.api_key.trim().to_string()
-    };
-    let suggested_models = suggested_models_for_provider_type(provider_type);
-    let current_model = request
-        .probe_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| suggested_models.first().cloned())
-        .or(settings.default_model()?)
-        .unwrap_or_else(|| default_probe_model(provider_type).to_string());
-    let base_url = normalize_ui_optional_string(request.base_url);
-    let provider_cache_key = provider_cache_key(&provider_type, base_url.as_deref());
-    let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
-        provider_type,
-        base_url,
-        api_key,
-        model: current_model.clone(),
-    });
-    let mut available_models = client.list_models().await.unwrap_or_default();
-    if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
-        available_models.insert(0, current_model.clone());
-    }
-    available_models.sort();
-    available_models.dedup();
-
-    Ok(UiProviderModelsView {
-        current_model,
-        available_models,
-        suggested_models,
-        provider_cache_key,
-    })
-}
-
-pub async fn test_provider_connection(
-    request: UiTestProviderConnectionRequest,
-) -> Result<UiTestProviderConnectionResult> {
-    let provider_type = ProviderType::from_db_value(&request.provider_type)
-        .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
-    let settings = SettingsStorage::open()?;
-    let suggested_model = suggested_models_for_provider_type(provider_type)
-        .into_iter()
-        .next();
-    let persisted_api_key = match request.id {
-        Some(id) => settings.load_provider(id)?.api_key,
-        None => String::new(),
-    };
-    let api_key = if request.api_key.trim().is_empty() {
-        persisted_api_key
-    } else {
-        request.api_key.trim().to_string()
-    };
-    let model = request
-        .probe_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| suggested_model.clone())
-        .or(settings.default_model()?)
-        .unwrap_or_else(|| default_probe_model(provider_type).to_string());
-    let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
-        provider_type,
-        base_url: normalize_ui_optional_string(request.base_url),
-        api_key,
-        model: model.clone(),
-    });
-    let message = provider.test_connection().await?;
-    Ok(UiTestProviderConnectionResult {
-        success: true,
-        message,
-        suggested_model: Some(model),
-    })
-}
-
-fn git_visible_files(workspace_path: &Path) -> Result<Vec<String>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace_path)
-        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-        .output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            Ok(stdout
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(ToOwned::to_owned)
-                .collect())
-        }
-        _ => fallback_visible_files(workspace_path),
-    }
-}
-
-fn fallback_visible_files(workspace_path: &Path) -> Result<Vec<String>> {
-    let mut pending = vec![workspace_path.to_path_buf()];
-    let mut files = Vec::new();
-
-    while let Some(path) = pending.pop() {
-        for entry in std::fs::read_dir(&path)? {
-            let entry = entry?;
-            let entry_path = entry.path();
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if file_name == ".git"
-                || file_name == "node_modules"
-                || file_name == "target"
-                || file_name == "dist"
-            {
-                continue;
-            }
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                pending.push(entry_path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            if let Ok(relative) = entry_path.strip_prefix(workspace_path) {
-                files.push(relative.to_string_lossy().replace('\\', "/"));
-            }
-        }
-    }
-
-    Ok(files)
-}
-
-fn collect_parent_directories(path: &str) -> Vec<String> {
-    let mut current = Path::new(path).parent();
-    let mut directories = Vec::new();
-    while let Some(parent) = current {
-        if parent.components().next().is_none() {
-            break;
-        }
-        let normalized = normalize_relative_path(parent);
-        if !normalized.is_empty() {
-            directories.push(normalized);
-        }
-        current = parent.parent();
-    }
-    directories
-}
-
-fn normalize_relative_path(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn rank_workspace_entry(path: &str, query: &str) -> Option<(u8, usize)> {
-    if query.is_empty() {
-        return Some((3, path.len()));
-    }
-
-    let haystack = path.to_lowercase();
-    if haystack == query {
-        return Some((0, path.len()));
-    }
-    if haystack.starts_with(query) {
-        return Some((1, path.len()));
-    }
-    if haystack.contains(query) {
-        return Some((2, path.len()));
-    }
-    subsequence_score(&haystack, query).map(|score| (4, score))
-}
-
-fn subsequence_score(haystack: &str, needle: &str) -> Option<usize> {
-    let mut score = 0usize;
-    let mut cursor = 0usize;
-
-    for ch in needle.chars() {
-        let slice = &haystack[cursor..];
-        let offset = slice.find(ch)?;
-        score += offset;
-        cursor += offset + ch.len_utf8();
-    }
-
-    Some(score + haystack.len())
 }
 
 fn should_auto_title(task: &PersistedTask, user_message: &str) -> bool {
@@ -1893,165 +1528,6 @@ impl UiAppBackend {
     }
 }
 
-fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCompatibleConfig> {
-    let settings = SettingsStorage::open()?;
-    if let Some(task) = task {
-        if let Some(provider_id) = task.selected_provider_id {
-            if let Ok(provider) = settings.load_provider(provider_id) {
-                let model = task
-                    .selected_model
-                    .clone()
-                    .or(settings.default_model()?)
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("missing task model in settings"))?;
-                return Ok(OpenAiCompatibleConfig {
-                    provider_type: provider.provider_type,
-                    base_url: provider.base_url,
-                    api_key: provider.api_key,
-                    model,
-                });
-            }
-        }
-    }
-
-    if let Some(provider) = settings.default_provider()? {
-        let model = task
-            .and_then(|value| value.selected_model.clone())
-            .or(settings.default_model()?)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
-        return Ok(OpenAiCompatibleConfig {
-            provider_type: provider.provider_type,
-            base_url: provider.base_url,
-            api_key: provider.api_key,
-            model,
-        });
-    }
-
-    let mut config = OpenAiCompatibleConfig::from_env()?;
-    if let Some(model) = task
-        .and_then(|value| value.selected_model.clone())
-        .filter(|value| !value.trim().is_empty())
-    {
-        config.model = model;
-    }
-    Ok(config)
-}
-
-fn provider_cache_key(provider_type: &ProviderType, base_url: Option<&str>) -> String {
-    match base_url {
-        Some(base_url) if !base_url.trim().is_empty() => {
-            format!("{}::{}", provider_type.as_db_value(), base_url.trim())
-        }
-        _ => provider_type.as_db_value().to_string(),
-    }
-}
-
-fn suggested_models_for_provider_type(provider_type: ProviderType) -> Vec<String> {
-    match provider_type {
-        ProviderType::OpenAiCompat => vec![],
-        ProviderType::OpenAi => vec![
-            "gpt-5.4".to_string(),
-            "gpt-5".to_string(),
-            "gpt-5-mini".to_string(),
-        ],
-        ProviderType::Anthropic => vec![
-            "claude-sonnet-4-5".to_string(),
-            "claude-3-7-sonnet-latest".to_string(),
-            "claude-3-5-haiku-latest".to_string(),
-        ],
-        ProviderType::Gemini => vec![
-            "gemini-2.5-pro".to_string(),
-            "gemini-2.5-flash".to_string(),
-            "gemini-2.0-flash".to_string(),
-        ],
-        ProviderType::Fireworks => vec![
-            "accounts/fireworks/models/deepseek-v3".to_string(),
-            "accounts/fireworks/models/llama-v3p1-70b-instruct".to_string(),
-        ],
-        ProviderType::Together => vec![
-            "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo".to_string(),
-            "deepseek-ai/DeepSeek-V3".to_string(),
-        ],
-        ProviderType::Groq => vec![
-            "llama-3.3-70b-versatile".to_string(),
-            "deepseek-r1-distill-llama-70b".to_string(),
-        ],
-        ProviderType::Mimo => vec!["moonshot-v1-8k".to_string(), "moonshot-v1-32k".to_string()],
-        ProviderType::Nebius => vec![
-            "nebius::Qwen/Qwen2.5-Coder-32B-Instruct".to_string(),
-            "nebius::meta-llama/Meta-Llama-3.1-70B-Instruct".to_string(),
-        ],
-        ProviderType::Xai => vec!["grok-3-mini".to_string(), "grok-3".to_string()],
-        ProviderType::DeepSeek => {
-            vec!["deepseek-chat".to_string(), "deepseek-reasoner".to_string()]
-        }
-        ProviderType::Zai => vec!["glm-4.6".to_string(), "coding::glm-4.6".to_string()],
-        ProviderType::BigModel => vec!["glm-4-plus".to_string(), "glm-4-air".to_string()],
-        ProviderType::Cohere => vec!["command-r-plus".to_string(), "command-r".to_string()],
-        ProviderType::Ollama => vec![
-            "qwen2.5-coder:32b".to_string(),
-            "llama3.3:70b".to_string(),
-            "deepseek-r1:32b".to_string(),
-        ],
-    }
-}
-
-fn default_probe_model(provider_type: ProviderType) -> &'static str {
-    match provider_type {
-        ProviderType::OpenAiCompat => "gpt-4o-mini",
-        ProviderType::OpenAi => "gpt-5-mini",
-        ProviderType::Anthropic => "claude-3-5-haiku-latest",
-        ProviderType::Gemini => "gemini-2.0-flash",
-        ProviderType::Fireworks => "accounts/fireworks/models/llama-v3p1-70b-instruct",
-        ProviderType::Together => "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-        ProviderType::Groq => "llama-3.3-70b-versatile",
-        ProviderType::Mimo => "moonshot-v1-8k",
-        ProviderType::Nebius => "nebius::Qwen/Qwen2.5-Coder-32B-Instruct",
-        ProviderType::Xai => "grok-3-mini",
-        ProviderType::DeepSeek => "deepseek-chat",
-        ProviderType::Zai => "glm-4.6",
-        ProviderType::BigModel => "glm-4-air",
-        ProviderType::Cohere => "command-r",
-        ProviderType::Ollama => "qwen2.5-coder:32b",
-    }
-}
-
-fn normalize_ui_optional_string(raw: String) -> Option<String> {
-    let trimmed = raw.trim().trim_end_matches('/').to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-fn mask_api_key(api_key: &str) -> String {
-    let trimmed = api_key.trim();
-    if trimmed.is_empty() {
-        return "未设置".to_string();
-    }
-
-    let chars = trimmed.chars().collect::<Vec<_>>();
-    let head = chars.iter().take(4).collect::<String>();
-    let tail = chars
-        .iter()
-        .rev()
-        .take(4)
-        .copied()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<String>();
-    format!("{}••••{}", head, tail)
-}
-
-fn pretty_json_or_original(text: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(text)
-        .and_then(|value| serde_json::to_string_pretty(&value))
-        .unwrap_or_else(|_| text.to_string())
-}
-
 async fn resolve_context_window_with_provider(
     provider: &OpenAiCompatibleClient,
     current_model: &str,
@@ -2062,61 +1538,4 @@ async fn resolve_context_window_with_provider(
         .ok()
         .flatten()
         .or_else(|| Some(resolve_context_window_fallback(Some(current_model))))
-}
-
-fn resolve_context_window_fallback(model_id: Option<&str>) -> usize {
-    if let Some(override_tokens) = std::env::var("MA_CONTEXT_WINDOW_TOKENS")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-    {
-        return override_tokens;
-    }
-
-    model_id
-        .and_then(|model| {
-            get_model_capabilities(model)
-                .map(|capabilities| capabilities.context_window)
-                .or_else(|| guess_context_window_from_model_name(model))
-        })
-        .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
-}
-
-fn guess_context_window_from_model_name(model_id: &str) -> Option<usize> {
-    let normalized = model_id.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    for suffix in ['k', 'm'] {
-        if let Some(index) = normalized.find(suffix) {
-            let digits = normalized[..index]
-                .chars()
-                .rev()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>();
-            if digits.is_empty() {
-                continue;
-            }
-            if let Ok(base) = digits.parse::<usize>() {
-                return Some(match suffix {
-                    'k' => base * 1_000,
-                    'm' => base * 1_000_000,
-                    _ => unreachable!(),
-                });
-            }
-        }
-    }
-
-    None
-}
-
-fn system_time_to_unix(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .try_into()
-        .unwrap_or(i64::MAX)
 }

@@ -1,0 +1,171 @@
+<template>
+  <div class="space-y-1.5">
+    <div class="flex items-center justify-between gap-3">
+      <h3 class="section-title !mb-0 !text-[9px]">Skills</h3>
+      <div class="flex items-center gap-2">
+        <span class="text-[9px] text-text-dim">{{ skills.length ? `${skills.length} available` : 'none' }}</span>
+        <button
+          class="task-header-icon-button h-6 w-6"
+          type="button"
+          :disabled="busy"
+          aria-label="刷新可用技能"
+          title="刷新可用技能"
+          @click="$emit('refresh')"
+        >
+          <Icon :icon="refreshIcon" class="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+
+    <div v-if="skills.length" class="space-y-0.5">
+      <div
+        v-for="skill in skills"
+        :key="skill.path"
+        class="compact-row cursor-default outline-none"
+        tabindex="0"
+        @mouseenter="handleTriggerEnter(skill, $event)"
+        @focusin="handleTriggerEnter(skill, $event)"
+        @mouseleave="hideTooltip"
+        @focusout="hideTooltip"
+      >
+        <div class="min-w-0 flex flex-1 items-center gap-2">
+          <p class="truncate font-mono text-[12px]" :class="skill.opened ? 'text-text' : 'text-text-muted'">
+            {{ skill.name }}
+          </p>
+          <span v-if="skill.opened" class="shrink-0 rounded-full bg-accent-dim px-1.5 py-0.5 text-[8px] text-accent">
+            已打开
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="compact-empty">No skills discovered for this workspace</div>
+  </div>
+
+  <Teleport to="body">
+    <div
+      v-if="activeSkill"
+      ref="tooltipRef"
+      class="pointer-events-none fixed z-[140] w-[300px] rounded-2xl border px-3 py-2.5 text-popover-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] backdrop-blur-[16px]"
+      :style="tooltipStyle"
+    >
+      <div class="space-y-2">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="truncate font-mono text-[12px] font-semibold text-text">{{ activeSkill.name }}</p>
+            <p class="mt-0.5 text-[9px] uppercase tracking-[0.16em] text-text-dim">Skill</p>
+          </div>
+          <span
+            v-if="activeSkill.opened"
+            class="shrink-0 rounded-full border border-[color:rgba(212,105,42,0.22)] bg-accent-dim px-1.5 py-0.5 text-[8px] uppercase tracking-[0.12em] text-accent"
+          >
+            已打开
+          </span>
+        </div>
+
+        <p v-if="activeSkill.description" class="text-[11px] leading-5 text-text-muted">
+          {{ activeSkill.description }}
+        </p>
+
+        <div class="rounded-xl border border-[color:var(--ma-line-soft)] bg-[color:var(--ma-panel-surface)] px-2.5 py-2">
+          <p class="mb-1 text-[8px] uppercase tracking-[0.16em] text-text-dim">Path</p>
+          <p class="break-all font-mono text-[10px] leading-4 text-text">{{ activeSkill.path }}</p>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+</template>
+
+<script setup lang="ts">
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { Icon } from '@iconify/vue';
+import refreshIcon from '@iconify-icons/lucide/refresh-cw';
+import type { SkillItem } from '@/data/mock';
+
+withDefaults(defineProps<{
+  skills: SkillItem[];
+  busy?: boolean;
+}>(), {
+  skills: () => [],
+  busy: false,
+});
+
+defineEmits<{
+  refresh: [];
+}>();
+
+const activeSkill = ref<SkillItem | null>(null);
+const activeTrigger = ref<HTMLElement | null>(null);
+const tooltipRef = ref<HTMLElement | null>(null);
+const tooltipStyle = ref<Record<string, string>>({
+  top: '0px',
+  left: '0px',
+  background: 'var(--ma-panel-popover)',
+  borderColor: 'var(--ma-line-soft)',
+});
+
+function handleTriggerEnter(skill: SkillItem, event: MouseEvent | FocusEvent) {
+  const trigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  if (!trigger) {
+    return;
+  }
+
+  activeSkill.value = skill;
+  activeTrigger.value = trigger;
+  void nextTick(updateTooltipPosition);
+}
+
+function hideTooltip() {
+  activeSkill.value = null;
+  activeTrigger.value = null;
+}
+
+async function updateTooltipPosition() {
+  await nextTick();
+
+  if (!activeTrigger.value || !tooltipRef.value) {
+    return;
+  }
+
+  const triggerRect = activeTrigger.value.getBoundingClientRect();
+  const tooltipRect = tooltipRef.value.getBoundingClientRect();
+  const gap = 14;
+  const viewportPadding = 12;
+
+  let left = triggerRect.left - tooltipRect.width - gap;
+  if (left < viewportPadding) {
+    left = triggerRect.right + gap;
+  }
+
+  let top = triggerRect.top;
+  if (top + tooltipRect.height > window.innerHeight - viewportPadding) {
+    top = window.innerHeight - tooltipRect.height - viewportPadding;
+  }
+  if (top < viewportPadding) {
+    top = viewportPadding;
+  }
+
+  tooltipStyle.value = {
+    top: `${Math.round(top)}px`,
+    left: `${Math.round(left)}px`,
+    background: 'var(--ma-panel-popover)',
+    borderColor: 'var(--ma-line-soft)',
+  };
+}
+
+function handleViewportChange() {
+  if (activeSkill.value) {
+    hideTooltip();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleViewportChange);
+  window.addEventListener('scroll', handleViewportChange, true);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleViewportChange);
+  window.removeEventListener('scroll', handleViewportChange, true);
+});
+</script>

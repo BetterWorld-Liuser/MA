@@ -12,9 +12,9 @@ use ma::ui::{
     UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest, UiProbeProviderModelsRequest,
     UiProviderModelsView, UiProviderSettingsView, UiSearchWorkspaceEntriesRequest,
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
-    UiToggleOpenFileLockRequest, UiUpsertNoteRequest, UiUpsertProviderRequest,
-    UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_probe_models,
+    UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
+    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertNoteRequest,
+    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceSnapshot, fetch_probe_models,
     fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
@@ -287,6 +287,18 @@ fn set_task_model(
 }
 
 #[tauri::command]
+fn set_task_working_directory(
+    state: tauri::State<'_, AppState>,
+    input: UiSetTaskWorkingDirectoryRequest,
+) -> Result<UiWorkspaceSnapshot, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_set_task_working_directory(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn load_provider_settings(
     state: tauri::State<'_, AppState>,
 ) -> Result<UiProviderSettingsView, String> {
@@ -360,6 +372,7 @@ pub fn run() {
     std::env::set_current_dir(&workspace_path).expect("failed to switch to workspace root");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 normalize_main_window_bounds(&window)?;
@@ -386,6 +399,7 @@ pub fn run() {
             list_provider_models_for_settings,
             list_probe_models,
             set_task_model,
+            set_task_working_directory,
             load_provider_settings,
             upsert_provider,
             delete_provider,

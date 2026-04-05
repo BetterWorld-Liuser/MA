@@ -11,6 +11,7 @@ use crate::context::{ConversationHistory, DisplayTurn, Hint, NoteEntry, Role, To
 /// `.ma/ma.db` 的薄封装。
 /// 这一层只负责把设计文档里的持久化结构稳定落盘，不参与运行时决策。
 pub struct MaStorage {
+    workspace_root: PathBuf,
     db_path: PathBuf,
     connection: Connection,
 }
@@ -21,6 +22,7 @@ pub struct TaskRecord {
     pub name: String,
     pub title_source: TaskTitleSource,
     pub title_locked: bool,
+    pub working_directory: PathBuf,
     pub selected_provider_id: Option<i64>,
     pub selected_model: Option<String>,
     pub created_at: SystemTime,
@@ -74,6 +76,7 @@ impl MaStorage {
             .context("failed to enable sqlite foreign_keys")?;
 
         let mut storage = Self {
+            workspace_root: workdir.to_path_buf(),
             db_path,
             connection,
         };
@@ -91,6 +94,7 @@ impl MaStorage {
             name,
             TaskTitleSource::Default,
             false,
+            self.workspace_root.clone(),
             None,
             None,
         )
@@ -102,7 +106,14 @@ impl MaStorage {
         title_source: TaskTitleSource,
         title_locked: bool,
     ) -> Result<TaskRecord> {
-        self.create_task_with_metadata_and_selection(name, title_source, title_locked, None, None)
+        self.create_task_with_metadata_and_selection(
+            name,
+            title_source,
+            title_locked,
+            self.workspace_root.clone(),
+            None,
+            None,
+        )
     }
 
     pub fn create_task_with_metadata_and_selection(
@@ -110,6 +121,7 @@ impl MaStorage {
         name: impl AsRef<str>,
         title_source: TaskTitleSource,
         title_locked: bool,
+        working_directory: PathBuf,
         selected_provider_id: Option<i64>,
         selected_model: Option<String>,
     ) -> Result<TaskRecord> {
@@ -125,6 +137,7 @@ impl MaStorage {
                 Some(trimmed)
             }
         });
+        let working_directory = normalize_working_directory(&working_directory)?;
 
         let now = SystemTime::now();
         let now_ts = unix_timestamp(now)?;
@@ -134,16 +147,18 @@ impl MaStorage {
                     name,
                     title_source,
                     title_locked,
+                    working_directory,
                     selected_provider_id,
                     selected_model,
                     created_at,
                     last_active
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     name,
                     title_source.as_db_value(),
                     if title_locked { 1 } else { 0 },
+                    working_directory.to_string_lossy().to_string(),
                     selected_provider_id,
                     normalized_model,
                     now_ts,
@@ -157,6 +172,7 @@ impl MaStorage {
             name: name.to_string(),
             title_source,
             title_locked,
+            working_directory,
             selected_provider_id,
             selected_model: normalized_model,
             created_at: now,
@@ -269,6 +285,30 @@ impl MaStorage {
         Ok(())
     }
 
+    pub fn update_task_working_directory(
+        &self,
+        task_id: i64,
+        working_directory: PathBuf,
+    ) -> Result<()> {
+        let working_directory = normalize_working_directory(&working_directory)?;
+
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE tasks
+                 SET working_directory = ?2
+                 WHERE id = ?1",
+                params![task_id, working_directory.to_string_lossy().to_string()],
+            )
+            .context("failed to update task working_directory")?;
+
+        if affected == 0 {
+            bail!("task {} not found", task_id);
+        }
+
+        Ok(())
+    }
+
     pub fn backfill_missing_task_defaults(
         &self,
         selected_provider_id: Option<i64>,
@@ -299,7 +339,7 @@ impl MaStorage {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT id, name, title_source, title_locked, created_at, last_active
+                "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
                  , selected_provider_id, selected_model
                  FROM tasks
                  ORDER BY last_active DESC, id DESC",
@@ -313,10 +353,11 @@ impl MaStorage {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(4)?,
                     row.get::<_, i64>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             })
             .context("failed to query tasks")?;
@@ -328,6 +369,7 @@ impl MaStorage {
                 name,
                 title_source,
                 title_locked,
+                working_directory,
                 created_at,
                 last_active,
                 selected_provider_id,
@@ -338,6 +380,10 @@ impl MaStorage {
                 name,
                 title_source: TaskTitleSource::from_db_value(&title_source)?,
                 title_locked: title_locked != 0,
+                working_directory: decode_working_directory(
+                    working_directory,
+                    &self.workspace_root,
+                )?,
                 selected_provider_id,
                 selected_model,
                 created_at: system_time_from_unix(created_at)?,
@@ -390,6 +436,7 @@ impl MaStorage {
                     name        TEXT    NOT NULL,
                     title_source TEXT   NOT NULL DEFAULT 'default',
                     title_locked INTEGER NOT NULL DEFAULT 0,
+                    working_directory TEXT,
                     selected_provider_id INTEGER,
                     selected_model TEXT,
                     created_at  INTEGER NOT NULL,
@@ -451,7 +498,7 @@ impl MaStorage {
         let raw = self
             .connection
             .query_row(
-                "SELECT id, name, title_source, title_locked, created_at, last_active
+                "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
                  , selected_provider_id, selected_model
                  FROM tasks
                  WHERE id = ?1",
@@ -462,10 +509,11 @@ impl MaStorage {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(4)?,
                         row.get::<_, i64>(5)?,
-                        row.get::<_, Option<i64>>(6)?,
-                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -478,10 +526,11 @@ impl MaStorage {
             name: raw.1,
             title_source: TaskTitleSource::from_db_value(&raw.2)?,
             title_locked: raw.3 != 0,
-            selected_provider_id: raw.6,
-            selected_model: raw.7,
-            created_at: system_time_from_unix(raw.4)?,
-            last_active: system_time_from_unix(raw.5)?,
+            working_directory: decode_working_directory(raw.4, &self.workspace_root)?,
+            selected_provider_id: raw.7,
+            selected_model: raw.8,
+            created_at: system_time_from_unix(raw.5)?,
+            last_active: system_time_from_unix(raw.6)?,
         })
     }
 
@@ -496,6 +545,7 @@ impl MaStorage {
 
         let mut has_title_source = false;
         let mut has_title_locked = false;
+        let mut has_working_directory = false;
         let mut has_selected_provider_id = false;
         let mut has_selected_model = false;
         for column in columns {
@@ -505,6 +555,9 @@ impl MaStorage {
             }
             if column == "title_locked" {
                 has_title_locked = true;
+            }
+            if column == "working_directory" {
+                has_working_directory = true;
             }
             if column == "selected_provider_id" {
                 has_selected_provider_id = true;
@@ -531,6 +584,21 @@ impl MaStorage {
                 )
                 .context("failed to add tasks.title_locked column")?;
         }
+
+        if !has_working_directory {
+            self.connection
+                .execute("ALTER TABLE tasks ADD COLUMN working_directory TEXT", [])
+                .context("failed to add tasks.working_directory column")?;
+        }
+
+        self.connection
+            .execute(
+                "UPDATE tasks
+                 SET working_directory = ?1
+                 WHERE working_directory IS NULL OR TRIM(working_directory) = ''",
+                params![self.workspace_root.to_string_lossy().to_string()],
+            )
+            .context("failed to backfill tasks.working_directory column")?;
 
         if !has_selected_provider_id {
             self.connection
@@ -826,6 +894,21 @@ fn optional_system_time(timestamp: Option<i64>) -> Result<Option<SystemTime>> {
     timestamp.map(system_time_from_unix).transpose()
 }
 
+fn normalize_working_directory(path: &Path) -> Result<PathBuf> {
+    std::fs::canonicalize(path)
+        .with_context(|| format!("failed to resolve working directory {}", path.display()))
+}
+
+fn decode_working_directory(raw: Option<String>, workspace_root: &Path) -> Result<PathBuf> {
+    let candidate = raw
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.to_path_buf());
+    normalize_working_directory(&candidate)
+}
+
 impl TaskTitleSource {
     pub fn as_db_value(self) -> &'static str {
         match self {
@@ -975,6 +1058,7 @@ mod tests {
                 "demo",
                 TaskTitleSource::Manual,
                 true,
+                workdir.clone(),
                 Some(7),
                 Some("gpt-5.4".to_string()),
             )
@@ -997,6 +1081,7 @@ mod tests {
                 "explicit",
                 TaskTitleSource::Manual,
                 true,
+                workdir.clone(),
                 Some(9),
                 Some("custom-model".to_string()),
             )

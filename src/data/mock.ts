@@ -55,6 +55,13 @@ export type HintItem = {
   turnsLeft: string;
 };
 
+export type SkillItem = {
+  name: string;
+  path: string;
+  description: string;
+  opened: boolean;
+};
+
 export type ContextUsage = {
   percent: number;
   current: string;
@@ -84,10 +91,12 @@ export type WorkspaceView = {
   tasks: TaskItem[];
   activeTaskId: string;
   selectedModel?: string;
+  workingDirectory?: string;
   chat: ChatMessage[];
   notes: NoteItem[];
   openFiles: OpenFileItem[];
   hints: HintItem[];
+  skills: SkillItem[];
   contextUsage: ContextUsage;
   debugRounds: DebugRoundItem[];
   liveTurn?: LiveTurn;
@@ -101,6 +110,7 @@ export type BackendWorkspaceSnapshot = {
   tasks: Array<{
     id: number;
     name: string;
+    working_directory: string;
     last_active: number;
     selected_model?: string | null;
   }>;
@@ -108,6 +118,7 @@ export type BackendWorkspaceSnapshot = {
     task: {
       id: number;
       name: string;
+      working_directory: string;
       selected_model?: string | null;
     };
     history: Array<{
@@ -144,6 +155,12 @@ export type BackendWorkspaceSnapshot = {
       turns_remaining?: number | null;
     }>;
     runtime?: {
+      skills: Array<{
+        name: string;
+        path: string;
+        description: string;
+        opened: boolean;
+      }>;
       context_usage: {
         used_percent: number;
         used_tokens: number;
@@ -290,6 +307,7 @@ export const mockWorkspace: WorkspaceView = {
   ] satisfies TaskItem[],
   activeTaskId: 'task-1',
   selectedModel: 'claude-sonnet-4-6',
+  workingDirectory: 'D:/playground/MA',
   chat: [
     {
       role: 'user',
@@ -329,6 +347,20 @@ export const mockWorkspace: WorkspaceView = {
     { source: 'Telegram', content: 'foo: 部署好了吗？', timeLeft: '4m32s', turnsLeft: '3轮' },
     { source: 'CI', content: 'main 构建失败 exit 1', timeLeft: '12m08s', turnsLeft: '1轮' },
   ] satisfies HintItem[],
+  skills: [
+    {
+      name: 'rust',
+      path: '~/.agent/skills/rust/SKILL.md',
+      description: 'Rust 项目工作流',
+      opened: true,
+    },
+    {
+      name: 'api-style',
+      path: './.march/skills/api-style/SKILL.md',
+      description: '本项目 API 风格约定',
+      opened: false,
+    },
+  ] satisfies SkillItem[],
   contextUsage: {
     percent: 42,
     current: '10.2k',
@@ -378,6 +410,10 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       updatedAt: formatRelativeTime(task.last_active),
     })),
     activeTaskId,
+    workingDirectory:
+      activeTask?.task.working_directory
+      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.working_directory
+      ?? workspace.workspace_path,
     selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
     chat: activeTask?.history.map((turn) => ({
       role: turn.role === 'User' ? 'user' : 'assistant',
@@ -402,6 +438,12 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       content: hint.content,
       timeLeft: formatHintTime(hint.expires_at),
       turnsLeft: hint.turns_remaining ? `${hint.turns_remaining}轮` : '∞',
+    })) ?? [],
+    skills: activeTask?.runtime?.skills.map((skill) => ({
+      name: skill.name,
+      path: normalizePath(skill.path),
+      description: skill.description,
+      opened: skill.opened,
     })) ?? [],
     contextUsage: formatContextUsage(activeTask?.runtime?.context_usage),
     debugRounds: activeTask?.debug_trace?.rounds.map((round) => ({
@@ -449,7 +491,14 @@ function formatRelativeTime(timestamp: number) {
 }
 
 function normalizePath(path: string) {
-  return path.replaceAll('\\', '/');
+  const normalized = path.replaceAll('\\', '/');
+  if (normalized.startsWith('//?/UNC/')) {
+    return `//${normalized.slice('//?/UNC/'.length)}`;
+  }
+  if (normalized.startsWith('//?/')) {
+    return normalized.slice('//?/'.length);
+  }
+  return normalized;
 }
 
 function formatOpenFileTokenUsage(snapshot: BackendWorkspaceSnapshot['active_task'] extends infer T

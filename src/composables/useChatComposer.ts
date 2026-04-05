@@ -138,6 +138,7 @@ export function useChatComposer(options: {
     try {
       searchResults.value = await invoke<WorkspaceEntryView[]>('search_workspace_entries', {
         input: {
+          taskId: taskId.value,
           query,
           kind: mode === 'smart' ? undefined : mode,
           limit: 12,

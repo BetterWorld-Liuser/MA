@@ -7,6 +7,7 @@ export const mockWorkspace = {
     ],
     activeTaskId: 'task-1',
     selectedModel: 'claude-sonnet-4-6',
+    workingDirectory: 'D:/playground/MA',
     chat: [
         {
             role: 'user',
@@ -45,6 +46,20 @@ export const mockWorkspace = {
     hints: [
         { source: 'Telegram', content: 'foo: 部署好了吗？', timeLeft: '4m32s', turnsLeft: '3轮' },
         { source: 'CI', content: 'main 构建失败 exit 1', timeLeft: '12m08s', turnsLeft: '1轮' },
+    ],
+    skills: [
+        {
+            name: 'rust',
+            path: '~/.agent/skills/rust/SKILL.md',
+            description: 'Rust 项目工作流',
+            opened: true,
+        },
+        {
+            name: 'api-style',
+            path: './.march/skills/api-style/SKILL.md',
+            description: '本项目 API 风格约定',
+            opened: false,
+        },
     ],
     contextUsage: {
         percent: 42,
@@ -91,6 +106,9 @@ export function toWorkspaceView(snapshot) {
             updatedAt: formatRelativeTime(task.last_active),
         })),
         activeTaskId,
+        workingDirectory: activeTask?.task.working_directory
+            ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.working_directory
+            ?? workspace.workspace_path,
         selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
         chat: activeTask?.history.map((turn) => ({
             role: turn.role === 'User' ? 'user' : 'assistant',
@@ -114,6 +132,12 @@ export function toWorkspaceView(snapshot) {
             content: hint.content,
             timeLeft: formatHintTime(hint.expires_at),
             turnsLeft: hint.turns_remaining ? `${hint.turns_remaining}轮` : '∞',
+        })) ?? [],
+        skills: activeTask?.runtime?.skills.map((skill) => ({
+            name: skill.name,
+            path: normalizePath(skill.path),
+            description: skill.description,
+            opened: skill.opened,
         })) ?? [],
         contextUsage: formatContextUsage(activeTask?.runtime?.context_usage),
         debugRounds: activeTask?.debug_trace?.rounds.map((round) => ({
@@ -155,7 +179,14 @@ function formatRelativeTime(timestamp) {
     return `${days} 天`;
 }
 function normalizePath(path) {
-    return path.replaceAll('\\', '/');
+    const normalized = path.replaceAll('\\', '/');
+    if (normalized.startsWith('//?/UNC/')) {
+        return `//${normalized.slice('//?/UNC/'.length)}`;
+    }
+    if (normalized.startsWith('//?/')) {
+        return normalized.slice('//?/'.length);
+    }
+    return normalized;
 }
 function formatOpenFileTokenUsage(snapshot) {
     if (!snapshot) {

@@ -48,6 +48,27 @@
               <button class="composer-action" type="button" :disabled="disabled || interactionLocked" title="选择文件或目录" @click="togglePlusMenu">
                 <span class="composer-action-icon">+</span>
               </button>
+              <button
+                class="composer-directory-button"
+                :class="isCustomWorkingDirectory ? 'composer-directory-button-active' : ''"
+                type="button"
+                :disabled="disabled || interactionLocked"
+                :title="workingDirectoryTooltip"
+                @click="pickWorkingDirectory"
+              >
+                <Icon :icon="folderOpenIcon" class="h-3.5 w-3.5 shrink-0" />
+                <span class="truncate">{{ workingDirectoryLabel }}</span>
+              </button>
+              <button
+                v-if="isCustomWorkingDirectory"
+                class="composer-action"
+                type="button"
+                :disabled="disabled || interactionLocked"
+                title="恢复默认工作目录"
+                @click="resetWorkingDirectory"
+              >
+                <Icon :icon="rotateCcwIcon" class="h-3.5 w-3.5" />
+              </button>
               <div ref="modelMenuAnchorRef" class="composer-model-anchor">
                 <button class="composer-model-button" type="button" :disabled="disabled || interactionLocked" title="模型选择器" @click="toggleModelMenu">
                   <span class="truncate">{{ modelButtonLabel }}</span>
@@ -174,7 +195,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openPathDialog } from '@tauri-apps/plugin-dialog';
 import pauseIcon from '@iconify-icons/lucide/pause';
+import folderOpenIcon from '@iconify-icons/lucide/folder-open';
+import rotateCcwIcon from '@iconify-icons/lucide/rotate-ccw';
 import ChatMessageList from '@/components/ChatMessageList.vue';
 import { useChatComposer } from '@/composables/useChatComposer';
 import type { TaskModelSelectorView } from '../data/mock';
@@ -206,6 +230,8 @@ const props = defineProps<{
   cancelling?: boolean;
   taskId?: number | null;
   selectedModel?: string;
+  workingDirectory?: string;
+  workspacePath?: string;
   settingsOpen?: boolean;
 }>();
 
@@ -213,6 +239,7 @@ const emit = defineEmits<{
   send: [payload: { content: string; directories: string[] }];
   openFiles: [paths: string[]];
   setModel: [selection: { providerId?: number | null; model: string }];
+  setWorkingDirectory: [path?: string | null];
   cancelTurn: [];
 }>();
 
@@ -267,6 +294,20 @@ let activeModelRequestId = 0;
 
 const effectiveSelectedModel = computed(() => props.selectedModel?.trim() || resolvedCurrentModel.value.trim());
 const modelButtonLabel = computed(() => effectiveSelectedModel.value || '选择模型');
+const normalizedWorkspacePath = computed(() => normalizePath(props.workspacePath));
+const normalizedWorkingDirectory = computed(() => normalizePath(props.workingDirectory));
+const isCustomWorkingDirectory = computed(
+  () =>
+    !!normalizedWorkingDirectory.value
+    && !!normalizedWorkspacePath.value
+    && normalizedWorkingDirectory.value !== normalizedWorkspacePath.value,
+);
+const workingDirectoryLabel = computed(() => normalizedWorkingDirectory.value || '工作目录');
+const workingDirectoryTooltip = computed(() =>
+  normalizedWorkingDirectory.value
+    ? `AI 工作目录：${normalizedWorkingDirectory.value}`
+    : '设置 AI 工作目录',
+);
 const filteredProviderGroups = computed(() => {
   const query = modelSearchQuery.value.trim().toLowerCase();
   return providerGroups.value
@@ -485,6 +526,23 @@ function closeModelMenu() {
   modelMenuOpen.value = false;
 }
 
+async function pickWorkingDirectory() {
+  const selected = await openPathDialog({
+    directory: true,
+    multiple: false,
+    defaultPath: props.workingDirectory || props.workspacePath,
+    title: '选择 AI 工作目录',
+  });
+  if (!selected || Array.isArray(selected)) {
+    return;
+  }
+  emit('setWorkingDirectory', selected);
+}
+
+function resetWorkingDirectory() {
+  emit('setWorkingDirectory', null);
+}
+
 function handleModelMenuPointerDown(event: MouseEvent) {
   if (!modelMenuOpen.value) {
     return;
@@ -560,4 +618,20 @@ function submit() {
 defineExpose({
   focusComposer,
 });
+
+function normalizePath(path?: string) {
+  if (!path) {
+    return '';
+  }
+
+  const normalized = path.replaceAll('\\', '/');
+  if (normalized.startsWith('//?/UNC/')) {
+    return `//${normalized.slice('//?/UNC/'.length)}`;
+  }
+  if (normalized.startsWith('//?/')) {
+    return normalized.slice('//?/'.length);
+  }
+  return normalized;
+}
+
 </script>

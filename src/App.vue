@@ -34,6 +34,8 @@
           :live-turn="workspace.liveTurn"
           :task-id="activeTaskIdNumber"
           :selected-model="workspace.selectedModel"
+          :working-directory="workspace.workingDirectory"
+          :workspace-path="workspace.workspacePath"
           :settings-open="settingsOpen"
           :disabled="!activeTaskIdNumber"
           :sending="isActiveTaskSending"
@@ -43,11 +45,13 @@
           @cancel-turn="cancelCurrentTurn"
           @open-files="openFilesFromComposer"
           @set-model="setTaskModel"
+          @set-working-directory="setTaskWorkingDirectory"
         />
         <ContextPanel
           :notes="workspace.notes"
           :open-files="workspace.openFiles"
           :hints="workspace.hints"
+          :skills="workspace.skills"
           :usage="workspace.contextUsage"
           :debug-rounds="workspace.debugRounds"
           :busy="busy"
@@ -56,6 +60,7 @@
           @delete-note="deleteNote"
           @toggle-file-lock="toggleOpenFileLock"
           @close-file="closeOpenFile"
+          @refresh-skills="refreshSkills"
         />
       </main>
     </div>
@@ -176,7 +181,9 @@ const {
   toggleOpenFileLock,
   closeOpenFile,
   openFilesFromComposer,
+  refreshSkills,
   setTaskModel,
+  setTaskWorkingDirectory,
   handleOpenSettings,
   closeSettings,
   setTheme,

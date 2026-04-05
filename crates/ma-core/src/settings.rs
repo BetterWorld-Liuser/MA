@@ -101,7 +101,7 @@ pub struct SettingsStorage {
 
 impl SettingsStorage {
     pub fn open() -> Result<Self> {
-        let settings_dir = settings_dir()?;
+        let settings_dir = march_settings_dir()?;
         fs::create_dir_all(&settings_dir)
             .with_context(|| format!("failed to create {}", settings_dir.display()))?;
 
@@ -400,28 +400,32 @@ impl SettingsStorage {
     }
 }
 
-fn settings_dir() -> Result<PathBuf> {
+pub fn march_settings_dir() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("MA_SETTINGS_DIR").map(PathBuf::from) {
         return Ok(path);
     }
 
+    Ok(user_home_dir()?.join(".march"))
+}
+
+pub fn user_home_dir() -> Result<PathBuf> {
     if cfg!(target_os = "windows") {
         if let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-            return Ok(user_profile.join(".march"));
+            return Ok(user_profile);
         }
 
         let home_drive = std::env::var_os("HOMEDRIVE");
         let home_path = std::env::var_os("HOMEPATH");
         if let (Some(home_drive), Some(home_path)) = (home_drive, home_path) {
-            return Ok(PathBuf::from(home_drive).join(home_path).join(".march"));
+            return Ok(PathBuf::from(home_drive).join(home_path));
         }
     }
 
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        return Ok(home.join(".march"));
+        return Ok(home);
     }
 
-    bail!("failed to resolve settings directory")
+    bail!("failed to resolve user home directory")
 }
 
 fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<()> {

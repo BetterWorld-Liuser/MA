@@ -469,6 +469,21 @@ export function useWorkspaceApp() {
     });
   }
 
+  async function setTaskWorkingDirectory(path?: string | null) {
+    if (!activeTaskIdNumber.value || busy.value) {
+      return;
+    }
+
+    await runWorkspaceAction(async () => {
+      snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_working_directory', {
+        input: {
+          taskId: activeTaskIdNumber.value,
+          path: path ?? null,
+        },
+      });
+    });
+  }
+
   async function handleOpenSettings() {
     if (busy.value) {
       return;
@@ -489,6 +504,14 @@ export function useWorkspaceApp() {
     } catch (error) {
       errorMessage.value = humanizeError(error);
     }
+  }
+
+  async function refreshSkills() {
+    if (!activeTaskIdNumber.value || busy.value) {
+      return;
+    }
+
+    await refreshWorkspace(activeTaskIdNumber.value);
   }
 
   function confirmDeleteProvider(providerId: number) {
@@ -590,7 +613,9 @@ export function useWorkspaceApp() {
     toggleOpenFileLock,
     closeOpenFile,
     openFilesFromComposer,
+    refreshSkills,
     setTaskModel,
+    setTaskWorkingDirectory,
     handleOpenSettings,
     closeSettings,
     setTheme,

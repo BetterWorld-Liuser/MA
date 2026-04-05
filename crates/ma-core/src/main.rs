@@ -33,7 +33,12 @@ async fn main() -> Result<()> {
         (task_id, AgentSession::restore(config, task)?)
     } else {
         let task = storage.create_task("默认任务")?;
-        let session = AgentSession::new(config, ConversationHistory::default(), [])?;
+        let session = AgentSession::new(
+            config,
+            ConversationHistory::default(),
+            [],
+            cwd.clone(),
+        )?;
         storage.save_task_state(task.id, &session.persisted_state())?;
         (task.id, session)
     };

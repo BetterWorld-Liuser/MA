@@ -16,15 +16,18 @@ use crate::context::{
     DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SessionStatus, SystemStatus,
     ToolSummary, render_file_snapshot_for_prompt,
 };
+use crate::config::MarchConfig;
 use crate::provider::{
     ApiToolCallRequest, ApiToolFunctionCallRequest, OpenAiCompatibleClient, ProviderProgressEvent,
     ProviderToolCall, RequestMessage, build_messages,
 };
+use crate::settings::user_home_dir;
+use crate::skills::{SkillEntry, SkillLoader};
 use crate::storage::{PersistedOpenFile, PersistedTask, PersistedTaskState};
 use crate::tools::ToolRuntime;
 use crate::ui::{
     UiContextPressureView, UiContextUsageSectionView, UiContextUsageView, UiFileSnapshotView,
-    UiRuntimeSnapshot, UiShellView, UiSystemStatusView,
+    UiRuntimeSnapshot, UiShellView, UiSkillView, UiSystemStatusView,
 };
 use crate::watcher::FileWatcherService;
 
@@ -39,6 +42,7 @@ pub struct AgentSession {
     locked_files: Vec<PathBuf>,
     hints: Vec<Hint>,
     injections: Vec<Injection>,
+    skills: Vec<SkillEntry>,
     available_shells: Vec<AvailableShell>,
     working_directory: PathBuf,
 }
@@ -209,9 +213,8 @@ impl AgentSession {
         config: AgentConfig,
         history: ConversationHistory,
         open_files: impl IntoIterator<Item = PathBuf>,
+        working_directory: PathBuf,
     ) -> Result<Self> {
-        let working_directory =
-            std::env::current_dir().context("failed to resolve current directory")?;
         let normalized_open_files = normalize_open_files_for_workspace(
             &working_directory,
             open_files.into_iter().map(|path| PersistedOpenFile {
@@ -231,8 +234,7 @@ impl AgentSession {
     }
 
     pub fn restore(config: AgentConfig, task: PersistedTask) -> Result<Self> {
-        let working_directory =
-            std::env::current_dir().context("failed to resolve current directory")?;
+        let working_directory = task.task.working_directory.clone();
         let open_files = normalize_open_files_for_workspace(&working_directory, task.open_files);
         Self::create(
             config,
@@ -259,6 +261,10 @@ impl AgentSession {
             watcher.watch_file(open_file.path.clone())?;
         }
 
+        let (skills, skill_injection) = load_skills_for_workspace(&working_directory)?;
+        let mut injections = injections;
+        upsert_injection(&mut injections, skill_injection);
+
         Ok(Self {
             config,
             watcher,
@@ -271,6 +277,7 @@ impl AgentSession {
                 .collect(),
             hints,
             injections,
+            skills,
             available_shells: detect_available_shells()?,
             working_directory,
         })
@@ -668,6 +675,10 @@ impl AgentSession {
         &self.available_shells
     }
 
+    pub fn skills(&self) -> &[SkillEntry] {
+        &self.skills
+    }
+
     pub fn working_directory(&self) -> &Path {
         &self.working_directory
     }
@@ -733,6 +744,7 @@ impl AgentSession {
     }
 
     pub fn ui_runtime_snapshot(&self, context_budget_tokens: usize) -> UiRuntimeSnapshot {
+        let open_file_snapshots = self.open_file_snapshots();
         let available_shells = self
             .available_shells
             .iter()
@@ -742,16 +754,28 @@ impl AgentSession {
             })
             .collect::<Vec<_>>();
 
-        let open_files = self
-            .open_file_snapshots()
-            .into_iter()
-            .map(|(_, snapshot)| UiFileSnapshotView::from(snapshot))
+        let open_files = open_file_snapshots
+            .values()
+            .cloned()
+            .map(UiFileSnapshotView::from)
+            .collect::<Vec<_>>();
+
+        let skills = self
+            .skills
+            .iter()
+            .map(|skill| UiSkillView {
+                name: skill.name.clone(),
+                path: skill.path.clone(),
+                description: skill.description.clone(),
+                opened: open_file_snapshots.contains_key(&skill.path),
+            })
             .collect::<Vec<_>>();
 
         UiRuntimeSnapshot::new(
             self.working_directory.clone(),
             available_shells,
             open_files,
+            skills,
             self.ui_system_status(context_budget_tokens),
             self.ui_context_usage(context_budget_tokens),
         )
@@ -1401,6 +1425,22 @@ fn detect_available_shells() -> Result<Vec<AvailableShell>> {
     Ok(available)
 }
 
+fn load_skills_for_workspace(working_directory: &Path) -> Result<(Vec<SkillEntry>, Injection)> {
+    let config = MarchConfig::load_for_workspace(working_directory)?;
+    let loader = SkillLoader::new(working_directory.to_path_buf(), user_home_dir()?);
+    let skills = loader.load(&config)?;
+    let injection = loader.to_injection(&skills);
+    Ok((skills, injection))
+}
+
+fn upsert_injection(injections: &mut Vec<Injection>, next: Injection) {
+    if let Some(existing) = injections.iter_mut().find(|injection| injection.id == next.id) {
+        existing.content = next.content;
+    } else {
+        injections.push(next);
+    }
+}
+
 fn resolve_shell_program(shell: CommandShell) -> Option<String> {
     resolve_shell_program_with(shell, executable_in_path, shell_probe_succeeds)
 }
@@ -1726,7 +1766,12 @@ mod tests {
             .join(format!("ma-write-file-{unique}.txt"));
 
         let mut session =
-            AgentSession::new(AgentConfig::default(), ConversationHistory::default(), [])
+            AgentSession::new(
+                AgentConfig::default(),
+                ConversationHistory::default(),
+                [],
+                std::env::current_dir().expect("current dir"),
+            )
                 .expect("create agent session");
         let tool_call = ProviderToolCall {
             id: "call_write".to_string(),
@@ -1768,6 +1813,7 @@ mod tests {
                 name: "test".to_string(),
                 title_source: TaskTitleSource::Default,
                 title_locked: false,
+                working_directory: std::env::current_dir().expect("current dir"),
                 selected_provider_id: None,
                 selected_model: None,
                 created_at: SystemTime::now(),

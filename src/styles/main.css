@@ -674,6 +674,23 @@
   }
 }
 
+@utility composer-directory-button {
+  @apply inline-flex max-w-[260px] items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[10px] text-text-muted transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-color: var(--ma-line-soft);
+  background: var(--ma-panel-surface);
+
+  &:hover:not(:disabled) {
+    background: var(--ma-panel-surface-hover);
+    color: var(--color-text);
+  }
+}
+
+@utility composer-directory-button-active {
+  border-color: rgba(212, 105, 42, 0.34);
+  color: var(--color-text);
+  background: rgba(212, 105, 42, 0.1);
+}
+
 @utility composer-shortcut-hint {
   @apply hidden text-[9px] text-text-dim md:block;
 }
