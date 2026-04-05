@@ -155,16 +155,30 @@ pub struct RequestOptions {
     pub model: String,
     pub stream: bool,
     pub temperature: f32,
+    pub top_p: Option<f32>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
     pub max_output_tokens: Option<u32>,
 }
 
 impl RequestOptions {
-    pub fn for_chat(model: impl Into<String>, stream: bool) -> Self {
+    pub fn for_chat(
+        model: impl Into<String>,
+        stream: bool,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+        presence_penalty: Option<f32>,
+        frequency_penalty: Option<f32>,
+        max_output_tokens: Option<u32>,
+    ) -> Self {
         Self {
             model: model.into(),
             stream,
-            temperature: 0.2,
-            max_output_tokens: None,
+            temperature: temperature.unwrap_or(0.2),
+            top_p,
+            presence_penalty,
+            frequency_penalty,
+            max_output_tokens,
         }
     }
 }

@@ -25,6 +25,11 @@ impl MaStorage {
             self.workspace_root.clone(),
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     }
 
@@ -41,6 +46,11 @@ impl MaStorage {
             self.workspace_root.clone(),
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     }
 
@@ -52,6 +62,11 @@ impl MaStorage {
         working_directory: PathBuf,
         selected_provider_id: Option<i64>,
         selected_model: Option<String>,
+        model_temperature: Option<f32>,
+        model_top_p: Option<f32>,
+        model_presence_penalty: Option<f32>,
+        model_frequency_penalty: Option<f32>,
+        model_max_output_tokens: Option<u32>,
     ) -> Result<TaskRecord> {
         let name = name.as_ref().trim();
         if name.is_empty() {
@@ -66,6 +81,14 @@ impl MaStorage {
             }
         });
         let working_directory = normalize_working_directory(&working_directory)?;
+        let normalized_temperature = normalize_model_temperature(model_temperature)?;
+        let normalized_top_p = normalize_model_top_p(model_top_p)?;
+        let normalized_presence_penalty =
+            normalize_model_penalty("model_presence_penalty", model_presence_penalty)?;
+        let normalized_frequency_penalty =
+            normalize_model_penalty("model_frequency_penalty", model_frequency_penalty)?;
+        let normalized_max_output_tokens =
+            normalize_model_max_output_tokens(model_max_output_tokens)?;
 
         let now = SystemTime::now();
         let now_ts = unix_timestamp(now)?;
@@ -78,11 +101,16 @@ impl MaStorage {
                     working_directory,
                     selected_provider_id,
                     selected_model,
+                    model_temperature,
+                    model_top_p,
+                    model_presence_penalty,
+                    model_frequency_penalty,
+                    model_max_output_tokens,
                     active_agent,
                     created_at,
                     last_active
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     name,
                     title_source.as_db_value(),
@@ -90,6 +118,11 @@ impl MaStorage {
                     working_directory.to_string_lossy().to_string(),
                     selected_provider_id,
                     normalized_model,
+                    normalized_temperature,
+                    normalized_top_p,
+                    normalized_presence_penalty,
+                    normalized_frequency_penalty,
+                    normalized_max_output_tokens.map(i64::from),
                     MARCH_AGENT_NAME,
                     now_ts,
                     now_ts
@@ -105,6 +138,11 @@ impl MaStorage {
             working_directory,
             selected_provider_id,
             selected_model: normalized_model,
+            model_temperature: normalized_temperature,
+            model_top_p: normalized_top_p,
+            model_presence_penalty: normalized_presence_penalty,
+            model_frequency_penalty: normalized_frequency_penalty,
+            model_max_output_tokens: normalized_max_output_tokens,
             active_agent: MARCH_AGENT_NAME.to_string(),
             created_at: now,
             last_active: now,
@@ -214,6 +252,52 @@ impl MaStorage {
         Ok(())
     }
 
+    pub fn update_task_model_settings(
+        &self,
+        task_id: i64,
+        model_temperature: Option<f32>,
+        model_top_p: Option<f32>,
+        model_presence_penalty: Option<f32>,
+        model_frequency_penalty: Option<f32>,
+        model_max_output_tokens: Option<u32>,
+    ) -> Result<()> {
+        let normalized_temperature = normalize_model_temperature(model_temperature)?;
+        let normalized_top_p = normalize_model_top_p(model_top_p)?;
+        let normalized_presence_penalty =
+            normalize_model_penalty("model_presence_penalty", model_presence_penalty)?;
+        let normalized_frequency_penalty =
+            normalize_model_penalty("model_frequency_penalty", model_frequency_penalty)?;
+        let normalized_max_output_tokens =
+            normalize_model_max_output_tokens(model_max_output_tokens)?;
+
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE tasks
+                 SET model_temperature = ?2,
+                     model_top_p = ?3,
+                     model_presence_penalty = ?4,
+                     model_frequency_penalty = ?5,
+                     model_max_output_tokens = ?6
+                 WHERE id = ?1",
+                params![
+                    task_id,
+                    normalized_temperature,
+                    normalized_top_p,
+                    normalized_presence_penalty,
+                    normalized_frequency_penalty,
+                    normalized_max_output_tokens.map(i64::from)
+                ],
+            )
+            .context("failed to update task model settings")?;
+
+        if affected == 0 {
+            bail!("task {} not found", task_id);
+        }
+
+        Ok(())
+    }
+
     pub fn update_task_working_directory(
         &self,
         task_id: i64,
@@ -292,7 +376,8 @@ impl MaStorage {
             .connection
             .prepare(
                 "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
-                 , selected_provider_id, selected_model, active_agent
+                 , selected_provider_id, selected_model, model_temperature, model_top_p,
+                   model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent
                  FROM tasks
                  ORDER BY last_active DESC, id DESC",
             )
@@ -310,7 +395,12 @@ impl MaStorage {
                     row.get::<_, i64>(6)?,
                     row.get::<_, Option<i64>>(7)?,
                     row.get::<_, Option<String>>(8)?,
-                    row.get::<_, String>(9)?,
+                    row.get::<_, Option<f32>>(9)?,
+                    row.get::<_, Option<f32>>(10)?,
+                    row.get::<_, Option<f32>>(11)?,
+                    row.get::<_, Option<f32>>(12)?,
+                    row.get::<_, Option<i64>>(13)?,
+                    row.get::<_, String>(14)?,
                 ))
             })
             .context("failed to query tasks")?;
@@ -327,6 +417,11 @@ impl MaStorage {
                 last_active,
                 selected_provider_id,
                 selected_model,
+                model_temperature,
+                model_top_p,
+                model_presence_penalty,
+                model_frequency_penalty,
+                model_max_output_tokens,
                 active_agent,
             ) = row.context("failed to decode task row")?;
             tasks.push(TaskRecord {
@@ -340,6 +435,12 @@ impl MaStorage {
                 )?,
                 selected_provider_id,
                 selected_model,
+                model_temperature,
+                model_top_p,
+                model_presence_penalty,
+                model_frequency_penalty,
+                model_max_output_tokens: model_max_output_tokens
+                    .and_then(|value| u32::try_from(value).ok()),
                 active_agent,
                 created_at: system_time_from_unix(created_at)?,
                 last_active: system_time_from_unix(last_active)?,
@@ -370,7 +471,8 @@ impl MaStorage {
             .connection
             .query_row(
                 "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
-                 , selected_provider_id, selected_model, active_agent
+                 , selected_provider_id, selected_model, model_temperature, model_top_p,
+                   model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent
                  FROM tasks
                  WHERE id = ?1",
                 params![task_id],
@@ -385,7 +487,12 @@ impl MaStorage {
                         row.get::<_, i64>(6)?,
                         row.get::<_, Option<i64>>(7)?,
                         row.get::<_, Option<String>>(8)?,
-                        row.get::<_, String>(9)?,
+                        row.get::<_, Option<f32>>(9)?,
+                        row.get::<_, Option<f32>>(10)?,
+                        row.get::<_, Option<f32>>(11)?,
+                        row.get::<_, Option<f32>>(12)?,
+                        row.get::<_, Option<i64>>(13)?,
+                        row.get::<_, String>(14)?,
                     ))
                 },
             )
@@ -401,7 +508,12 @@ impl MaStorage {
             working_directory: decode_working_directory(raw.4, &self.workspace_root)?,
             selected_provider_id: raw.7,
             selected_model: raw.8,
-            active_agent: raw.9,
+            model_temperature: raw.9,
+            model_top_p: raw.10,
+            model_presence_penalty: raw.11,
+            model_frequency_penalty: raw.12,
+            model_max_output_tokens: raw.13.and_then(|value| u32::try_from(value).ok()),
+            active_agent: raw.14,
             created_at: system_time_from_unix(raw.5)?,
             last_active: system_time_from_unix(raw.6)?,
         })
@@ -542,5 +654,46 @@ impl MaStorage {
             ));
         }
         Ok(hints)
+    }
+}
+
+fn normalize_model_temperature(value: Option<f32>) -> Result<Option<f32>> {
+    match value {
+        Some(value) if !value.is_finite() => bail!("model_temperature must be finite"),
+        Some(value) if !(0.0..=2.0).contains(&value) => {
+            bail!("model_temperature must be between 0.0 and 2.0")
+        }
+        Some(value) => Ok(Some((value * 100.0).round() / 100.0)),
+        None => Ok(None),
+    }
+}
+
+fn normalize_model_max_output_tokens(value: Option<u32>) -> Result<Option<u32>> {
+    match value {
+        Some(0) => bail!("model_max_output_tokens must be greater than 0"),
+        Some(value) => Ok(Some(value)),
+        None => Ok(None),
+    }
+}
+
+fn normalize_model_top_p(value: Option<f32>) -> Result<Option<f32>> {
+    match value {
+        Some(value) if !value.is_finite() => bail!("model_top_p must be finite"),
+        Some(value) if !(0.0..=1.0).contains(&value) => {
+            bail!("model_top_p must be between 0.0 and 1.0")
+        }
+        Some(value) => Ok(Some((value * 100.0).round() / 100.0)),
+        None => Ok(None),
+    }
+}
+
+fn normalize_model_penalty(field: &str, value: Option<f32>) -> Result<Option<f32>> {
+    match value {
+        Some(value) if !value.is_finite() => bail!("{field} must be finite"),
+        Some(value) if !(-2.0..=2.0).contains(&value) => {
+            bail!("{field} must be between -2.0 and 2.0")
+        }
+        Some(value) => Ok(Some((value * 100.0).round() / 100.0)),
+        None => Ok(None),
     }
 }

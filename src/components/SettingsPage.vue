@@ -216,29 +216,30 @@
                     {{ probeModelsLoading ? '读取中…' : '刷新列表' }}
                   </Button>
                 </div>
-                <template v-if="probeModels.length">
-                  <SettingsSelect
-                    v-model="providerProbeModel"
-                    :options="probeModelOptions"
-                    placeholder="从供应商模型列表中选择"
-                    searchable
-                    search-placeholder="搜索 probe model…"
-                  />
-                </template>
-                <template v-else>
-                  <Input
-                    id="provider-probe-model"
-                    v-model="providerProbeModel"
-                    :placeholder="probeModelPlaceholder"
-                  />
-                </template>
                 <Input
-                  v-if="probeModels.length"
+                  id="provider-probe-model"
                   v-model="providerProbeModel"
-                  class="mt-2"
                   :placeholder="probeModelPlaceholder"
                 />
-                <div v-if="!probeModels.length && probeSuggestedModels.length" class="mt-2 flex flex-wrap gap-2">
+                <SettingsSelect
+                  v-model="providerProbeModel"
+                  class="mt-2"
+                  :options="probeModelOptions"
+                  :placeholder="probeModelSelectPlaceholder"
+                  :disabled="busy || !probeModels.length"
+                  searchable
+                  search-placeholder="搜索 probe model…"
+                />
+                <div
+                  v-if="!probeModels.length && probeModelsLoading"
+                  class="mt-2 text-[11px] text-text-dim"
+                >
+                  正在读取供应商模型列表，读取完成后可直接从下拉中选择。
+                </div>
+                <div
+                  v-else-if="!probeModels.length && probeSuggestedModels.length"
+                  class="mt-2 flex flex-wrap gap-2"
+                >
                   <button
                     v-for="model in probeSuggestedModels"
                     :key="model"
@@ -884,6 +885,16 @@ const probeModelOptions = computed(() =>
     label: model,
   })),
 );
+
+const probeModelSelectPlaceholder = computed(() => {
+  if (props.probeModelsLoading) {
+    return '正在读取供应商模型列表…';
+  }
+  if (props.probeModels.length) {
+    return '从供应商模型列表中选择';
+  }
+  return '暂无可选列表，仍可先手动填写';
+});
 
 const providerModelIdOptions = computed(() => {
   const configured = activeEditorProvider.value?.models.map((model) => model.modelId) ?? [];

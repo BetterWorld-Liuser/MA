@@ -1,9 +1,12 @@
 <template>
   <div class="space-y-1.5">
     <div class="flex items-center justify-between gap-3">
-      <h3 class="section-title !mb-0 !text-[9px]">Skills</h3>
-      <div class="flex items-center gap-2">
-        <span class="text-[9px] text-text-dim">{{ skills.length ? `${skills.length} available` : 'none' }}</span>
+      <div class="flex items-center gap-1.5">
+        <Icon :icon="sparklesIcon" class="h-3.5 w-3.5 text-text-dim" />
+        <h3 class="section-title !mb-0">Skills</h3>
+      </div>
+      <div class="flex items-center gap-2 text-[8px] text-text-dim">
+        <span>{{ skills.length ? `${skills.length} available` : 'none' }}</span>
         <button
           class="task-header-icon-button h-6 w-6"
           type="button"
@@ -80,6 +83,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import refreshIcon from '@iconify-icons/lucide/refresh-cw';
+import sparklesIcon from '@iconify-icons/lucide/sparkles';
 import type { SkillItem } from '@/data/mock';
 
 withDefaults(defineProps<{

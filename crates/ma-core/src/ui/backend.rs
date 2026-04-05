@@ -28,9 +28,9 @@ use super::{
     UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
     UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest,
-    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
-    UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot,
+    UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
+    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
 impl UiAppBackend {
@@ -76,6 +76,11 @@ impl UiAppBackend {
             self.workspace_path.clone(),
             defaults.default_provider_id,
             defaults.default_model,
+            None,
+            None,
+            None,
+            None,
+            None,
         )?;
         let session = AgentSession::new(
             ui_agent_config(),
@@ -544,6 +549,22 @@ impl UiAppBackend {
             .or(SettingsStorage::open()?.snapshot()?.default_provider_id);
         self.storage
             .update_task_selection(task_id, provider_id, Some(model.to_string()))?;
+        self.workspace_snapshot(Some(task_id))
+    }
+
+    pub fn handle_set_task_model_settings(
+        &mut self,
+        request: UiSetTaskModelSettingsRequest,
+    ) -> Result<UiWorkspaceSnapshot> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        self.storage.update_task_model_settings(
+            task_id,
+            request.temperature,
+            request.top_p,
+            request.presence_penalty,
+            request.frequency_penalty,
+            request.max_output_tokens,
+        )?;
         self.workspace_snapshot(Some(task_id))
     }
 

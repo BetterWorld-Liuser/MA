@@ -34,6 +34,11 @@ pub struct TaskRecord {
     pub working_directory: PathBuf,
     pub selected_provider_id: Option<i64>,
     pub selected_model: Option<String>,
+    pub model_temperature: Option<f32>,
+    pub model_top_p: Option<f32>,
+    pub model_presence_penalty: Option<f32>,
+    pub model_frequency_penalty: Option<f32>,
+    pub model_max_output_tokens: Option<u32>,
     pub active_agent: String,
     pub created_at: SystemTime,
     pub last_active: SystemTime,
@@ -139,6 +144,11 @@ impl MaStorage {
                     working_directory TEXT,
                     selected_provider_id INTEGER,
                     selected_model TEXT,
+                    model_temperature REAL,
+                    model_top_p REAL,
+                    model_presence_penalty REAL,
+                    model_frequency_penalty REAL,
+                    model_max_output_tokens INTEGER,
                     active_agent TEXT NOT NULL DEFAULT 'march',
                     created_at  INTEGER NOT NULL,
                     last_active INTEGER NOT NULL
@@ -216,6 +226,11 @@ impl MaStorage {
         let mut has_working_directory = false;
         let mut has_selected_provider_id = false;
         let mut has_selected_model = false;
+        let mut has_model_temperature = false;
+        let mut has_model_top_p = false;
+        let mut has_model_presence_penalty = false;
+        let mut has_model_frequency_penalty = false;
+        let mut has_model_max_output_tokens = false;
         let mut has_active_agent = false;
         for column in columns {
             let column = column.context("failed to decode tasks table_info row")?;
@@ -233,6 +248,21 @@ impl MaStorage {
             }
             if column == "selected_model" {
                 has_selected_model = true;
+            }
+            if column == "model_temperature" {
+                has_model_temperature = true;
+            }
+            if column == "model_top_p" {
+                has_model_top_p = true;
+            }
+            if column == "model_presence_penalty" {
+                has_model_presence_penalty = true;
+            }
+            if column == "model_frequency_penalty" {
+                has_model_frequency_penalty = true;
+            }
+            if column == "model_max_output_tokens" {
+                has_model_max_output_tokens = true;
             }
             if column == "active_agent" {
                 has_active_agent = true;
@@ -285,6 +315,45 @@ impl MaStorage {
             self.connection
                 .execute("ALTER TABLE tasks ADD COLUMN selected_model TEXT", [])
                 .context("failed to add tasks.selected_model column")?;
+        }
+
+        if !has_model_temperature {
+            self.connection
+                .execute("ALTER TABLE tasks ADD COLUMN model_temperature REAL", [])
+                .context("failed to add tasks.model_temperature column")?;
+        }
+
+        if !has_model_top_p {
+            self.connection
+                .execute("ALTER TABLE tasks ADD COLUMN model_top_p REAL", [])
+                .context("failed to add tasks.model_top_p column")?;
+        }
+
+        if !has_model_presence_penalty {
+            self.connection
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN model_presence_penalty REAL",
+                    [],
+                )
+                .context("failed to add tasks.model_presence_penalty column")?;
+        }
+
+        if !has_model_frequency_penalty {
+            self.connection
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN model_frequency_penalty REAL",
+                    [],
+                )
+                .context("failed to add tasks.model_frequency_penalty column")?;
+        }
+
+        if !has_model_max_output_tokens {
+            self.connection
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN model_max_output_tokens INTEGER",
+                    [],
+                )
+                .context("failed to add tasks.model_max_output_tokens column")?;
         }
 
         if !has_active_agent {
@@ -498,12 +567,22 @@ mod tests {
                 workdir.clone(),
                 Some(7),
                 Some("gpt-5.4".to_string()),
+                None,
+                None,
+                None,
+                None,
+                None,
             )
             .expect("create task");
 
         let loaded = storage.load_task(task.id).expect("load task");
         assert_eq!(loaded.task.selected_provider_id, Some(7));
         assert_eq!(loaded.task.selected_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(loaded.task.model_temperature, None);
+        assert_eq!(loaded.task.model_top_p, None);
+        assert_eq!(loaded.task.model_presence_penalty, None);
+        assert_eq!(loaded.task.model_frequency_penalty, None);
+        assert_eq!(loaded.task.model_max_output_tokens, None);
     }
 
     #[test]
@@ -521,6 +600,11 @@ mod tests {
                 workdir.clone(),
                 Some(9),
                 Some("custom-model".to_string()),
+                None,
+                None,
+                None,
+                None,
+                None,
             )
             .expect("create explicit task");
 

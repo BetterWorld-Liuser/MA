@@ -250,6 +250,11 @@ impl From<TaskRecord> for UiTaskSummary {
             title_locked: task.title_locked,
             working_directory: clean_path(task.working_directory),
             selected_model: task.selected_model,
+            model_temperature: task.model_temperature,
+            model_top_p: task.model_top_p,
+            model_presence_penalty: task.model_presence_penalty,
+            model_frequency_penalty: task.model_frequency_penalty,
+            model_max_output_tokens: task.model_max_output_tokens,
             created_at: system_time_to_unix(task.created_at),
             last_active: system_time_to_unix(task.last_active),
         }

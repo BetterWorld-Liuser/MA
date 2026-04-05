@@ -31,6 +31,11 @@ pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompat
                 api_key: provider.api_key,
                 model: model.clone(),
                 server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+                temperature: task.model_temperature,
+                top_p: task.model_top_p,
+                presence_penalty: task.model_presence_penalty,
+                frequency_penalty: task.model_frequency_penalty,
+                max_output_tokens: task.model_max_output_tokens,
             });
         }
     }
@@ -49,6 +54,11 @@ pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompat
             api_key: provider.api_key,
             model: model.clone(),
             server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+            temperature: task.model_temperature,
+            top_p: task.model_top_p,
+            presence_penalty: task.model_presence_penalty,
+            frequency_penalty: task.model_frequency_penalty,
+            max_output_tokens: task.model_max_output_tokens,
         });
     }
 
@@ -80,6 +90,11 @@ pub(super) fn provider_config_for_session(
                     api_key: provider.api_key,
                     model: model.clone(),
                     server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+                    temperature: task.model_temperature,
+                    top_p: task.model_top_p,
+                    presence_penalty: task.model_presence_penalty,
+                    frequency_penalty: task.model_frequency_penalty,
+                    max_output_tokens: task.model_max_output_tokens,
                 });
             }
         }
@@ -152,6 +167,11 @@ pub async fn fetch_task_model_selector(
             api_key: provider.api_key.clone(),
             model: provider_current_model.clone(),
             server_tools: resolve_server_tools(&settings, provider.id, &provider_current_model)?,
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_output_tokens: None,
         });
         let mut available_models = client.list_models().await.unwrap_or_default();
         let persisted_models = settings
@@ -195,6 +215,11 @@ pub async fn fetch_task_model_selector(
     Ok(UiTaskModelSelectorView {
         current_provider_id,
         current_model,
+        current_temperature: task.and_then(|value| value.model_temperature),
+        current_top_p: task.and_then(|value| value.model_top_p),
+        current_presence_penalty: task.and_then(|value| value.model_presence_penalty),
+        current_frequency_penalty: task.and_then(|value| value.model_frequency_penalty),
+        current_max_output_tokens: task.and_then(|value| value.model_max_output_tokens),
         current_model_capabilities: resolve_current_model_capabilities(task)?,
         providers,
     })
@@ -213,6 +238,11 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
         api_key: provider.api_key,
         model: current_model.clone(),
         server_tools: resolve_server_tools(&settings, provider_id, &current_model)?,
+        temperature: None,
+        top_p: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        max_output_tokens: None,
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
     available_models.extend(
@@ -268,6 +298,11 @@ pub async fn fetch_probe_models(
         api_key,
         model: current_model.clone(),
         server_tools: Vec::new(),
+        temperature: None,
+        top_p: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        max_output_tokens: None,
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
     if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
@@ -317,6 +352,11 @@ pub async fn test_provider_connection(
         api_key,
         model: model.clone(),
         server_tools: Vec::new(),
+        temperature: None,
+        top_p: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        max_output_tokens: None,
     });
     let message = provider.test_connection().await?;
     Ok(UiTestProviderConnectionResult {
@@ -343,6 +383,11 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
                     api_key: provider.api_key,
                     model: model.clone(),
                     server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+                    temperature: task.model_temperature,
+                    top_p: task.model_top_p,
+                    presence_penalty: task.model_presence_penalty,
+                    frequency_penalty: task.model_frequency_penalty,
+                    max_output_tokens: task.model_max_output_tokens,
                 });
             }
         }
@@ -360,6 +405,11 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
             api_key: provider.api_key,
             model: model.clone(),
             server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+            temperature: task.and_then(|value| value.model_temperature),
+            top_p: task.and_then(|value| value.model_top_p),
+            presence_penalty: task.and_then(|value| value.model_presence_penalty),
+            frequency_penalty: task.and_then(|value| value.model_frequency_penalty),
+            max_output_tokens: task.and_then(|value| value.model_max_output_tokens),
         });
     }
 

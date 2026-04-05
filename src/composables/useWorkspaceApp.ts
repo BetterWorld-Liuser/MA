@@ -27,6 +27,8 @@ export function useWorkspaceApp() {
   const appTitle = 'March';
   const appWindow = getCurrentWindow();
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
+  const optimisticTaskId = ref<string | null>(null);
+  const optimisticDeletedTaskIds = ref<Set<string>>(new Set());
   const localComposerMessages = ref<Record<number, ChatMessage[]>>({});
   const workspacePath = computed(() => snapshot.value?.workspace_path);
   const busy = ref(false);
@@ -135,9 +137,106 @@ export function useWorkspaceApp() {
     return mockWorkspace;
   });
 
+  const resolvedWorkspace = computed<WorkspaceView>(() => {
+    const baseWorkspace = workspace.value;
+    let nextWorkspace = baseWorkspace;
+
+    if (optimisticTaskId.value) {
+      const optimisticTask = {
+        id: optimisticTaskId.value,
+        name: '默认任务',
+        status: 'active' as const,
+        updatedAt: '刚刚',
+      };
+
+      nextWorkspace = {
+        ...baseWorkspace,
+        title: optimisticTask.name,
+        tasks: [
+          optimisticTask,
+          ...baseWorkspace.tasks
+            .filter((task) => task.id !== optimisticTask.id)
+            .map((task) => ({
+              ...task,
+              status: 'idle' as const,
+            })),
+        ],
+        activeTaskId: optimisticTask.id,
+        selectedModel: undefined,
+        selectedTemperature: undefined,
+        selectedTopP: undefined,
+        selectedPresencePenalty: undefined,
+        selectedFrequencyPenalty: undefined,
+        selectedMaxOutputTokens: undefined,
+        workingDirectory: baseWorkspace.workspacePath ?? baseWorkspace.workingDirectory,
+        chat: [],
+        notes: [],
+        openFiles: [],
+        hints: [],
+        skills: [],
+        contextUsage: {
+          percent: 0,
+          current: '0',
+          limit: baseWorkspace.contextUsage.limit,
+          sections: [],
+        },
+        debugRounds: [],
+        liveTurn: undefined,
+      };
+    }
+
+    if (!optimisticDeletedTaskIds.value.size) {
+      return nextWorkspace;
+    }
+
+    const visibleTasks = nextWorkspace.tasks.filter((task) => !optimisticDeletedTaskIds.value.has(task.id));
+    const activeTaskVisible = nextWorkspace.activeTaskId && !optimisticDeletedTaskIds.value.has(nextWorkspace.activeTaskId);
+    const fallbackActiveTaskId = activeTaskVisible ? nextWorkspace.activeTaskId : (visibleTasks[0]?.id ?? '');
+
+    if (activeTaskVisible) {
+      return {
+        ...nextWorkspace,
+        tasks: visibleTasks,
+      };
+    }
+
+    const fallbackTaskName = visibleTasks.find((task) => task.id === fallbackActiveTaskId)?.name ?? 'March';
+
+    return {
+      ...nextWorkspace,
+      title: fallbackTaskName,
+      tasks: visibleTasks,
+      activeTaskId: fallbackActiveTaskId,
+      selectedModel: undefined,
+      selectedTemperature: undefined,
+      selectedTopP: undefined,
+      selectedPresencePenalty: undefined,
+      selectedFrequencyPenalty: undefined,
+      selectedMaxOutputTokens: undefined,
+      workingDirectory: nextWorkspace.workspacePath ?? nextWorkspace.workingDirectory,
+      chat: [],
+      notes: [],
+      openFiles: [],
+      hints: [],
+      skills: [],
+      contextUsage: {
+        percent: 0,
+        current: '0',
+        limit: nextWorkspace.contextUsage.limit,
+        sections: [],
+      },
+      debugRounds: [],
+      liveTurn: undefined,
+    };
+  });
+
   const activeTaskIdNumber = computed(() => {
-    const raw = workspace.value.activeTaskId;
-    return raw ? Number(raw) : null;
+    const raw = resolvedWorkspace.value.activeTaskId;
+    if (!raw || raw === optimisticTaskId.value) {
+      return null;
+    }
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   });
 
   const hasPendingSend = computed(() => sendingTaskId.value !== null);
@@ -184,11 +283,15 @@ export function useWorkspaceApp() {
       return;
     }
 
+    optimisticTaskId.value = `pending-task-${Date.now()}`;
+    await nextTick();
+
     await runWorkspaceAction(async () => {
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('create_task', {
         input: {},
       });
     });
+    optimisticTaskId.value = null;
     await nextTick();
     chatPaneRef.value?.focusComposer();
   }
@@ -217,11 +320,18 @@ export function useWorkspaceApp() {
       body: `确认删除「${task?.name ?? taskId}」吗？这个操作目前不能撤销。`,
       confirmLabel: '删除任务',
       action: async () => {
-        await runWorkspaceAction(async () => {
+        optimisticDeletedTaskIds.value = new Set([...optimisticDeletedTaskIds.value, taskId]);
+        const succeeded = await runWorkspaceAction(async () => {
           snapshot.value = await invoke<BackendWorkspaceSnapshot>('delete_task', {
             input: { taskId: Number(taskId) },
           });
         });
+        optimisticDeletedTaskIds.value = new Set(
+          [...optimisticDeletedTaskIds.value].filter((id) => id !== taskId),
+        );
+        if (!succeeded) {
+          return;
+        }
         clearLiveTurn(Number(taskId));
         clearArchivedFailedTurns(Number(taskId));
         delete localComposerMessages.value[Number(taskId)];
@@ -489,6 +599,31 @@ export function useWorkspaceApp() {
     });
   }
 
+  async function setTaskModelSettings(settings: {
+    temperature?: number | null;
+    topP?: number | null;
+    presencePenalty?: number | null;
+    frequencyPenalty?: number | null;
+    maxOutputTokens?: number | null;
+  }) {
+    if (!activeTaskIdNumber.value || busy.value) {
+      return;
+    }
+
+    await runWorkspaceAction(async () => {
+      snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_model_settings', {
+        input: {
+          taskId: activeTaskIdNumber.value,
+          temperature: settings.temperature ?? null,
+          topP: settings.topP ?? null,
+          presencePenalty: settings.presencePenalty ?? null,
+          frequencyPenalty: settings.frequencyPenalty ?? null,
+          maxOutputTokens: settings.maxOutputTokens ?? null,
+        },
+      });
+    });
+  }
+
   async function setTaskWorkingDirectory(path?: string | null) {
     if (!activeTaskIdNumber.value || busy.value) {
       return;
@@ -565,11 +700,14 @@ export function useWorkspaceApp() {
     try {
       await action();
       errorMessage.value = '';
+      return true;
     } catch (error) {
+      optimisticTaskId.value = null;
       if (!snapshot.value) {
         console.warn('Failed to load workspace snapshot from Tauri backend, using mock data.', error);
       }
       errorMessage.value = humanizeError(error);
+      return false;
     } finally {
       busy.value = false;
     }
@@ -670,7 +808,7 @@ export function useWorkspaceApp() {
     isMaximized,
     chatPaneRef,
     noteDialogRef,
-    workspace,
+    workspace: resolvedWorkspace,
     activeTaskIdNumber,
     hasPendingSend,
     isActiveTaskSending,
@@ -713,6 +851,7 @@ export function useWorkspaceApp() {
     openFilesFromComposer,
     refreshSkills,
     setTaskModel,
+    setTaskModelSettings,
     setTaskWorkingDirectory,
     handleOpenSettings,
     closeSettings,

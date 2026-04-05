@@ -7,7 +7,7 @@
       <p class="truncate text-[12px] font-semibold tracking-[0.01em] text-text">Context</p>
     </div>
 
-    <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-2">
+    <div class="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-2">
       <ContextNotesSection
         :notes="notes"
         :busy="busy"
@@ -27,10 +27,13 @@
       <ContextHintsSection v-if="hints.length" :hints="hints" />
       <ContextSkillsSection :skills="skills" :busy="busy" @refresh="$emit('refresh-skills')" />
 
-      <section class="space-y-1.5">
+      <section class="space-y-3">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title mb-0 !text-[9px]">Context usage (est.)</h3>
-          <div class="flex items-center gap-2 text-[9px] text-text-dim">
+          <div class="flex items-center gap-1.5">
+            <Icon :icon="gaugeIcon" class="h-3.5 w-3.5 text-text-dim" />
+            <h3 class="section-title mb-0">Context usage (est.)</h3>
+          </div>
+          <div class="flex items-center gap-2 text-[8px] text-text-dim">
             <span class="font-mono">{{ usage.percent }}%</span>
             <span class="font-mono text-text-muted">{{ usage.current }} / {{ usage.limit }}</span>
           </div>
@@ -279,6 +282,7 @@ import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import copyIcon from '@iconify-icons/lucide/copy';
 import expandIcon from '@iconify-icons/lucide/expand';
+import gaugeIcon from '@iconify-icons/lucide/gauge';
 import panelRightIcon from '@iconify-icons/lucide/panel-right';
 import xIcon from '@iconify-icons/lucide/x';
 import ContextHintsSection from '@/components/context/ContextHintsSection.vue';

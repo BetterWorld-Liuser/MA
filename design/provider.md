@@ -28,6 +28,13 @@ Provider（Claude / GPT / Gemini / ...）
 
 March 的 `AgentContext` 决定内容和顺序，`WireAdapter` 负责把 `RequestMessage` 序列化为各家 wire format 并处理响应解析。
 
+其中 OpenAI 协议族需要再细分一层 endpoint 选择：
+
+- 通用 OpenAI-compatible 文本 / function calling 请求，优先走 `/chat/completions`
+- 官方 OpenAI 的 built-in tools（如 `web_search_preview`、`code_interpreter`、`file_search`）以及官方 OpenAI 模型，按官网当前推荐走 `/responses`
+
+这样做是因为 built-in tools 属于 OpenAI Responses API 的能力集合；如果仍把它们按 Chat Completions 的 schema 发到 `/chat/completions`，会出现参数校验错误。这个分流属于 wire format 兼容职责，不应上浮到 AgentContext。
+
 ---
 
 ## Cache Control 映射
@@ -248,6 +255,7 @@ Server-side tools 同理：翻译层遍历 `server_tools` 列表，按每项的 
 这意味着：
 
 - 输入框模型选择器是 **task 级** 状态，不是 session 级临时状态
+- 温度、输出上限等运行参数也属于 **task 级** 状态；同一模型在不同任务里允许使用不同参数
 - 用户在设置页修改“默认运行配置”时，只影响**之后新建的任务**
 - 已存在任务的 provider/model 应保持稳定，不应被新的全局默认值回刷
 

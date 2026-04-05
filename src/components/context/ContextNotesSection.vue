@@ -1,7 +1,10 @@
 <template>
   <div class="space-y-1.5">
     <div class="flex items-center justify-between gap-3">
-      <h3 class="section-title mb-0 !text-[9px]">Notes</h3>
+      <div class="flex items-center gap-1.5">
+        <Icon :icon="stickyNoteIcon" class="h-3.5 w-3.5 text-text-dim" />
+        <h3 class="section-title mb-0">Notes</h3>
+      </div>
       <button class="pill px-1.5" type="button" :disabled="busy" @click="$emit('add-note')">
         <Icon :icon="plusIcon" class="h-3.5 w-3.5" />
       </button>
@@ -31,6 +34,7 @@ import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import pencilIcon from '@iconify-icons/lucide/pencil';
 import plusIcon from '@iconify-icons/lucide/plus';
+import stickyNoteIcon from '@iconify-icons/lucide/sticky-note';
 import xIcon from '@iconify-icons/lucide/x';
 import type { NoteItem } from '@/data/mock';
 

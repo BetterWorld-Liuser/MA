@@ -640,6 +640,19 @@
   min-width: 20rem;
 }
 
+@utility composer-model-settings-footer {
+  @apply flex justify-end border-t px-3 py-2;
+  border-color: var(--ma-line-soft);
+}
+
+@utility composer-model-settings-actions {
+  @apply flex items-center justify-end gap-2;
+}
+
+@utility composer-model-settings-button {
+  @apply min-w-18;
+}
+
 @utility composer-menu-header {
   @apply flex items-center justify-between gap-3 px-3 py-1.75 text-[8px] uppercase tracking-[0.16em] text-text-dim;
 }
@@ -819,7 +832,28 @@
 }
 
 @utility section-title {
-  @apply mb-1 text-[8px] uppercase tracking-[0.18em] text-text-dim;
+  @apply mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-text;
+}
+
+@utility context-section {
+  @apply space-y-1.5 rounded-2xl px-2 py-2;
+  border: 1px solid color-mix(in srgb, var(--ma-line-soft) 88%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ma-panel-surface) 96%, transparent), transparent 100%);
+}
+
+@utility context-section-header {
+  @apply flex items-center justify-between gap-3 rounded-xl px-2 py-1.5;
+  background: color-mix(in srgb, var(--ma-panel-surface-strong) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ma-line-soft) 86%, transparent);
+}
+
+@utility context-section-title {
+  @apply mb-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-text;
+}
+
+@utility context-section-meta {
+  @apply flex items-center gap-2 text-[9px] text-text-dim;
 }
 
 @utility context-row {
@@ -1261,6 +1295,13 @@
   .message-bubble-assistant .markstream-vue blockquote {
     margin-top: 0.22rem !important;
     margin-bottom: 0.22rem !important;
+  }
+
+  .message-bubble-assistant .markstream-vue hr {
+    margin-top: 0.32rem !important;
+    margin-bottom: 0.32rem !important;
+    border: 0 !important;
+    border-top: 1px solid var(--ma-line-soft) !important;
   }
 
   .message-bubble-assistant .markstream-vue ul,

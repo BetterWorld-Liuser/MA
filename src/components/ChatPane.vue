@@ -35,7 +35,7 @@
               class="mention-chip"
               :class="chip.kind === 'directory' ? 'mention-chip-directory' : ''"
               type="button"
-              :disabled="disabled || interactionLocked"
+              :disabled="disabled"
               @click="removeMention(chip.path, chip.kind)"
             >
               <span class="mention-chip-kind">{{ chip.kind === 'directory' ? 'DIR' : 'FILE' }}</span>
@@ -50,7 +50,7 @@
             v-model="draft"
             class="chat-composer-input"
             placeholder="帮我重构认证逻辑，必要时 @ 角色、文件或目录。"
-            :disabled="disabled || interactionLocked"
+            :disabled="disabled"
             rows="1"
             @input="handleDraftInput"
             @click="updateMentionQueryFromCursor"
@@ -64,7 +64,7 @@
               :key="image.id"
               class="composer-image-card"
               type="button"
-              :disabled="disabled || interactionLocked"
+              :disabled="disabled"
               @click="openImagePreview(image)"
             >
               <img class="composer-image-thumb" :src="image.previewUrl" :alt="image.name" />
@@ -87,14 +87,14 @@
 
           <div class="chat-composer-toolbar">
             <div class="chat-composer-toolbar-group">
-              <button class="composer-action" type="button" :disabled="disabled || interactionLocked" title="选择文件或目录" @click="togglePlusMenu">
+              <button class="composer-action" type="button" :disabled="disabled" title="选择文件或目录" @click="togglePlusMenu">
                 <span class="composer-action-icon">+</span>
               </button>
               <button
                 class="composer-directory-button"
                 :class="isCustomWorkingDirectory ? 'composer-directory-button-active' : ''"
                 type="button"
-                :disabled="disabled || interactionLocked"
+                :disabled="disabled"
                 :title="workingDirectoryTooltip"
                 @click="pickWorkingDirectory"
               >
@@ -105,16 +105,27 @@
                 v-if="isCustomWorkingDirectory"
                 class="composer-action"
                 type="button"
-                :disabled="disabled || interactionLocked"
+                :disabled="disabled"
                 title="恢复默认工作目录"
                 @click="resetWorkingDirectory"
               >
                 <Icon :icon="rotateCcwIcon" class="h-3.5 w-3.5" />
               </button>
               <div ref="modelMenuAnchorRef" class="composer-model-anchor">
-                <button class="composer-model-button" type="button" :disabled="disabled || interactionLocked" title="模型选择器" @click="toggleModelMenu">
+                <button class="composer-model-button" type="button" :disabled="disabled" title="模型选择器" @click="toggleModelMenu">
                   <span class="truncate">{{ modelButtonLabel }}</span>
                   <span aria-hidden="true">∨</span>
+                </button>
+              </div>
+              <div ref="modelSettingsAnchorRef" class="composer-model-anchor">
+                <button
+                  class="composer-action"
+                  type="button"
+                  :disabled="disabled"
+                  title="模型参数"
+                  @click="toggleModelSettingsMenu"
+                >
+                  <Icon :icon="slidersHorizontalIcon" class="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
@@ -255,6 +266,104 @@
     </Teleport>
 
     <Teleport to="body">
+      <div
+        v-if="modelSettingsOpen"
+        ref="modelSettingsPanelRef"
+        class="composer-menu-portal composer-menu-model"
+        :style="modelSettingsStyle"
+      >
+        <div class="composer-menu-header">
+          <span>模型参数</span>
+          <span class="composer-menu-status">{{ effectiveSelectedModel || '当前任务' }}</span>
+        </div>
+        <div class="space-y-3 px-3 py-2">
+          <div class="dialog-field">
+            <label class="dialog-label" for="composer-temperature">Temperature</label>
+            <input
+              id="composer-temperature"
+              v-model="temperatureDraft"
+              class="app-input"
+              type="number"
+              min="0"
+              max="2"
+              step="0.1"
+              placeholder="留空则使用默认值 0.2"
+            />
+            <p class="dialog-hint">控制输出发散度。`0` 更稳定，`2` 更开放。</p>
+          </div>
+          <div class="dialog-field">
+            <label class="dialog-label" for="composer-max-output">Max Output Tokens</label>
+            <input
+              id="composer-max-output"
+              v-model="maxOutputTokensDraft"
+              class="app-input"
+              type="number"
+              min="1"
+              step="1"
+              :placeholder="maxOutputTokensPlaceholder"
+            />
+            <p class="dialog-hint">留空时跟随模型默认上限与 provider 默认行为。</p>
+          </div>
+          <div class="space-y-3">
+            <div class="dialog-field">
+              <label class="dialog-label" for="composer-top-p">Top P</label>
+              <input
+                id="composer-top-p"
+                v-model="topPDraft"
+                class="app-input"
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                placeholder="留空则使用 provider 默认值"
+              />
+              <p class="dialog-hint">核采样范围。</p>
+            </div>
+            <div class="dialog-field">
+              <label class="dialog-label" for="composer-presence-penalty">Presence Penalty</label>
+              <input
+                id="composer-presence-penalty"
+                v-model="presencePenaltyDraft"
+                class="app-input"
+                type="number"
+                min="-2"
+                max="2"
+                step="0.1"
+                placeholder="默认 0"
+              />
+              <p class="dialog-hint">提高新话题倾向。</p>
+            </div>
+            <div class="dialog-field">
+              <label class="dialog-label" for="composer-frequency-penalty">Frequency Penalty</label>
+              <input
+                id="composer-frequency-penalty"
+                v-model="frequencyPenaltyDraft"
+                class="app-input"
+                type="number"
+                min="-2"
+                max="2"
+                step="0.1"
+                placeholder="默认 0"
+              />
+              <p class="dialog-hint">降低重复倾向。</p>
+            </div>
+          </div>
+          <p v-if="modelSettingsError" class="text-[11px] text-error">{{ modelSettingsError }}</p>
+        </div>
+        <div class="composer-model-settings-footer">
+          <div class="composer-model-settings-actions">
+            <button class="app-button app-button-secondary composer-model-settings-button" type="button" @click="resetModelSettingsDraft">
+              重置
+            </button>
+            <button class="app-button app-button-primary composer-model-settings-button" type="button" @click="applyModelSettings">
+              应用
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
       <div v-if="previewImage" class="composer-image-preview-backdrop" @click="closeImagePreview">
         <div class="composer-image-preview-panel" @click.stop>
           <button class="composer-image-preview-close" type="button" @click="closeImagePreview">关闭</button>
@@ -274,6 +383,7 @@ import { open as openPathDialog } from '@tauri-apps/plugin-dialog';
 import pauseIcon from '@iconify-icons/lucide/pause';
 import folderOpenIcon from '@iconify-icons/lucide/folder-open';
 import rotateCcwIcon from '@iconify-icons/lucide/rotate-ccw';
+import slidersHorizontalIcon from '@iconify-icons/lucide/sliders-horizontal';
 import ChatMessageList from '@/components/ChatMessageList.vue';
 import { useChatComposer } from '@/composables/useChatComposer';
 import type { ComposerImageAttachment } from '@/composables/useChatComposer';
@@ -290,6 +400,12 @@ type CachedProviderGroup = {
 type CachedTaskModelSelector = {
   currentProviderId?: number | null;
   currentModel: string;
+  currentTemperature?: number | null;
+  currentTopP?: number | null;
+  currentPresencePenalty?: number | null;
+  currentFrequencyPenalty?: number | null;
+  currentMaxOutputTokens?: number | null;
+  currentModelDefaultMaxOutputTokens?: number | null;
   providers: CachedProviderGroup[];
 };
 
@@ -306,6 +422,11 @@ const props = defineProps<{
   cancelling?: boolean;
   taskId?: number | null;
   selectedModel?: string;
+  selectedTemperature?: number;
+  selectedTopP?: number;
+  selectedPresencePenalty?: number;
+  selectedFrequencyPenalty?: number;
+  selectedMaxOutputTokens?: number;
   workingDirectory?: string;
   workspacePath?: string;
   settingsOpen?: boolean;
@@ -314,6 +435,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [payload: { content: string; directories: string[]; files: string[]; images: ComposerImageAttachment[] }];
   setModel: [selection: { providerId?: number | null; model: string }];
+  setModelSettings: [settings: {
+    temperature?: number | null;
+    topP?: number | null;
+    presencePenalty?: number | null;
+    frequencyPenalty?: number | null;
+    maxOutputTokens?: number | null;
+  }];
   setWorkingDirectory: [path?: string | null];
   cancelTurn: [];
 }>();
@@ -371,18 +499,39 @@ const modelMenuAnchorRef = ref<HTMLElement | null>(null);
 const modelMenuPanelRef = ref<HTMLElement | null>(null);
 const modelSearchRef = ref<HTMLInputElement | null>(null);
 const modelMenuOpen = ref(false);
+const modelSettingsAnchorRef = ref<HTMLElement | null>(null);
+const modelSettingsPanelRef = ref<HTMLElement | null>(null);
+const modelSettingsOpen = ref(false);
 const providerGroups = ref<CachedProviderGroup[]>([]);
 const modelSearchQuery = ref('');
 const modelsLoading = ref(false);
 const modelsRefreshing = ref(false);
 const resolvedCurrentProviderId = ref<number | null>(null);
 const resolvedCurrentModel = ref('');
+const resolvedCurrentTemperature = ref<number | null>(null);
+const resolvedCurrentTopP = ref<number | null>(null);
+const resolvedCurrentPresencePenalty = ref<number | null>(null);
+const resolvedCurrentFrequencyPenalty = ref<number | null>(null);
+const resolvedCurrentMaxOutputTokens = ref<number | null>(null);
+const resolvedModelDefaultMaxOutputTokens = ref<number | null>(null);
 const modelMenuStyle = ref<Record<string, string>>({});
+const modelSettingsStyle = ref<Record<string, string>>({});
+const temperatureDraft = ref('');
+const topPDraft = ref('');
+const presencePenaltyDraft = ref('');
+const frequencyPenaltyDraft = ref('');
+const maxOutputTokensDraft = ref('');
+const modelSettingsError = ref('');
 const previewImage = ref<ComposerImageAttachment | null>(null);
 let activeModelRequestId = 0;
 
 const effectiveSelectedModel = computed(() => props.selectedModel?.trim() || resolvedCurrentModel.value.trim());
 const modelButtonLabel = computed(() => effectiveSelectedModel.value || '选择模型');
+const maxOutputTokensPlaceholder = computed(() =>
+  resolvedModelDefaultMaxOutputTokens.value
+    ? `留空则使用默认值 ${resolvedModelDefaultMaxOutputTokens.value}`
+    : '留空则使用模型默认值',
+);
 const normalizedWorkspacePath = computed(() => normalizePath(props.workspacePath));
 const normalizedWorkingDirectory = computed(() => normalizePath(props.workingDirectory));
 const isCustomWorkingDirectory = computed(
@@ -425,6 +574,7 @@ watch(
     closeModelMenu();
     restoreModelStateFromCache(taskId);
     seedModelListFromCurrentSelection();
+    resetModelSettingsDraft();
     void refreshModels();
   },
 );
@@ -439,10 +589,66 @@ watch(
 );
 
 watch(
+  () => props.selectedTemperature,
+  (temperature) => {
+    resolvedCurrentTemperature.value = temperature ?? null;
+    if (!modelSettingsOpen.value) {
+      resetModelSettingsDraft();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.selectedTopP,
+  (value) => {
+    resolvedCurrentTopP.value = value ?? null;
+    if (!modelSettingsOpen.value) {
+      resetModelSettingsDraft();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.selectedPresencePenalty,
+  (value) => {
+    resolvedCurrentPresencePenalty.value = value ?? null;
+    if (!modelSettingsOpen.value) {
+      resetModelSettingsDraft();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.selectedFrequencyPenalty,
+  (value) => {
+    resolvedCurrentFrequencyPenalty.value = value ?? null;
+    if (!modelSettingsOpen.value) {
+      resetModelSettingsDraft();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.selectedMaxOutputTokens,
+  (value) => {
+    resolvedCurrentMaxOutputTokens.value = value ?? null;
+    if (!modelSettingsOpen.value) {
+      resetModelSettingsDraft();
+    }
+  },
+  { immediate: true },
+);
+
+watch(
   () => props.settingsOpen,
   (open) => {
     if (open) {
       closeModelMenu();
+      closeModelSettingsMenu();
     }
   },
 );
@@ -455,21 +661,30 @@ watch([modelMenuOpen, filteredProviderGroups, modelSearchQuery], async ([open]) 
   syncModelMenuPosition();
 });
 
+watch(modelSettingsOpen, async (open) => {
+  if (!open) {
+    return;
+  }
+  await nextTick();
+  syncModelSettingsMenuPosition();
+});
+
 onMounted(() => {
   document.addEventListener('mousedown', handleDocumentPointerDown);
   document.addEventListener('mousedown', handleModelMenuPointerDown);
-  window.addEventListener('resize', syncModelMenuPosition);
-  window.addEventListener('scroll', syncModelMenuPosition, true);
+  window.addEventListener('resize', syncFloatingMenus);
+  window.addEventListener('scroll', syncFloatingMenus, true);
   restoreModelStateFromCache(props.taskId);
   seedModelListFromCurrentSelection();
+  resetModelSettingsDraft();
   void refreshModels();
 });
 
 onUnmounted(() => {
   document.removeEventListener('mousedown', handleDocumentPointerDown);
   document.removeEventListener('mousedown', handleModelMenuPointerDown);
-  window.removeEventListener('resize', syncModelMenuPosition);
-  window.removeEventListener('scroll', syncModelMenuPosition, true);
+  window.removeEventListener('resize', syncFloatingMenus);
+  window.removeEventListener('scroll', syncFloatingMenus, true);
 });
 
 function onComposerKeydown(event: KeyboardEvent) {
@@ -502,6 +717,9 @@ function restoreModelStateFromCache(taskId?: number | null) {
     resolvedCurrentModel.value = '';
     resolvedModelSupportsVision.value = false;
     providerGroups.value = [];
+    resolvedCurrentTopP.value = null;
+    resolvedCurrentPresencePenalty.value = null;
+    resolvedCurrentFrequencyPenalty.value = null;
     return;
   }
 
@@ -516,6 +734,12 @@ function restoreModelStateFromCache(taskId?: number | null) {
     ...group,
     availableModels: [...group.availableModels],
   }));
+  resolvedCurrentTemperature.value = cached.currentTemperature ?? null;
+  resolvedCurrentTopP.value = cached.currentTopP ?? null;
+  resolvedCurrentPresencePenalty.value = cached.currentPresencePenalty ?? null;
+  resolvedCurrentFrequencyPenalty.value = cached.currentFrequencyPenalty ?? null;
+  resolvedCurrentMaxOutputTokens.value = cached.currentMaxOutputTokens ?? null;
+  resolvedModelDefaultMaxOutputTokens.value = cached.currentModelDefaultMaxOutputTokens ?? null;
 }
 
 function seedModelListFromCurrentSelection() {
@@ -584,17 +808,30 @@ function applyProviderModels(response: TaskModelSelectorView, taskId: number) {
   const cacheEntry: CachedTaskModelSelector = {
     currentProviderId: response.currentProviderId ?? null,
     currentModel: response.currentModel,
+    currentTemperature: response.currentTemperature ?? null,
+    currentTopP: response.currentTopP ?? null,
+    currentPresencePenalty: response.currentPresencePenalty ?? null,
+    currentFrequencyPenalty: response.currentFrequencyPenalty ?? null,
+    currentMaxOutputTokens: response.currentMaxOutputTokens ?? null,
+    currentModelDefaultMaxOutputTokens: response.currentModelCapabilities.maxOutputTokens ?? null,
     providers: normalizedProviders,
   };
 
   taskModelSelectorCache.set(taskId, cacheEntry);
   resolvedCurrentProviderId.value = cacheEntry.currentProviderId ?? null;
   resolvedCurrentModel.value = cacheEntry.currentModel;
+  resolvedCurrentTemperature.value = cacheEntry.currentTemperature ?? null;
+  resolvedCurrentTopP.value = cacheEntry.currentTopP ?? null;
+  resolvedCurrentPresencePenalty.value = cacheEntry.currentPresencePenalty ?? null;
+  resolvedCurrentFrequencyPenalty.value = cacheEntry.currentFrequencyPenalty ?? null;
+  resolvedCurrentMaxOutputTokens.value = cacheEntry.currentMaxOutputTokens ?? null;
+  resolvedModelDefaultMaxOutputTokens.value = cacheEntry.currentModelDefaultMaxOutputTokens ?? null;
   resolvedModelSupportsVision.value = response.currentModelCapabilities.supportsVision;
   providerGroups.value = cacheEntry.providers.map((group) => ({
     ...group,
     availableModels: [...group.availableModels],
   }));
+  resetModelSettingsDraft();
 }
 
 function selectModel(providerId: number | null | undefined, model: string) {
@@ -617,6 +854,76 @@ function closeModelMenu() {
   modelMenuOpen.value = false;
 }
 
+async function toggleModelSettingsMenu() {
+  if (!modelSettingsOpen.value) {
+    primeModelMenu();
+    closeModelMenu();
+    resetModelSettingsDraft();
+    modelSettingsOpen.value = true;
+    await nextTick();
+    syncModelSettingsMenuPosition();
+    return;
+  }
+  closeModelSettingsMenu();
+}
+
+function closeModelSettingsMenu() {
+  modelSettingsError.value = '';
+  modelSettingsOpen.value = false;
+}
+
+function resetModelSettingsDraft() {
+  temperatureDraft.value = resolvedCurrentTemperature.value == null ? '' : String(resolvedCurrentTemperature.value);
+  topPDraft.value = resolvedCurrentTopP.value == null ? '' : String(resolvedCurrentTopP.value);
+  presencePenaltyDraft.value = resolvedCurrentPresencePenalty.value == null ? '' : String(resolvedCurrentPresencePenalty.value);
+  frequencyPenaltyDraft.value = resolvedCurrentFrequencyPenalty.value == null ? '' : String(resolvedCurrentFrequencyPenalty.value);
+  maxOutputTokensDraft.value = resolvedCurrentMaxOutputTokens.value == null ? '' : String(resolvedCurrentMaxOutputTokens.value);
+  modelSettingsError.value = '';
+}
+
+function applyModelSettings() {
+  const parsedTemperature = parseOptionalNumber(temperatureDraft.value);
+  const parsedTopP = parseOptionalNumber(topPDraft.value);
+  const parsedPresencePenalty = parseOptionalNumber(presencePenaltyDraft.value);
+  const parsedFrequencyPenalty = parseOptionalNumber(frequencyPenaltyDraft.value);
+  const parsedMaxOutputTokens = parseOptionalInteger(maxOutputTokensDraft.value);
+
+  if (parsedTemperature !== null && (parsedTemperature < 0 || parsedTemperature > 2)) {
+    modelSettingsError.value = 'Temperature 需要在 0 到 2 之间。';
+    return;
+  }
+
+  if (parsedMaxOutputTokens !== null && parsedMaxOutputTokens < 1) {
+    modelSettingsError.value = 'Max output tokens 需要大于 0。';
+    return;
+  }
+
+  if (parsedTopP !== null && (parsedTopP < 0 || parsedTopP > 1)) {
+    modelSettingsError.value = 'Top P 需要在 0 到 1 之间。';
+    return;
+  }
+
+  if (parsedPresencePenalty !== null && (parsedPresencePenalty < -2 || parsedPresencePenalty > 2)) {
+    modelSettingsError.value = 'Presence penalty 需要在 -2 到 2 之间。';
+    return;
+  }
+
+  if (parsedFrequencyPenalty !== null && (parsedFrequencyPenalty < -2 || parsedFrequencyPenalty > 2)) {
+    modelSettingsError.value = 'Frequency penalty 需要在 -2 到 2 之间。';
+    return;
+  }
+
+  modelSettingsError.value = '';
+  emit('setModelSettings', {
+    temperature: parsedTemperature,
+    topP: parsedTopP,
+    presencePenalty: parsedPresencePenalty,
+    frequencyPenalty: parsedFrequencyPenalty,
+    maxOutputTokens: parsedMaxOutputTokens,
+  });
+  closeModelSettingsMenu();
+}
+
 async function pickWorkingDirectory() {
   const selected = await openPathDialog({
     directory: true,
@@ -635,7 +942,7 @@ function resetWorkingDirectory() {
 }
 
 function handleModelMenuPointerDown(event: MouseEvent) {
-  if (!modelMenuOpen.value) {
+  if (!modelMenuOpen.value && !modelSettingsOpen.value) {
     return;
   }
 
@@ -646,8 +953,13 @@ function handleModelMenuPointerDown(event: MouseEvent) {
 
   const clickedAnchor = modelMenuAnchorRef.value?.contains(target);
   const clickedPanel = modelMenuPanelRef.value?.contains(target);
+  const clickedSettingsAnchor = modelSettingsAnchorRef.value?.contains(target);
+  const clickedSettingsPanel = modelSettingsPanelRef.value?.contains(target);
   if (!clickedAnchor && !clickedPanel) {
     closeModelMenu();
+  }
+  if (!clickedSettingsAnchor && !clickedSettingsPanel) {
+    closeModelSettingsMenu();
   }
 }
 
@@ -661,6 +973,32 @@ function providerTypeLabel(providerType: string) {
     env: '环境',
   };
   return labels[providerType] ?? providerType;
+}
+
+function syncModelSettingsMenuPosition() {
+  if (!modelSettingsOpen.value) {
+    return;
+  }
+
+  const anchor = modelSettingsAnchorRef.value;
+  if (!anchor) {
+    return;
+  }
+
+  const rect = anchor.getBoundingClientRect();
+  const menuWidth = Math.max(320, rect.width + 260);
+  const viewportPadding = 12;
+  const left = Math.min(
+    Math.max(viewportPadding, rect.right - menuWidth),
+    window.innerWidth - menuWidth - viewportPadding,
+  );
+
+  modelSettingsStyle.value = {
+    position: 'fixed',
+    left: `${left}px`,
+    bottom: `${Math.max(viewportPadding, window.innerHeight - rect.top + 10)}px`,
+    width: `${menuWidth}px`,
+  };
 }
 
 function syncModelMenuPosition() {
@@ -691,6 +1029,11 @@ function syncModelMenuPosition() {
   };
 }
 
+function syncFloatingMenus() {
+  syncModelMenuPosition();
+  syncModelSettingsMenuPosition();
+}
+
 function submit() {
   const content = draft.value.trim();
   if ((!content && mentions.value.length === 0 && imageAttachments.value.length === 0) || props.disabled || props.interactionLocked) {
@@ -707,6 +1050,7 @@ function submit() {
   });
   resetComposer();
   closeModelMenu();
+  closeModelSettingsMenu();
 }
 
 function openImagePreview(image: ComposerImageAttachment) {
@@ -734,6 +1078,30 @@ function normalizePath(path?: string) {
     return normalized.slice('//?/'.length);
   }
   return normalized;
+}
+
+function parseOptionalNumber(value: string | number | null | undefined) {
+  if (value == null) {
+    return null;
+  }
+  const normalized = typeof value === 'string' ? value.trim() : String(value);
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseOptionalInteger(value: string | number | null | undefined) {
+  if (value == null) {
+    return null;
+  }
+  const normalized = typeof value === 'string' ? value.trim() : String(value);
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 </script>

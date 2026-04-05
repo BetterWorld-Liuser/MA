@@ -1,8 +1,11 @@
 <template>
   <section class="space-y-1.5">
     <div class="flex items-center justify-between gap-3">
-      <h3 class="section-title mb-0 !text-[9px]">Open files</h3>
-      <div class="flex items-center gap-2 text-[9px] text-text-dim">
+      <div class="flex items-center gap-1.5">
+        <Icon :icon="filesIcon" class="h-3.5 w-3.5 text-text-dim" />
+        <h3 class="section-title mb-0">Open files</h3>
+      </div>
+      <div class="flex items-center gap-2 text-[8px] text-text-dim">
         <span class="font-mono">{{ `${openFiles.length} files` }}</span>
         <span class="font-mono text-text-muted">{{ totalTokenUsage }}</span>
       </div>
@@ -28,6 +31,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { Icon } from '@iconify/vue';
+import filesIcon from '@iconify-icons/lucide/files';
 import OpenFilesTreeNode from '@/components/context/OpenFilesTreeNode.vue';
 import { buildOpenFilesTree, formatTokenCount, isDirectoryNode } from '@/components/context/openFilesTree';
 import type { OpenFileItem } from '@/data/mock';

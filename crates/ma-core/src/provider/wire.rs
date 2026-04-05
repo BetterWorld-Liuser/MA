@@ -4,12 +4,12 @@ use serde_json::{Map, Value, json};
 
 use crate::settings::{ProviderType, ServerToolConfig, ServerToolFormat};
 
+use super::RuntimeProviderConfig;
 use super::messages::{
     FunctionToolDefinition, MessageContent, MessageContentPart, RequestMessage, RequestOptions,
     serialize_tool_arguments, server_tool_definition, validate_messages,
 };
 use super::transport::provider_base_url;
-use super::RuntimeProviderConfig;
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
 
@@ -90,20 +90,20 @@ impl WireAdapter for OpenAiWire {
     ) -> Result<WireRequest> {
         validate_messages(messages)?;
 
+        if should_use_openai_responses_api(config, server_tools) {
+            return build_openai_responses_request(config, messages, tools, server_tools, options);
+        }
+
         let mut tool_defs = tools
             .iter()
-            .map(|tool| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters,
-                    }
-                })
-            })
+            .map(openai_chat_function_tool)
             .collect::<Vec<_>>();
-        tool_defs.extend(server_tools.iter().map(server_tool_definition));
+        tool_defs.extend(
+            server_tools
+                .iter()
+                .filter(|tool| tool.format == ServerToolFormat::OpenAi)
+                .map(server_tool_definition),
+        );
 
         let mut body = json!({
             "model": options.model,
@@ -116,6 +116,15 @@ impl WireAdapter for OpenAiWire {
         });
         if !tool_defs.is_empty() {
             body["tools"] = Value::Array(tool_defs);
+        }
+        if let Some(top_p) = options.top_p {
+            body["top_p"] = json!(top_p);
+        }
+        if let Some(presence_penalty) = options.presence_penalty {
+            body["presence_penalty"] = json!(presence_penalty);
+        }
+        if let Some(frequency_penalty) = options.frequency_penalty {
+            body["frequency_penalty"] = json!(frequency_penalty);
         }
         if let Some(max_output_tokens) = options.max_output_tokens {
             body["max_tokens"] = json!(max_output_tokens);
@@ -132,6 +141,10 @@ impl WireAdapter for OpenAiWire {
     }
 
     fn parse_response(&self, body: &Value) -> Result<WireResponse> {
+        if body.get("object").and_then(Value::as_str) == Some("response") {
+            return parse_openai_responses_response(body);
+        }
+
         let message = body
             .get("choices")
             .and_then(Value::as_array)
@@ -147,15 +160,26 @@ impl WireAdapter for OpenAiWire {
 
     fn parse_stream_event(
         &self,
-        _event_name: Option<&str>,
+        event_name: Option<&str>,
         data: &str,
     ) -> Result<Vec<WireStreamDelta>> {
+        if matches!(
+            event_name,
+            Some("response.output_item.added")
+                | Some("response.function_call_arguments.delta")
+                | Some("response.function_call_arguments.done")
+                | Some("response.output_text.delta")
+                | Some("response.completed")
+        ) {
+            return parse_openai_responses_stream_event(data);
+        }
+
         if data.trim() == "[DONE]" {
             return Ok(vec![WireStreamDelta::Done]);
         }
 
-        let body: Value =
-            serde_json::from_str(data).context("failed to decode OpenAI-compatible stream event")?;
+        let body: Value = serde_json::from_str(data)
+            .context("failed to decode OpenAI-compatible stream event")?;
         let Some(delta) = body
             .get("choices")
             .and_then(Value::as_array)
@@ -206,8 +230,8 @@ impl WireAdapter for OpenAiWire {
         Ok(events)
     }
 
-    fn is_stream_done(&self, _event_name: Option<&str>, data: &str) -> bool {
-        data.trim() == "[DONE]"
+    fn is_stream_done(&self, event_name: Option<&str>, data: &str) -> bool {
+        matches!(event_name, Some("response.completed")) || data.trim() == "[DONE]"
     }
 }
 
@@ -227,9 +251,9 @@ impl WireAdapter for AnthropicWire {
 
         for message in messages {
             match message.role.as_str() {
-                "system" => system_blocks.extend(
-                    serialize_anthropic_blocks(message.content.as_ref())?,
-                ),
+                "system" => {
+                    system_blocks.extend(serialize_anthropic_blocks(message.content.as_ref())?)
+                }
                 "user" => body_messages.push(json!({
                     "role": "user",
                     "content": serialize_anthropic_blocks(message.content.as_ref())?,
@@ -293,6 +317,9 @@ impl WireAdapter for AnthropicWire {
             "stream": options.stream,
             "max_tokens": options.max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
         });
+        if let Some(top_p) = options.top_p {
+            body["top_p"] = json!(top_p);
+        }
         if !system_blocks.is_empty() {
             body["system"] = Value::Array(system_blocks);
         }
@@ -305,10 +332,7 @@ impl WireAdapter for AnthropicWire {
             "x-api-key",
             HeaderValue::from_str(&config.api_key).context("invalid anthropic api key header")?,
         );
-        headers.insert(
-            "anthropic-version",
-            HeaderValue::from_static("2023-06-01"),
-        );
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
 
         Ok(WireRequest {
             url: format!("{}/messages", provider_base_url(config)),
@@ -326,7 +350,11 @@ impl WireAdapter for AnthropicWire {
         let mut text = String::new();
         let mut tool_calls = Vec::new();
         for block in content_blocks {
-            match block.get("type").and_then(Value::as_str).unwrap_or_default() {
+            match block
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
                 "text" => {
                     if let Some(value) = block.get("text").and_then(Value::as_str) {
                         text.push_str(value);
@@ -341,10 +369,9 @@ impl WireAdapter for AnthropicWire {
                         .get("name")
                         .and_then(Value::as_str)
                         .context("anthropic tool_use missing name")?;
-                    let arguments_json = serde_json::to_string(
-                        block.get("input").unwrap_or(&Value::Null),
-                    )
-                    .context("failed to encode anthropic tool_use input")?;
+                    let arguments_json =
+                        serde_json::to_string(block.get("input").unwrap_or(&Value::Null))
+                            .context("failed to encode anthropic tool_use input")?;
                     tool_calls.push(WireToolCall {
                         id: id.to_string(),
                         name: name.to_string(),
@@ -387,7 +414,10 @@ impl WireAdapter for AnthropicWire {
                         .and_then(Value::as_u64)
                         .and_then(|value| usize::try_from(value).ok())
                         .unwrap_or(0);
-                    let id = block.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
+                    let id = block
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned);
                     let name = block
                         .get("name")
                         .and_then(Value::as_str)
@@ -395,7 +425,9 @@ impl WireAdapter for AnthropicWire {
                     let initial_input = block
                         .get("input")
                         .filter(|value| !value.is_null())
-                        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()))
+                        .map(|value| {
+                            serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
+                        })
                         .unwrap_or_default();
                     return Ok(vec![WireStreamDelta::ToolCallDelta {
                         index,
@@ -415,7 +447,11 @@ impl WireAdapter for AnthropicWire {
                 let delta = payload
                     .get("delta")
                     .context("anthropic content_block_delta missing delta")?;
-                match delta.get("type").and_then(Value::as_str).unwrap_or_default() {
+                match delta
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                {
                     "text_delta" => Ok(delta
                         .get("text")
                         .and_then(Value::as_str)
@@ -538,6 +574,15 @@ impl WireAdapter for GeminiWire {
                 "maxOutputTokens": options.max_output_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
             },
         });
+        if let Some(top_p) = options.top_p {
+            body["generationConfig"]["topP"] = json!(top_p);
+        }
+        if let Some(presence_penalty) = options.presence_penalty {
+            body["generationConfig"]["presencePenalty"] = json!(presence_penalty);
+        }
+        if let Some(frequency_penalty) = options.frequency_penalty {
+            body["generationConfig"]["frequencyPenalty"] = json!(frequency_penalty);
+        }
         if !system_parts.is_empty() {
             body["system_instruction"] = json!({ "parts": system_parts });
         }
@@ -639,10 +684,13 @@ fn serialize_openai_message(message: &RequestMessage) -> Result<Value> {
 
     match message.role.as_str() {
         "system" | "user" | "assistant" => {
-            object.insert(
-                "content".to_string(),
-                serialize_openai_content(message.content.as_ref()),
-            );
+            let content = serialize_openai_content(message.content.as_ref());
+            let should_omit_assistant_content = message.role == "assistant"
+                && message.tool_calls.len() > 0
+                && matches!(content, Value::Null);
+            if !should_omit_assistant_content {
+                object.insert("content".to_string(), content);
+            }
         }
         "tool" => {
             object.insert(
@@ -693,11 +741,314 @@ fn serialize_openai_message(message: &RequestMessage) -> Result<Value> {
     Ok(Value::Object(object))
 }
 
+fn should_use_openai_responses_api(
+    config: &RuntimeProviderConfig,
+    server_tools: &[ServerToolConfig],
+) -> bool {
+    matches!(config.provider_type, ProviderType::OpenAi)
+        || server_tools
+            .iter()
+            .any(|tool| tool.format == ServerToolFormat::OpenAi)
+        || provider_base_url(config).eq_ignore_ascii_case("https://api.openai.com/v1")
+}
+
+fn build_openai_responses_request(
+    config: &RuntimeProviderConfig,
+    messages: &[RequestMessage],
+    tools: &[FunctionToolDefinition],
+    server_tools: &[ServerToolConfig],
+    options: &RequestOptions,
+) -> Result<WireRequest> {
+    let mut instructions = Vec::new();
+    let mut input = Vec::new();
+
+    for message in messages {
+        match message.role.as_str() {
+            "system" => {
+                if let Some(text) = message
+                    .content
+                    .as_ref()
+                    .and_then(MessageContent::joined_texts)
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        instructions.push(trimmed.to_string());
+                    }
+                }
+            }
+            "user" | "assistant" => {
+                let mut item = json!({
+                    "type": "message",
+                    "role": message.role,
+                    "content": serialize_openai_responses_content(message.content.as_ref()),
+                });
+
+                if let Some(content) = message.content.as_ref() {
+                    if content.parts().is_empty() {
+                        item["content"] = Value::Array(Vec::new());
+                    }
+                }
+
+                input.push(item);
+                for tool_call in &message.tool_calls {
+                    input.push(json!({
+                        "type": "function_call",
+                        "call_id": tool_call.id,
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    }));
+                }
+            }
+            "tool" => {
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": message
+                        .tool_call_id
+                        .clone()
+                        .context("tool message missing tool_call_id")?,
+                    "output": message
+                        .content
+                        .as_ref()
+                        .and_then(MessageContent::joined_texts)
+                        .unwrap_or_default(),
+                }));
+            }
+            other => bail!("unsupported OpenAI Responses message role {other}"),
+        }
+    }
+
+    let mut tool_defs = tools
+        .iter()
+        .map(openai_responses_function_tool)
+        .collect::<Vec<_>>();
+    tool_defs.extend(
+        server_tools
+            .iter()
+            .filter(|tool| tool.format == ServerToolFormat::OpenAi)
+            .map(server_tool_definition),
+    );
+
+    let mut body = json!({
+        "model": options.model,
+        "input": input,
+        "temperature": options.temperature,
+        "stream": options.stream,
+        "store": false,
+    });
+    if let Some(top_p) = options.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(presence_penalty) = options.presence_penalty {
+        body["presence_penalty"] = json!(presence_penalty);
+    }
+    if let Some(frequency_penalty) = options.frequency_penalty {
+        body["frequency_penalty"] = json!(frequency_penalty);
+    }
+    if !instructions.is_empty() {
+        body["instructions"] = Value::String(instructions.join("\n\n"));
+    }
+    if !tool_defs.is_empty() {
+        body["tools"] = Value::Array(tool_defs);
+    }
+    if let Some(max_output_tokens) = options.max_output_tokens {
+        body["max_output_tokens"] = json!(max_output_tokens);
+    }
+
+    let mut headers = json_headers();
+    apply_bearer_auth(&mut headers, &config.api_key)?;
+
+    Ok(WireRequest {
+        url: format!("{}/responses", provider_base_url(config)),
+        headers,
+        body,
+    })
+}
+
+fn openai_chat_function_tool(tool: &FunctionToolDefinition) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        }
+    })
+}
+
+fn openai_responses_function_tool(tool: &FunctionToolDefinition) -> Value {
+    json!({
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+        // March 的工具定义里存在大量真正的可选参数；若强制 strict mode，
+        // OpenAI 会要求 properties 中每个字段都出现在 required 里。
+        // 当前先显式关闭 strict，保留 best-effort function calling 兼容性。
+        "strict": false,
+    })
+}
+
+fn serialize_openai_responses_content(content: Option<&MessageContent>) -> Value {
+    let Some(content) = content else {
+        return Value::Array(Vec::new());
+    };
+
+    if content
+        .parts()
+        .iter()
+        .all(|part| matches!(part, MessageContentPart::Text(_)))
+    {
+        return Value::String(content.joined_texts().unwrap_or_default());
+    }
+
+    Value::Array(
+        content
+            .parts()
+            .iter()
+            .map(|part| match part {
+                MessageContentPart::Text(text) => json!({
+                    "type": "input_text",
+                    "text": text,
+                }),
+                MessageContentPart::Image {
+                    media_type,
+                    data_base64,
+                    ..
+                } => json!({
+                    "type": "input_image",
+                    "image_url": format!("data:{};base64,{}", media_type, data_base64),
+                }),
+            })
+            .collect(),
+    )
+}
+
+fn parse_openai_responses_response(body: &Value) -> Result<WireResponse> {
+    let output = body
+        .get("output")
+        .and_then(Value::as_array)
+        .context("OpenAI Responses response missing output")?;
+
+    let mut text = String::new();
+    let mut tool_calls = Vec::new();
+
+    for item in output {
+        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "message" => {
+                if let Some(parts) = item.get("content").and_then(Value::as_array) {
+                    for part in parts {
+                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                            if let Some(value) = part.get("text").and_then(Value::as_str) {
+                                text.push_str(value);
+                            }
+                        }
+                    }
+                }
+            }
+            "function_call" => {
+                let id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .context("OpenAI Responses function_call missing call_id")?;
+                let name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .context("OpenAI Responses function_call missing name")?;
+                let arguments_json = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}")
+                    .to_string();
+                tool_calls.push(WireToolCall {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    arguments_json,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(WireResponse {
+        content: (!text.trim().is_empty()).then_some(text),
+        tool_calls,
+    })
+}
+
+fn parse_openai_responses_stream_event(data: &str) -> Result<Vec<WireStreamDelta>> {
+    let event: Value =
+        serde_json::from_str(data).context("failed to decode OpenAI Responses stream event")?;
+    match event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "response.output_text.delta" => Ok(event
+            .get("delta")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| vec![WireStreamDelta::ContentDelta(text.to_string())])
+            .unwrap_or_default()),
+        "response.output_item.added" => {
+            let item = event
+                .get("item")
+                .context("OpenAI Responses output_item.added missing item")?;
+            if item.get("type").and_then(Value::as_str) != Some("function_call") {
+                return Ok(Vec::new());
+            }
+
+            let index = event
+                .get("output_index")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0);
+            Ok(vec![WireStreamDelta::ToolCallDelta {
+                index,
+                id: item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                name: item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                arguments_fragment: item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            }])
+        }
+        "response.function_call_arguments.delta" => Ok(vec![WireStreamDelta::ToolCallDelta {
+            index: event
+                .get("output_index")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0),
+            id: None,
+            name: None,
+            arguments_fragment: event
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        }]),
+        "response.completed" => Ok(vec![WireStreamDelta::Done]),
+        _ => Ok(Vec::new()),
+    }
+}
+
 fn serialize_openai_content(content: Option<&MessageContent>) -> Value {
     let Some(content) = content else {
         return Value::Null;
     };
-    if content.parts().iter().all(|part| matches!(part, MessageContentPart::Text(_))) {
+    if content
+        .parts()
+        .iter()
+        .all(|part| matches!(part, MessageContentPart::Text(_)))
+    {
         return Value::String(content.joined_texts().unwrap_or_default());
     }
 
@@ -840,12 +1191,9 @@ fn parse_gemini_parts(parts: &[Value]) -> Result<WireResponse> {
                 .get("name")
                 .and_then(Value::as_str)
                 .context("gemini functionCall missing name")?;
-            let arguments_json = serde_json::to_string(
-                function_call
-                    .get("args")
-                    .unwrap_or(&Value::Null),
-            )
-            .context("failed to encode gemini functionCall args")?;
+            let arguments_json =
+                serde_json::to_string(function_call.get("args").unwrap_or(&Value::Null))
+                    .context("failed to encode gemini functionCall args")?;
             tool_calls.push(WireToolCall {
                 id: format!("gemini-tool-{index}"),
                 name: name.to_string(),

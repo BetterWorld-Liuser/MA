@@ -28,6 +28,11 @@ pub struct RuntimeProviderConfig {
     pub api_key: String,
     pub model: String,
     pub server_tools: Vec<ServerToolConfig>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub max_output_tokens: Option<u32>,
 }
 
 impl RuntimeProviderConfig {
@@ -45,6 +50,11 @@ impl RuntimeProviderConfig {
             api_key,
             model,
             server_tools: Vec::new(),
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_output_tokens: None,
         })
     }
 }
@@ -119,7 +129,15 @@ impl ProviderClient {
         provider.function_tools = function_tools_for_context(context);
 
         let mode = stream_preference_for(&provider.config);
-        let stream_options = RequestOptions::for_chat(provider.config.model.clone(), true);
+        let stream_options = RequestOptions::for_chat(
+            provider.config.model.clone(),
+            true,
+            provider.config.temperature,
+            provider.config.top_p,
+            provider.config.presence_penalty,
+            provider.config.frequency_penalty,
+            provider.config.max_output_tokens,
+        );
         let request_preview = wire::adapter_for(&provider.config).build_request(
             &provider.config,
             &conversation,
@@ -131,7 +149,15 @@ impl ProviderClient {
             .context("failed to encode provider request")?;
 
         if mode == delivery::ProviderDeliveryMode::NonStreaming {
-            let options = RequestOptions::for_chat(provider.config.model.clone(), false);
+            let options = RequestOptions::for_chat(
+                provider.config.model.clone(),
+                false,
+                provider.config.temperature,
+                provider.config.top_p,
+                provider.config.presence_penalty,
+                provider.config.frequency_penalty,
+                provider.config.max_output_tokens,
+            );
             return provider
                 .complete_non_streaming(
                     &conversation,
@@ -152,7 +178,15 @@ impl ProviderClient {
             }
             Err(stream_failure) => {
                 remember_stream_failure(&provider.config);
-                let fallback_options = RequestOptions::for_chat(provider.config.model.clone(), false);
+                let fallback_options = RequestOptions::for_chat(
+                    provider.config.model.clone(),
+                    false,
+                    provider.config.temperature,
+                    provider.config.top_p,
+                    provider.config.presence_penalty,
+                    provider.config.frequency_penalty,
+                    provider.config.max_output_tokens,
+                );
                 match provider
                     .complete_non_streaming(
                         &conversation,
@@ -251,6 +285,9 @@ impl ProviderClient {
                     model: self.config.model.clone(),
                     stream: false,
                     temperature: 0.1,
+                    top_p: None,
+                    presence_penalty: None,
+                    frequency_penalty: None,
                     max_output_tokens: Some(64),
                 },
             )
@@ -319,6 +356,9 @@ impl ProviderClient {
                     model: model.to_string(),
                     stream: false,
                     temperature: 0.0,
+                    top_p: None,
+                    presence_penalty: None,
+                    frequency_penalty: None,
                     max_output_tokens: Some(16),
                 },
             )
@@ -363,7 +403,12 @@ impl ProviderClient {
         let request_json = serde_json::to_string_pretty(&request_preview.body)
             .context("failed to encode provider request")?;
         provider
-            .complete_non_streaming(&messages, &options, request_json, DeliveryPath::NonStreamingCached)
+            .complete_non_streaming(
+                &messages,
+                &options,
+                request_json,
+                DeliveryPath::NonStreamingCached,
+            )
             .await
     }
 }
@@ -502,6 +547,11 @@ mod tests {
             api_key: String::new(),
             model: "qwen2.5-coder:32b".to_string(),
             server_tools: Vec::new(),
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_output_tokens: None,
         };
 
         assert_eq!(

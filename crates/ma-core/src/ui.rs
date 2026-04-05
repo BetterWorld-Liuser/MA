@@ -72,6 +72,17 @@ pub struct UiSetTaskModelRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiSetTaskModelSettingsRequest {
+    pub task_id: Option<i64>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiSetTaskWorkingDirectoryRequest {
     pub task_id: Option<i64>,
     pub path: Option<PathBuf>,
@@ -132,6 +143,11 @@ pub struct UiTaskSummary {
     pub title_locked: bool,
     pub working_directory: PathBuf,
     pub selected_model: Option<String>,
+    pub model_temperature: Option<f32>,
+    pub model_top_p: Option<f32>,
+    pub model_presence_penalty: Option<f32>,
+    pub model_frequency_penalty: Option<f32>,
+    pub model_max_output_tokens: Option<u32>,
     pub created_at: i64,
     pub last_active: i64,
 }
@@ -160,6 +176,11 @@ pub struct UiProviderModelGroupView {
 pub struct UiTaskModelSelectorView {
     pub current_provider_id: Option<i64>,
     pub current_model: String,
+    pub current_temperature: Option<f32>,
+    pub current_top_p: Option<f32>,
+    pub current_presence_penalty: Option<f32>,
+    pub current_frequency_penalty: Option<f32>,
+    pub current_max_output_tokens: Option<u32>,
     pub current_model_capabilities: UiModelCapabilitiesView,
     pub providers: Vec<UiProviderModelGroupView>,
 }

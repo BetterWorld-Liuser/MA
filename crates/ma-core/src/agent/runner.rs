@@ -82,6 +82,8 @@ impl AgentSession {
         let mut debug_rounds = Vec::new();
         let mut transient_messages: Vec<RequestMessage> = Vec::new();
         let mut iteration = 0usize;
+        let mut total_tool_calls = 0usize;
+        let mut nudge_used = false;
 
         loop {
             ensure_turn_not_cancelled(&is_cancelled)?;
@@ -157,13 +159,36 @@ impl AgentSession {
             };
 
             if response.tool_calls.is_empty() {
-                let final_message = match assistant_text {
+                let text = match assistant_text {
                     Some(text) if !text.trim().is_empty() => text,
                     _ => bail!("provider returned no tool calls and no text; cannot end turn"),
                 };
-                let final_message = FinalAssistantMessage {
-                    message: final_message,
-                };
+
+                // Nudge: if the model stopped too early (few tool calls) and
+                // appears to be offering "next steps" instead of doing them,
+                // push it back into the loop once.
+                if !nudge_used && should_nudge(total_tool_calls, &text) {
+                    nudge_used = true;
+                    // Feed the premature text back as an assistant message,
+                    // then add a user-role nudge asking it to continue.
+                    transient_messages.push(RequestMessage::assistant_text(text));
+                    transient_messages.push(RequestMessage::user(
+                        "你刚才列出了后续步骤但没有执行。请现在继续用工具完成这些步骤，不要再停下来询问。",
+                    ));
+                    debug_rounds.push(debug_round);
+                    on_event(
+                        self,
+                        AgentProgressEvent::RoundCompleted(
+                            debug_rounds
+                                .last()
+                                .cloned()
+                                .expect("debug round just pushed"),
+                        ),
+                    )?;
+                    continue;
+                }
+
+                let final_message = FinalAssistantMessage { message: text };
                 self.add_assistant_turn(
                     vec![ContentBlock::text(final_message.message.clone())],
                     summaries.clone(),
@@ -194,6 +219,8 @@ impl AgentSession {
                 assistant_text,
                 &response.tool_calls,
             );
+
+            total_tool_calls += response.tool_calls.len();
 
             for tool_call in response.tool_calls {
                 ensure_turn_not_cancelled(&is_cancelled)?;
@@ -288,4 +315,35 @@ pub fn is_turn_cancelled_error(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.to_string().contains(TURN_CANCELLED_ERROR_MESSAGE))
+}
+
+/// Minimum number of tool calls before we consider the model has done enough
+/// work to justify ending its turn without a nudge.
+const MIN_TOOL_CALLS_BEFORE_FINISH: usize = 6;
+
+/// Heuristic: should we nudge the model to continue working?
+/// Returns true when the model stopped early AND its text looks like it's
+/// offering to do more rather than delivering a completed answer.
+fn should_nudge(total_tool_calls: usize, text: &str) -> bool {
+    if total_tool_calls >= MIN_TOOL_CALLS_BEFORE_FINISH {
+        return false;
+    }
+    // Patterns that indicate the model is proposing next steps instead of doing them.
+    let continuation_signals = [
+        "下一步",
+        "如果你愿意",
+        "如果需要",
+        "want me to",
+        "if you'd like",
+        "I can also",
+        "我可以继续",
+        "我可以进一步",
+        "需要我继续",
+        "要不要我",
+        "shall I",
+        "let me know if",
+    ];
+    continuation_signals
+        .iter()
+        .any(|signal| text.contains(signal))
 }

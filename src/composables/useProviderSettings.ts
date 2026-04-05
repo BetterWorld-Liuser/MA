@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { ProviderConnectionTestResult, ProviderModelsView, ProviderSettingsView } from '@/data/mock';
 
 type UseProviderSettingsOptions = {
-  runWorkspaceAction: (action: () => Promise<void>) => Promise<void>;
+  runWorkspaceAction: (action: () => Promise<void>) => Promise<boolean>;
   setErrorMessage: (message: string) => void;
   humanizeError: (error: unknown) => string;
 };
@@ -111,8 +111,6 @@ export function useProviderSettings({
     probeModel?: string;
   }) {
     providerProbeModelsLoading.value = true;
-    providerProbeModels.value = [];
-    providerProbeSuggestedModels.value = [];
     try {
       const response = await invoke<ProviderModelsView>('list_probe_models', {
         input,

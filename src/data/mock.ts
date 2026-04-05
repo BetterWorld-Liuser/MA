@@ -105,6 +105,11 @@ export type WorkspaceView = {
   tasks: TaskItem[];
   activeTaskId: string;
   selectedModel?: string;
+  selectedTemperature?: number;
+  selectedTopP?: number;
+  selectedPresencePenalty?: number;
+  selectedFrequencyPenalty?: number;
+  selectedMaxOutputTokens?: number;
   workingDirectory?: string;
   chat: ChatMessage[];
   notes: NoteItem[];
@@ -127,6 +132,11 @@ export type BackendWorkspaceSnapshot = {
     working_directory: string;
     last_active: number;
     selected_model?: string | null;
+    model_temperature?: number | null;
+    model_top_p?: number | null;
+    model_presence_penalty?: number | null;
+    model_frequency_penalty?: number | null;
+    model_max_output_tokens?: number | null;
   }>;
   active_task?: {
     task: {
@@ -134,6 +144,11 @@ export type BackendWorkspaceSnapshot = {
       name: string;
       working_directory: string;
       selected_model?: string | null;
+      model_temperature?: number | null;
+      model_top_p?: number | null;
+      model_presence_penalty?: number | null;
+      model_frequency_penalty?: number | null;
+      model_max_output_tokens?: number | null;
     };
     active_agent?: string;
     history: Array<{
@@ -332,6 +347,11 @@ export type ProviderModelsView = {
 export type TaskModelSelectorView = {
   currentProviderId?: number | null;
   currentModel: string;
+  currentTemperature?: number | null;
+  currentTopP?: number | null;
+  currentPresencePenalty?: number | null;
+  currentFrequencyPenalty?: number | null;
+  currentMaxOutputTokens?: number | null;
   currentModelCapabilities: {
     contextWindow: number;
     maxOutputTokens: number;
@@ -413,6 +433,10 @@ export const mockWorkspace: WorkspaceView = {
   ] satisfies TaskItem[],
   activeTaskId: 'task-1',
   selectedModel: 'claude-sonnet-4-6',
+  selectedTemperature: 0.2,
+  selectedTopP: 1,
+  selectedPresencePenalty: 0,
+  selectedFrequencyPenalty: 0,
   workingDirectory: 'D:/playground/MA',
   chat: [
     {
@@ -521,6 +545,26 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.working_directory
       ?? workspace.workspace_path,
     selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
+    selectedTemperature:
+      activeTask?.task.model_temperature
+      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_temperature
+      ?? undefined,
+    selectedTopP:
+      activeTask?.task.model_top_p
+      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_top_p
+      ?? undefined,
+    selectedPresencePenalty:
+      activeTask?.task.model_presence_penalty
+      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_presence_penalty
+      ?? undefined,
+    selectedFrequencyPenalty:
+      activeTask?.task.model_frequency_penalty
+      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_frequency_penalty
+      ?? undefined,
+    selectedMaxOutputTokens:
+      activeTask?.task.model_max_output_tokens
+      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_max_output_tokens
+      ?? undefined,
     chat: activeTask?.history.map((turn) => ({
       role: turn.role === 'User' ? 'user' : 'assistant',
       author: turn.role === 'User' ? 'User' : (turn.agent_display_name || turn.agent || 'March'),

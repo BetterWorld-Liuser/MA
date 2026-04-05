@@ -34,6 +34,11 @@
           :live-turn="workspace.liveTurn"
           :task-id="activeTaskIdNumber"
           :selected-model="workspace.selectedModel"
+          :selected-temperature="workspace.selectedTemperature"
+          :selected-top-p="workspace.selectedTopP"
+          :selected-presence-penalty="workspace.selectedPresencePenalty"
+          :selected-frequency-penalty="workspace.selectedFrequencyPenalty"
+          :selected-max-output-tokens="workspace.selectedMaxOutputTokens"
           :working-directory="workspace.workingDirectory"
           :workspace-path="workspace.workspacePath"
           :settings-open="settingsOpen"
@@ -44,6 +49,7 @@
           @send="sendMessage"
           @cancel-turn="cancelCurrentTurn"
           @set-model="setTaskModel"
+          @set-model-settings="setTaskModelSettings"
           @set-working-directory="setTaskWorkingDirectory"
         />
         <ContextPanel
@@ -188,6 +194,7 @@ const {
   openFilesFromComposer,
   refreshSkills,
   setTaskModel,
+  setTaskModelSettings,
   setTaskWorkingDirectory,
   handleOpenSettings,
   closeSettings,

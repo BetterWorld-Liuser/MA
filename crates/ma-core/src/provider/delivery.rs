@@ -198,12 +198,14 @@ impl ProviderClient {
             .map_err(|error| StreamAttemptFailure {
                 kind: StreamFailureKind::Start,
                 source: error.into(),
-            })?
-            .error_for_status()
-            .map_err(|error| StreamAttemptFailure {
-                kind: StreamFailureKind::Start,
-                source: error.into(),
             })?;
+        let response =
+            ensure_success_response(response)
+                .await
+                .map_err(|error| StreamAttemptFailure {
+                    kind: StreamFailureKind::Start,
+                    source: error,
+                })?;
 
         let mut stream = response.bytes_stream().eventsource();
         let mut collector = StreamCollector::default();
@@ -296,16 +298,16 @@ impl ProviderClient {
             &self.config.server_tools,
             options,
         )?;
-        let body = self
+        let response = self
             .http
             .post(&request.url)
             .headers(request.headers)
             .json(&request.body)
             .send()
             .await
-            .context("failed to request provider non-stream response")?
-            .error_for_status()
-            .context("provider non-stream request failed")?
+            .context("failed to request provider non-stream response")?;
+        let body = ensure_success_response(response)
+            .await?
             .json::<Value>()
             .await
             .context("failed to decode provider non-stream JSON response")?;
@@ -317,6 +319,19 @@ impl ProviderClient {
             Some(body),
         )
     }
+}
+
+async fn ensure_success_response(response: reqwest::Response) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "(failed to read error body)".to_string());
+    bail!("provider request failed with {}: {}", status, body);
 }
 
 fn build_provider_response_from_wire_response(
@@ -339,7 +354,8 @@ fn build_provider_response_from_wire_response(
         request_json,
         raw_response: String::new(),
     };
-    let debug_payload = debug_structured_response(&provider_response, delivery_path, captured_raw_body);
+    let debug_payload =
+        debug_structured_response(&provider_response, delivery_path, captured_raw_body);
 
     Ok(ProviderResponse {
         raw_response: serde_json::to_string_pretty(&debug_payload)

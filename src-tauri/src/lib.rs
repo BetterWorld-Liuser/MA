@@ -15,11 +15,11 @@ use ma::ui::{
     UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
     UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
-    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertAgentRequest,
-    UiUpsertNoteRequest, UiUpsertProviderModelRequest, UiUpsertProviderRequest,
-    UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_models,
-    fetch_provider_models_for_provider, fetch_task_model_selector,
+    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView,
+    UiTestProviderConnectionRequest, UiTestProviderConnectionResult, UiToggleOpenFileLockRequest,
+    UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
+    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
+    fetch_probe_models, fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
 
@@ -291,6 +291,18 @@ fn set_task_model(
 }
 
 #[tauri::command]
+fn set_task_model_settings(
+    state: tauri::State<'_, AppState>,
+    input: UiSetTaskModelSettingsRequest,
+) -> Result<UiWorkspaceSnapshot, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_set_task_model_settings(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_task_working_directory(
     state: tauri::State<'_, AppState>,
     input: UiSetTaskWorkingDirectoryRequest,
@@ -494,6 +506,7 @@ pub fn run() {
             list_provider_models_for_settings,
             list_probe_models,
             set_task_model,
+            set_task_model_settings,
             set_task_working_directory,
             load_provider_settings,
             upsert_provider,
