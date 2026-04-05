@@ -180,6 +180,7 @@ pub struct UiAgentProfileView {
     pub id: Option<i64>,
     pub name: String,
     pub display_name: String,
+    pub description: String,
     pub system_prompt: String,
     pub avatar_color: String,
     pub provider_id: Option<i64>,
@@ -270,6 +271,7 @@ pub struct UiSetDefaultProviderRequest {
 pub struct UiUpsertAgentRequest {
     pub name: String,
     pub display_name: String,
+    pub description: String,
     pub system_prompt: String,
     pub avatar_color: Option<String>,
     pub provider_id: Option<i64>,
@@ -326,6 +328,24 @@ pub enum UiWorkspaceEntryKind {
 pub struct UiWorkspaceEntryView {
     pub path: String,
     pub kind: UiWorkspaceEntryKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UiMentionTargetView {
+    Agent {
+        name: String,
+        display_name: String,
+        description: String,
+        avatar_color: String,
+        source: String,
+    },
+    File {
+        path: String,
+    },
+    Directory {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -397,10 +417,14 @@ pub enum UiAgentProgressEvent {
         task_id: i64,
         turn_id: String,
         user_message: String,
+        agent: String,
+        agent_display_name: String,
     },
     Status {
         task_id: i64,
         turn_id: String,
+        agent: String,
+        agent_display_name: String,
         phase: UiAgentStatusPhase,
         label: String,
     },
@@ -422,6 +446,8 @@ pub enum UiAgentProgressEvent {
     AssistantTextPreview {
         task_id: i64,
         turn_id: String,
+        agent: String,
+        agent_display_name: String,
         message: String,
     },
     FinalAssistantMessage {
@@ -491,6 +517,7 @@ pub struct UiSkillView {
 pub struct UiTurnView {
     pub role: UiRoleView,
     pub agent: String,
+    pub agent_display_name: String,
     pub content: String,
     pub images: Vec<UiImageAttachmentView>,
     pub tool_summaries: Vec<UiToolSummaryView>,

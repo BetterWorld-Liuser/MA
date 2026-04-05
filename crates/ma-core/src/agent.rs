@@ -27,7 +27,7 @@ mod tool_calls;
 
 #[cfg(test)]
 use prompting::append_assistant_tool_call_message;
-pub(crate) use prompting::default_system_core;
+pub(crate) use prompting::{base_instructions, default_march_prompt, default_system_core};
 use prompting::normalize_open_files_for_workspace;
 use prompting::{load_skills_for_workspace, render_prompt, upsert_injection};
 pub use runner::is_turn_cancelled_error;
@@ -64,7 +64,7 @@ pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 128_000;
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            system_core: default_system_core().to_string(),
+            system_core: default_system_core(),
             max_recent_turns: 10,
         }
     }
@@ -97,6 +97,7 @@ pub struct AgentRunResult {
 #[derive(Debug, Clone)]
 pub enum AgentProgressEvent {
     Status {
+        agent: String,
         phase: AgentStatusPhase,
         label: String,
     },
@@ -112,6 +113,7 @@ pub enum AgentProgressEvent {
         preview: Option<String>,
     },
     AssistantTextPreview {
+        agent: String,
         message: String,
     },
     FinalAssistantMessage(FinalAssistantMessage),
@@ -477,7 +479,7 @@ impl AgentSession {
         let sections = vec![
             UiContextUsageSectionView::new(
                 "system",
-                estimate_token_count(&self.config.system_core),
+                estimate_token_count(&self.system_core_for_active_agent()),
             ),
             UiContextUsageSectionView::new(
                 "injections",
@@ -652,6 +654,19 @@ impl AgentSession {
         self.agent_profiles.get(self.active_agent_name())
     }
 
+    pub fn display_name_for_agent(&self, name: &str) -> String {
+        self.agent_profiles
+            .get(name)
+            .map(|profile| profile.display_name.clone())
+            .unwrap_or_else(|| {
+                if name.eq_ignore_ascii_case(MARCH_AGENT_NAME) {
+                    "March".to_string()
+                } else {
+                    name.to_string()
+                }
+            })
+    }
+
     pub fn refresh_agent_profiles(&mut self) -> Result<()> {
         let active_agent = self.active_agent.clone();
         self.agent_profiles = load_agent_profiles(&self.working_directory)?
@@ -771,11 +786,54 @@ impl AgentSession {
         clean_unique_paths(&locked)
     }
 
+    /// Assembles the system core for the current active agent following the
+    /// design in agents-teams.md:
+    ///   [base instructions]  — shared foundation (tool rules, completion, handoff)
+    ///   [agents roster]      — who's available + active_agent marker
+    ///   [agent system_prompt] — the active agent's persona/behavior
     fn system_core_for_active_agent(&self) -> String {
+        let Some(profile) = self.agent_profiles.get(self.private_scope()) else {
+            return self.config.system_core.clone();
+        };
+
+        let mut output = String::new();
+
+        // 1. Base instructions — shared by all agents
+        output.push_str(base_instructions());
+
+        // 2. Agents roster (contains active_agent marker)
+        output.push_str("\n\n# Available Agents\n");
+        output.push_str(&self.available_agents_for_prompt());
+
+        // 3. Active agent's own system_prompt (persona / behavior)
+        let role_prompt = profile.system_prompt.trim();
+        if !role_prompt.is_empty() {
+            output.push_str("\n\n# Agent Role\n");
+            output.push_str(role_prompt);
+        }
+
+        output
+    }
+
+    fn available_agents_for_prompt(&self) -> String {
+        let active = self.active_agent_name();
         self.agent_profiles
-            .get(self.private_scope())
-            .map(|profile| profile.system_prompt.clone())
-            .unwrap_or_else(|| self.config.system_core.clone())
+            .values()
+            .map(|profile| {
+                if profile.name == active {
+                    format!(
+                        "- {} | {} | {} (you)",
+                        profile.name, profile.display_name, profile.description
+                    )
+                } else {
+                    format!(
+                        "- {} | {} | {}",
+                        profile.name, profile.display_name, profile.description
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -824,8 +882,8 @@ mod tests {
     use super::shells::resolve_shell_program_with;
     use super::{
         AGENTS_FILENAME, AgentConfig, AgentSession, CommandShell,
-        append_assistant_tool_call_message, decode_command_output, default_system_core,
-        normalize_open_files_for_workspace,
+        append_assistant_tool_call_message, base_instructions, decode_command_output,
+        default_march_prompt, default_system_core, normalize_open_files_for_workspace,
     };
     use crate::agents::{MARCH_AGENT_NAME, SHARED_SCOPE};
     use crate::context::{ConversationHistory, Hint};
@@ -833,27 +891,93 @@ mod tests {
     use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource};
 
     #[test]
-    fn default_system_prompt_includes_chat_and_tool_guidance() {
-        let prompt = default_system_core();
+    fn base_instructions_include_tool_and_handoff_guidance() {
+        let base = base_instructions();
 
-        assert!(prompt.contains("If the user is greeting you or making small talk"));
+        // Tool use rules
         assert!(
-            prompt.contains(
-                "Do not assume every user message is a request for a project status report"
-            )
-        );
-        assert!(
-            prompt.contains(
+            base.contains(
                 "you must inspect the workspace with one or more tools before giving a substantive answer"
             )
         );
         assert!(
-            prompt
-                .contains("A repository-dependent request answered without tool use is incomplete")
+            base.contains("A repository-dependent request answered without tool use is incomplete")
         );
         assert!(
-            prompt.contains("When all work is complete, output your final response as plain text")
+            base.contains("When all work is complete, output your final response as plain text")
         );
+
+        // Agent collaboration rules
+        assert!(base.contains("You may mention another existing agent with `@agent_name`"));
+        assert!(base.contains("March will automatically continue the next round as that agent"));
+        assert!(base.contains("Do not claim that agent-to-agent handoff is unsupported"));
+        assert!(base.contains("Do not reply with meta acknowledgements such as"));
+    }
+
+    #[test]
+    fn march_prompt_includes_persona_and_behavior() {
+        let march = default_march_prompt();
+
+        assert!(march.contains("You are March, an agentic coding partner"));
+        assert!(march.contains("If the user is greeting you or making small talk"));
+        assert!(
+            march.contains(
+                "Do not assume every user message is a request for a project status report"
+            )
+        );
+    }
+
+    #[test]
+    fn default_system_core_combines_base_and_march() {
+        let full = default_system_core();
+        assert!(full.contains(base_instructions()));
+        assert!(full.contains(default_march_prompt()));
+    }
+
+    #[test]
+    fn non_march_agents_get_base_instructions_and_own_prompt() {
+        let workspace = temp_workspace_dir("ma-agent-system-core");
+        let agent_dir = workspace.join(".march").join("agents");
+        fs::create_dir_all(&agent_dir).expect("create agents dir");
+        fs::write(
+            agent_dir.join("reviewer.md"),
+            "---\nname: reviewer\ndisplay_name: Code Reviewer\n---\nFocus on implementation risks first.",
+        )
+        .expect("write reviewer agent");
+
+        let mut session = AgentSession::new(
+            AgentConfig::default(),
+            ConversationHistory::default(),
+            [],
+            workspace,
+        )
+        .expect("create agent session");
+        session.set_active_agent("reviewer");
+
+        let prompt = session.system_core_for_active_agent();
+
+        // Has base instructions (shared foundation)
+        assert!(prompt.contains("Core operating rule:"));
+        assert!(prompt.contains("Tool use:"));
+        assert!(prompt.contains("Agent collaboration:"));
+
+        // Has roster with inline (you) marker on active agent
+        assert!(prompt.contains("# Available Agents"));
+        assert!(
+            prompt.contains(
+                "- reviewer | Code Reviewer | Focus on implementation risks first (you)"
+            )
+        );
+        assert!(!prompt.contains("active_agent:"));
+
+        // Has the reviewer's own system_prompt under Agent Role heading
+        assert!(prompt.contains("# Agent Role\n"));
+        assert!(prompt.contains("Focus on implementation risks first."));
+
+        // Does NOT have March's persona or the old Active Agent Role section
+        assert!(!prompt.contains("You are March, an agentic coding partner"));
+        assert!(!prompt.contains("# Active Agent Role"));
+        assert!(!prompt.contains("agent_name:"));
     }
 
     #[test]

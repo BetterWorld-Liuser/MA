@@ -78,11 +78,11 @@
     </article>
 
     <article v-if="liveTurn" class="chat-row chat-row-assistant">
-      <span class="message-avatar shrink-0">M</span>
+      <span class="message-avatar shrink-0">{{ liveTurn.author.slice(0, 1) }}</span>
 
       <div class="message-stack items-start">
         <div class="message-meta justify-start">
-          <span class="text-[11px] font-semibold text-text">March</span>
+          <span class="text-[11px] font-semibold text-text">{{ liveTurn.author }}</span>
           <time class="font-mono text-[9px] text-text-dim">...</time>
         </div>
 
@@ -109,7 +109,7 @@
             :render-batch-delay="8"
           />
           <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
-            {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : 'March 正在处理这一轮请求。' }}
+            {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : `${liveTurn.author} 正在处理这一轮请求。` }}
           </p>
 
           <p

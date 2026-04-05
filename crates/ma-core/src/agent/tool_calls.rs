@@ -174,13 +174,18 @@ impl AgentSession {
             "create_agent" => {
                 let args: CreateAgentArgs =
                     serde_json::from_value(args).context("invalid create_agent args")?;
-                if args.name.trim().eq_ignore_ascii_case(crate::agents::MARCH_AGENT_NAME) {
+                if args
+                    .name
+                    .trim()
+                    .eq_ignore_ascii_case(crate::agents::MARCH_AGENT_NAME)
+                {
                     bail!("cannot create march via create_agent");
                 }
                 let settings = SettingsStorage::open()?;
                 let profile = settings.upsert_agent_profile(
                     args.name,
                     args.display_name,
+                    args.description,
                     args.system_prompt,
                     args.avatar_color.unwrap_or_default(),
                     args.provider_id,
@@ -206,7 +211,9 @@ impl AgentSession {
                     let current_prompt = settings
                         .snapshot()?
                         .custom_system_core
-                        .unwrap_or_else(|| self.config.system_core.clone());
+                        .unwrap_or_else(|| {
+                            crate::agent::default_march_prompt().to_string()
+                        });
                     let next_prompt = args.system_prompt.unwrap_or(current_prompt);
                     settings.set_custom_system_core(Some(next_prompt), true)?;
                     self.refresh_agent_profiles()?;
@@ -224,6 +231,7 @@ impl AgentSession {
                 let profile = settings.upsert_agent_profile(
                     existing.name.clone(),
                     args.display_name.unwrap_or(existing.display_name),
+                    args.description.unwrap_or(existing.description),
                     args.system_prompt.unwrap_or(existing.system_prompt),
                     args.avatar_color.unwrap_or(existing.avatar_color),
                     if clear_model_binding {
@@ -467,6 +475,7 @@ struct RemoveNoteArgs {
 struct CreateAgentArgs {
     name: String,
     display_name: String,
+    description: String,
     system_prompt: String,
     avatar_color: Option<String>,
     provider_id: Option<i64>,
@@ -478,6 +487,7 @@ struct CreateAgentArgs {
 struct UpdateAgentArgs {
     name: String,
     display_name: Option<String>,
+    description: Option<String>,
     system_prompt: Option<String>,
     avatar_color: Option<String>,
     provider_id: Option<i64>,

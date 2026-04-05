@@ -8,6 +8,7 @@
 | [agents.md](agents.md) | `AGENTS.md` 规则文件接入方式、session 初始化自动加载、默认锁定语义 |
 | [agents-teams.md](agents-teams.md) | 多角色系统、共享/私有上下文分层、@mention 机制、角色创建与管理 |
 | [memory.md](memory.md) | 记忆系统、FTS5 + jieba 召回机制、二层索引、scope 规则、生命周期管理 |
+| [subconscious.md](subconscious.md) | 后台辅助进程、prefix cache 复用、AI+程序混合执行、权限模型、触发与编排 |
 | [tools.md](tools.md) | 工具分层、用户可见输出、run_command、文件工具、行号编辑、错误处理 |
 | [config.md](config.md) | UI 配置（provider）与文本配置（config.toml）的职责划分 |
 | [skills.md](skills.md) | skill 文件格式、发现路径、加载流程、与上下文的集成 |

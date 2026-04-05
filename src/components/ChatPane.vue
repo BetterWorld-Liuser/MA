@@ -49,7 +49,7 @@
             ref="composerRef"
             v-model="draft"
             class="chat-composer-input"
-            placeholder="帮我重构认证逻辑，必要时 @ 文件或目录。"
+            placeholder="帮我重构认证逻辑，必要时 @ 角色、文件或目录。"
             :disabled="disabled || interactionLocked"
             rows="1"
             @input="handleDraftInput"
@@ -159,15 +159,30 @@
           <div v-else-if="searchResults.length" class="composer-popover-list">
             <button
               v-for="(entry, index) in searchResults"
-              :key="`${entry.kind}:${entry.path}`"
+              :key="entry.kind === 'agent' ? `agent:${entry.name}` : `${entry.kind}:${entry.path}`"
               class="composer-popover-item"
               :class="index === highlightedResultIndex ? 'composer-popover-item-active' : ''"
               type="button"
               @mousedown.prevent="selectWorkspaceEntry(entry)"
               @mouseenter="highlightedResultIndex = index"
             >
-              <span class="composer-popover-item-kind">{{ entry.kind === 'directory' ? '目录' : '文件' }}</span>
-              <span class="composer-popover-item-path">{{ entry.path }}</span>
+              <span class="composer-popover-item-kind">
+                {{
+                  entry.kind === 'agent'
+                    ? '角色'
+                    : entry.kind === 'directory'
+                      ? '目录'
+                      : '文件'
+                }}
+              </span>
+              <template v-if="entry.kind === 'agent'">
+                <span class="composer-popover-item-path">@{{ entry.name }}</span>
+                <span class="composer-popover-item-meta">{{ entry.displayName }}</span>
+                <span class="composer-popover-item-meta">{{ entry.description }}</span>
+              </template>
+              <template v-else>
+                <span class="composer-popover-item-path">{{ entry.path }}</span>
+              </template>
             </button>
           </div>
           <div v-else class="composer-popover-empty">没有匹配结果</div>

@@ -14,6 +14,7 @@ pub const SHARED_SCOPE: &str = "shared";
 pub struct AgentProfile {
     pub name: String,
     pub display_name: String,
+    pub description: String,
     pub system_prompt: String,
     pub avatar_color: String,
     pub provider_id: Option<i64>,
@@ -33,7 +34,8 @@ impl AgentProfile {
         Self {
             name: MARCH_AGENT_NAME.to_string(),
             display_name: "March".to_string(),
-            system_prompt: crate::agent::default_system_core().to_string(),
+            description: "默认通用搭档，负责通用 coding、查证和推进。".to_string(),
+            system_prompt: crate::agent::default_march_prompt().to_string(),
             avatar_color: "#64748B".to_string(),
             provider_id: None,
             model_id: None,
@@ -58,6 +60,7 @@ pub fn load_agent_profiles(working_directory: &Path) -> Result<Vec<AgentProfile>
                 AgentProfile {
                     name: record.name,
                     display_name: record.display_name,
+                    description: record.description,
                     system_prompt: record.system_prompt,
                     avatar_color: record.avatar_color,
                     provider_id: record.provider_id,
@@ -127,6 +130,7 @@ fn parse_agent_profile(path: &Path, content: &str) -> Result<Option<AgentProfile
     let frontmatter = frontmatter.unwrap_or_default();
     let mut name = None;
     let mut display_name = None;
+    let mut description = None;
     let mut avatar_color = None;
     let mut model = None;
 
@@ -143,6 +147,7 @@ fn parse_agent_profile(path: &Path, content: &str) -> Result<Option<AgentProfile
         match key {
             "name" => name = Some(value.to_string()),
             "display_name" => display_name = Some(value.to_string()),
+            "description" => description = Some(value.to_string()),
             "avatar_color" => avatar_color = Some(value.to_string()),
             "model" => model = Some(value.to_string()),
             _ => {}
@@ -162,10 +167,13 @@ fn parse_agent_profile(path: &Path, content: &str) -> Result<Option<AgentProfile
 
     let model_id = parse_model_binding(model.as_deref());
     let display_name = display_name.unwrap_or_else(|| name.clone());
+    let system_prompt = body.trim().to_string();
+    let description = normalize_agent_description(description, &display_name, &system_prompt);
     Ok(Some(AgentProfile {
         name,
         display_name,
-        system_prompt: body.trim().to_string(),
+        description,
+        system_prompt,
         avatar_color: avatar_color.unwrap_or_else(|| "#64748B".to_string()),
         provider_id: None,
         model_id,
@@ -219,6 +227,33 @@ fn parse_model_binding(raw: Option<&str>) -> Option<String> {
         return None;
     };
     Some(raw.to_string())
+}
+
+fn normalize_agent_description(
+    explicit: Option<String>,
+    display_name: &str,
+    system_prompt: &str,
+) -> String {
+    explicit
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| summarize_agent_description(display_name, system_prompt))
+}
+
+fn summarize_agent_description(display_name: &str, system_prompt: &str) -> String {
+    let first_sentence = system_prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            line.trim_matches(|ch: char| {
+                ch == '"' || ch == '\'' || ch == '。' || ch == '.' || ch == '：' || ch == ':'
+            })
+        })
+        .filter(|line| !line.is_empty())
+        .map(|line| line.chars().take(60).collect::<String>());
+
+    first_sentence.unwrap_or_else(|| format!("负责 {} 相关工作。", display_name))
 }
 
 pub fn resolve_agent_file_path(working_directory: &Path, name: &str) -> PathBuf {

@@ -192,6 +192,7 @@ export function useProviderSettings({
   async function saveAgent(input: {
     name: string;
     displayName: string;
+    description: string;
     systemPrompt: string;
     avatarColor?: string;
     providerId?: number | null;

@@ -16,7 +16,7 @@
     <div
       v-else
       class="group open-files-tree-row"
-      :style="{ paddingLeft: `${depth === 0 ? 8 : depth * 12 + 24}px` }"
+      :style="{ paddingLeft: `${depth * 12 + 8}px` }"
     >
       <button
         v-if="!node.locked"
@@ -29,11 +29,9 @@
       >
         <Icon :icon="xIcon" class="h-3.5 w-3.5 transition-transform duration-150 group-hover:scale-110" />
       </button>
-      <span v-else class="inline-flex h-4 w-4 shrink-0"></span>
 
       <div class="min-w-0 flex-1" :title="node.fullPath">
         <div class="flex min-w-0 items-center gap-1.5">
-          <span v-if="node.locked" class="shrink-0 text-[10px] text-accent">🔒</span>
           <p class="truncate font-mono text-[11px]" :class="fileNameClass(node)">
             {{ node.name }}
           </p>

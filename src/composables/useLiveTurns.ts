@@ -31,6 +31,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
       case 'turn_started':
         upsertLiveTurn(event.task_id, {
           turnId: event.turn_id,
+          author: formatAgentAuthor(event.agent_display_name || event.agent),
           state: 'pending',
           statusLabel: '正在整理上下文',
           content: '',
@@ -45,6 +46,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         }
         upsertLiveTurn(event.task_id, {
           ...liveTurns.value[event.task_id],
+          author: formatAgentAuthor(event.agent_display_name || event.agent),
           state: liveTurns.value[event.task_id].content ? liveTurns.value[event.task_id].state : 'running',
           statusLabel: event.label,
         });
@@ -93,6 +95,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         }
         upsertLiveTurn(event.task_id, {
           ...liveTurns.value[event.task_id],
+          author: formatAgentAuthor(event.agent_display_name || event.agent),
           state: 'streaming',
           statusLabel: '正在生成回复',
           content: event.message,
@@ -159,6 +162,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
 
     upsertLiveTurn(taskId, {
       turnId,
+      author: 'March',
       state: 'running',
       statusLabel: '正在处理',
       content: '',
@@ -181,7 +185,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
       : `本轮执行失败\n\n${errorDetail}`;
     const message: ChatMessage = {
       role: 'assistant',
-      author: 'March',
+      author: turn.author,
       time: formatArchivedTurnTime(Date.now()),
       timestamp: Date.now(),
       content,
@@ -281,4 +285,15 @@ function formatArchivedTurnTime(timestamp: number) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function formatAgentAuthor(agent?: string) {
+  const normalized = agent?.trim();
+  if (!normalized) {
+    return 'March';
+  }
+  if (normalized.toLowerCase() === 'march') {
+    return 'March';
+  }
+  return normalized;
 }

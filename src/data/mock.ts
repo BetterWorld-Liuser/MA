@@ -28,6 +28,7 @@ export type LiveToolItem = {
 
 export type LiveTurn = {
   turnId: string;
+  author: string;
   state: 'pending' | 'running' | 'streaming' | 'error';
   statusLabel: string;
   content: string;
@@ -138,6 +139,7 @@ export type BackendWorkspaceSnapshot = {
     history: Array<{
       role: 'System' | 'User' | 'Assistant' | 'Tool';
       agent?: string;
+      agent_display_name?: string;
       content: string;
       images?: Array<{
         id: string;
@@ -230,11 +232,15 @@ export type BackendAgentProgressEvent =
       task_id: number;
       turn_id: string;
       user_message: string;
+      agent: string;
+      agent_display_name: string;
     }
   | {
       kind: 'status';
       task_id: number;
       turn_id: string;
+      agent: string;
+      agent_display_name: string;
       phase: 'building_context' | 'waiting_model' | 'running_tool' | 'streaming';
       label: string;
     }
@@ -259,6 +265,8 @@ export type BackendAgentProgressEvent =
       kind: 'assistant_text_preview';
       task_id: number;
       turn_id: string;
+      agent: string;
+      agent_display_name: string;
       message: string;
     }
   | {
@@ -292,6 +300,20 @@ export type WorkspaceEntryView = {
   path: string;
   kind: 'file' | 'directory';
 };
+
+export type MentionTargetView =
+  | {
+      kind: 'agent';
+      name: string;
+      displayName: string;
+      description: string;
+      avatarColor: string;
+      source: string;
+    }
+  | {
+      kind: 'file' | 'directory';
+      path: string;
+    };
 
 export type WorkspaceImageView = {
   path: string;
@@ -362,6 +384,7 @@ export type ProviderSettingsView = {
     id?: number | null;
     name: string;
     displayName: string;
+    description: string;
     systemPrompt: string;
     avatarColor: string;
     providerId?: number | null;
@@ -492,7 +515,7 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
     selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
     chat: activeTask?.history.map((turn) => ({
       role: turn.role === 'User' ? 'user' : 'assistant',
-      author: turn.role === 'User' ? 'User' : (turn.agent || 'March'),
+      author: turn.role === 'User' ? 'User' : (turn.agent_display_name || turn.agent || 'March'),
       time: formatTime(turn.timestamp),
       timestamp: turn.timestamp * 1000,
       content: turn.content,

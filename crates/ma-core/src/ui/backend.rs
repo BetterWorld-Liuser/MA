@@ -8,8 +8,8 @@ use base64::Engine;
 use crate::agent::{
     AgentConfig, AgentProgressEvent, AgentSession, DebugRound, is_turn_cancelled_error,
 };
-use crate::agents::{MARCH_AGENT_NAME, load_agent_profiles};
 use crate::agents::SHARED_SCOPE;
+use crate::agents::{MARCH_AGENT_NAME, load_agent_profiles};
 use crate::context::{ContentBlock, ConversationHistory, join_text_blocks};
 use crate::paths::{canonicalize_clean, clean_path};
 use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
@@ -19,11 +19,11 @@ use crate::storage::{PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSou
 use super::provider::provider_config_for_session;
 use super::util::{resolve_context_window_fallback, system_time_to_unix};
 use super::{
-    DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProgressEvent,
-    UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock, UiCreateTaskRequest,
-    UiAgentProfileView, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteNoteRequest,
+    DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProfileView,
+    UiAgentProgressEvent, UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock,
+    UiCreateTaskRequest, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteNoteRequest,
     UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
-    UiLoadWorkspaceImageRequest, UiOpenFilesRequest, UiProviderSettingsView,
+    UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
     UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
     UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest,
@@ -153,8 +153,14 @@ impl UiAppBackend {
             .load_session(active_task_id)
             .ok()
             .map(|session| session.ui_runtime_snapshot(context_budget_tokens));
+        let display_session = self.load_session(active_task_id).ok();
         let active_task = Some({
             let snapshot = UiTaskSnapshot::from_persisted(persisted);
+            let snapshot = if let Some(session) = display_session.as_ref() {
+                snapshot.with_agent_display_names(session)
+            } else {
+                snapshot
+            };
             if let Some(runtime) = runtime {
                 snapshot.with_runtime(&runtime)
             } else {
@@ -172,7 +178,8 @@ impl UiAppBackend {
 
     pub fn task_snapshot(&self, task_id: i64) -> Result<UiTaskSnapshot> {
         let persisted = self.storage.load_task(task_id)?;
-        Ok(UiTaskSnapshot::from_persisted(persisted))
+        let session = self.load_session(task_id)?;
+        Ok(UiTaskSnapshot::from_persisted(persisted).with_agent_display_names(&session))
     }
 
     pub fn task_snapshot_with_runtime(
@@ -262,6 +269,8 @@ impl UiAppBackend {
             task_id,
             turn_id: turn_id.clone(),
             user_message: content_text.clone(),
+            agent: session.active_agent_name().to_string(),
+            agent_display_name: session.display_name_for_agent(session.active_agent_name()),
         })?;
         let mut result = session
             .handle_user_message_with_events_and_cancel(
@@ -292,7 +301,8 @@ impl UiAppBackend {
                 session.set_active_agent(agent_name.clone());
                 self.storage
                     .update_task_active_agent(task_id, session.active_agent_name())?;
-                let provider_config = provider_config_for_session(&persisted_before.task, &session)?;
+                let provider_config =
+                    provider_config_for_session(&persisted_before.task, &session)?;
                 let provider = OpenAiCompatibleClient::new(provider_config);
                 let continuation = session
                     .continue_with_events_and_cancel(&provider, &is_cancelled, |session, event| {
@@ -308,7 +318,9 @@ impl UiAppBackend {
                         )
                     })
                     .await?;
-                accumulated.final_messages.extend(continuation.final_messages);
+                accumulated
+                    .final_messages
+                    .extend(continuation.final_messages);
                 accumulated.debug_rounds.extend(continuation.debug_rounds);
             }
         }
@@ -384,6 +396,7 @@ impl UiAppBackend {
             open_files,
             hints,
         })
+        .with_agent_display_names(session)
         .with_runtime(&runtime)
         .with_debug_trace(UiDebugTraceView::from_rounds(debug_rounds)))
     }
@@ -594,6 +607,7 @@ impl UiAppBackend {
             settings.upsert_agent_profile(
                 normalized_name,
                 request.display_name,
+                request.description,
                 request.system_prompt,
                 request.avatar_color.unwrap_or_default(),
                 request.provider_id,
@@ -723,6 +737,15 @@ impl UiAppBackend {
         )
     }
 
+    pub fn search_mentions(
+        &self,
+        request: UiSearchWorkspaceEntriesRequest,
+    ) -> Result<Vec<UiMentionTargetView>> {
+        let limit = request.limit.unwrap_or(12).clamp(1, 50);
+        let working_directory = self.working_directory_for_task(request.task_id)?;
+        super::workspace::search_mentions(&working_directory, &request.query, limit)
+    }
+
     pub fn load_workspace_image(
         &self,
         request: UiLoadWorkspaceImageRequest,
@@ -770,12 +793,21 @@ impl UiAppBackend {
         F: FnMut(UiAgentProgressEvent) -> Result<()>,
     {
         match event {
-            AgentProgressEvent::Status { phase, label } => on_progress(UiAgentProgressEvent::Status {
-                task_id,
-                turn_id: turn_id.to_string(),
-                phase: phase.into(),
+            AgentProgressEvent::Status {
+                agent,
+                phase,
                 label,
-            }),
+            } => {
+                let agent_display_name = session.display_name_for_agent(&agent);
+                on_progress(UiAgentProgressEvent::Status {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    agent,
+                    agent_display_name,
+                    phase: phase.into(),
+                    label,
+                })
+            }
             AgentProgressEvent::ToolStarted {
                 tool_call_id,
                 tool_name,
@@ -800,10 +832,13 @@ impl UiAppBackend {
                 summary,
                 preview,
             }),
-            AgentProgressEvent::AssistantTextPreview { message } => {
+            AgentProgressEvent::AssistantTextPreview { agent, message } => {
+                let agent_display_name = session.display_name_for_agent(&agent);
                 on_progress(UiAgentProgressEvent::AssistantTextPreview {
                     task_id,
                     turn_id: turn_id.to_string(),
+                    agent,
+                    agent_display_name,
                     message,
                 })
             }

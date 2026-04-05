@@ -1,6 +1,11 @@
 import { computed, ref, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { ChatImageAttachment, WorkspaceEntryView, WorkspaceImageView } from '@/data/mock';
+import type {
+  ChatImageAttachment,
+  MentionTargetView,
+  WorkspaceEntryView,
+  WorkspaceImageView,
+} from '@/data/mock';
 
 export type MentionKind = 'file' | 'directory';
 
@@ -36,7 +41,7 @@ export function useChatComposer(options: {
   const imageInputRef = ref<HTMLInputElement | null>(null);
   const composerMaxHeight = 160;
   const activeSearchQuery = ref('');
-  const searchResults = ref<WorkspaceEntryView[]>([]);
+  const searchResults = ref<MentionTargetView[]>([]);
   const searchLoading = ref(false);
   const highlightedResultIndex = ref(0);
   const searchPanelOpen = ref(false);
@@ -147,14 +152,25 @@ export function useChatComposer(options: {
     plusMenuOpen.value = false;
     searchLoading.value = true;
     try {
-      searchResults.value = await invoke<WorkspaceEntryView[]>('search_workspace_entries', {
-        input: {
-          taskId: taskId.value,
-          query,
-          kind: mode === 'smart' ? undefined : mode,
-          limit: 12,
-        },
-      });
+      if (mode === 'smart') {
+        searchResults.value = await invoke<MentionTargetView[]>('search_mentions', {
+          input: {
+            taskId: taskId.value,
+            query,
+            limit: 12,
+          },
+        });
+      } else {
+        const entries = await invoke<WorkspaceEntryView[]>('search_workspace_entries', {
+          input: {
+            taskId: taskId.value,
+            query,
+            kind: mode,
+            limit: 12,
+          },
+        });
+        searchResults.value = entries;
+      }
       lastSearchQuery.value = query;
       lastSearchMode.value = mode;
       highlightedResultIndex.value = 0;
@@ -169,7 +185,13 @@ export function useChatComposer(options: {
     void loadSearchResults('', mode);
   }
 
-  async function selectWorkspaceEntry(entry: WorkspaceEntryView) {
+  async function selectWorkspaceEntry(entry: MentionTargetView) {
+    if (entry.kind === 'agent') {
+      insertAgentMention(entry.name);
+      closeSearchPanel();
+      return;
+    }
+
     if (entry.kind === 'file' && isImagePath(entry.path)) {
       if (!supportsVision.value) {
         showComposerNotice('当前模型不支持图片输入');
@@ -385,6 +407,23 @@ export function useChatComposer(options: {
     mentionQueryRange.value = null;
   }
 
+  function insertAgentMention(name: string) {
+    const mention = `@${name}`;
+    if (!mentionQueryRange.value) {
+      draft.value = appendToken(draft.value, mention);
+      return;
+    }
+
+    const { start, end } = mentionQueryRange.value;
+    const prefix = draft.value.slice(0, start);
+    const suffix = draft.value.slice(end).replace(/^\s*/, '');
+    draft.value = `${prefix}${mention} ${suffix}`.trimEnd();
+    const cursor = prefix.length + mention.length + 1;
+    composerRef.value?.focus();
+    composerRef.value?.setSelectionRange(cursor, cursor);
+    mentionQueryRange.value = null;
+  }
+
   async function fileToImageAttachment(file: File): Promise<ComposerImageAttachment> {
     const previewUrl = await readFileAsDataUrl(file);
     return {
@@ -496,4 +535,9 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error ?? new Error(`failed to read image file ${file.name}`));
     reader.readAsDataURL(file);
   });
+}
+
+function appendToken(content: string, token: string) {
+  const trimmedEnd = content.replace(/\s+$/, '');
+  return trimmedEnd ? `${trimmedEnd} ${token} ` : `${token} `;
 }

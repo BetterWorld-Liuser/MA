@@ -117,6 +117,7 @@ pub struct AgentProfileRecord {
     pub id: i64,
     pub name: String,
     pub display_name: String,
+    pub description: String,
     pub system_prompt: String,
     pub avatar_color: String,
     pub provider_id: Option<i64>,
@@ -174,7 +175,7 @@ impl SettingsStorage {
             .connection
             .prepare(
                 "SELECT id, name, display_name, system_prompt, avatar_color,
-                        provider_id, model_id, created_at, updated_at
+                        description, provider_id, model_id, created_at, updated_at
                  FROM agent_profiles
                  ORDER BY created_at ASC, id ASC",
             )
@@ -188,10 +189,11 @@ impl SettingsStorage {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, Option<i64>>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, String>(7)?,
                     row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
                 ))
             })
             .context("failed to query agent profiles")?;
@@ -199,16 +201,18 @@ impl SettingsStorage {
         let mut profiles = Vec::new();
         for row in rows {
             let row = row.context("failed to decode agent profile row")?;
+            let description = normalize_agent_description(row.5.clone(), &row.2, &row.3);
             profiles.push(AgentProfileRecord {
                 id: row.0,
                 name: row.1,
                 display_name: row.2,
                 system_prompt: row.3,
                 avatar_color: row.4,
-                provider_id: row.5,
-                model_id: normalize_optional_string(row.6),
-                created_at: system_time_from_unix(row.7)?,
-                updated_at: system_time_from_unix(row.8)?,
+                description,
+                provider_id: row.6,
+                model_id: normalize_optional_string(row.7),
+                created_at: system_time_from_unix(row.8)?,
+                updated_at: system_time_from_unix(row.9)?,
             });
         }
         Ok(profiles)
@@ -223,7 +227,7 @@ impl SettingsStorage {
         self.connection
             .query_row(
                 "SELECT id, name, display_name, system_prompt, avatar_color,
-                        provider_id, model_id, created_at, updated_at
+                        description, provider_id, model_id, created_at, updated_at
                  FROM agent_profiles
                  WHERE lower(name) = lower(?1)",
                 params![normalized_name],
@@ -234,10 +238,11 @@ impl SettingsStorage {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
-                        row.get::<_, Option<i64>>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, i64>(7)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
                         row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
                     ))
                 },
             )
@@ -245,16 +250,18 @@ impl SettingsStorage {
             .context("failed to load agent profile")
             .and_then(|row| {
                 row.map(|row| {
+                    let description = normalize_agent_description(row.5.clone(), &row.2, &row.3);
                     Ok(AgentProfileRecord {
                         id: row.0,
                         name: row.1,
                         display_name: row.2,
                         system_prompt: row.3,
                         avatar_color: row.4,
-                        provider_id: row.5,
-                        model_id: normalize_optional_string(row.6),
-                        created_at: system_time_from_unix(row.7)?,
-                        updated_at: system_time_from_unix(row.8)?,
+                        description,
+                        provider_id: row.6,
+                        model_id: normalize_optional_string(row.7),
+                        created_at: system_time_from_unix(row.8)?,
+                        updated_at: system_time_from_unix(row.9)?,
                     })
                 })
                 .transpose()
@@ -265,6 +272,7 @@ impl SettingsStorage {
         &self,
         name: impl AsRef<str>,
         display_name: impl AsRef<str>,
+        description: impl AsRef<str>,
         system_prompt: impl AsRef<str>,
         avatar_color: impl AsRef<str>,
         provider_id: Option<i64>,
@@ -278,6 +286,11 @@ impl SettingsStorage {
         if display_name.is_empty() {
             bail!("agent display_name cannot be empty");
         }
+        let description = normalize_agent_description(
+            description.as_ref().trim().to_string(),
+            display_name,
+            system_prompt.as_ref(),
+        );
         let system_prompt = system_prompt.as_ref().trim();
         if system_prompt.is_empty() {
             bail!("agent system_prompt cannot be empty");
@@ -295,15 +308,17 @@ impl SettingsStorage {
                 .execute(
                     "UPDATE agent_profiles
                      SET display_name = ?2,
-                         system_prompt = ?3,
-                         avatar_color = ?4,
-                         provider_id = ?5,
-                         model_id = ?6,
-                         updated_at = ?7
+                         description = ?3,
+                         system_prompt = ?4,
+                         avatar_color = ?5,
+                         provider_id = ?6,
+                         model_id = ?7,
+                         updated_at = ?8
                      WHERE id = ?1",
                     params![
                         existing.id,
                         display_name,
+                        description,
                         system_prompt,
                         avatar_color,
                         provider_id,
@@ -316,12 +331,13 @@ impl SettingsStorage {
             self.connection
                 .execute(
                     "INSERT INTO agent_profiles (
-                        name, display_name, system_prompt, avatar_color,
+                        name, display_name, description, system_prompt, avatar_color,
                         provider_id, model_id, created_at, updated_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         name,
                         display_name,
+                        description,
                         system_prompt,
                         avatar_color,
                         provider_id,
@@ -850,6 +866,7 @@ impl SettingsStorage {
                     id            INTEGER PRIMARY KEY,
                     name          TEXT    NOT NULL UNIQUE,
                     display_name  TEXT    NOT NULL,
+                    description   TEXT    NOT NULL DEFAULT '',
                     system_prompt TEXT    NOT NULL,
                     avatar_color  TEXT    NOT NULL DEFAULT '#64748B',
                     provider_id   INTEGER REFERENCES providers(id) ON DELETE SET NULL,
@@ -877,6 +894,23 @@ impl SettingsStorage {
                     [],
                 )
                 .context("failed to add provider_type column")?;
+        }
+
+        let has_agent_description = self
+            .connection
+            .prepare("PRAGMA table_info(agent_profiles)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|name| name == "description");
+
+        if !has_agent_description {
+            self.connection
+                .execute(
+                    "ALTER TABLE agent_profiles ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+                    [],
+                )
+                .context("failed to add agent_profiles.description column")?;
         }
 
         Ok(())
@@ -962,6 +996,25 @@ fn normalize_avatar_color(raw: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn normalize_agent_description(
+    raw: String,
+    display_name: &str,
+    system_prompt: &str,
+) -> String {
+    let trimmed = raw.trim().to_string();
+    if !trimmed.is_empty() {
+        return trimmed;
+    }
+
+    system_prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(60).collect::<String>())
+        .filter(|line| !line.trim().is_empty())
+        .unwrap_or_else(|| format!("负责 {} 相关工作。", display_name))
 }
 
 fn unix_timestamp(time: SystemTime) -> Result<i64> {

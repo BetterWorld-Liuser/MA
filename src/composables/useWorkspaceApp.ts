@@ -254,6 +254,7 @@ export function useWorkspaceApp() {
     });
     upsertLiveTurn(taskId, {
       turnId: `pending-${Date.now()}`,
+      author: 'March',
       state: 'pending',
       statusLabel: '已发送，正在准备',
       content: '',

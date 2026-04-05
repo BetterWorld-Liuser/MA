@@ -58,7 +58,8 @@ impl AgentSession {
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
         C: Fn() -> bool,
     {
-        self.run_agent_loop(client, None, is_cancelled, on_event).await
+        self.run_agent_loop(client, None, is_cancelled, on_event)
+            .await
     }
 
     async fn run_agent_loop<F, C>(
@@ -88,6 +89,7 @@ impl AgentSession {
             on_event(
                 self,
                 AgentProgressEvent::Status {
+                    agent: self.active_agent_name().to_string(),
                     phase: AgentStatusPhase::BuildingContext,
                     label: "正在整理上下文".to_string(),
                 },
@@ -100,6 +102,7 @@ impl AgentSession {
             on_event(
                 self,
                 AgentProgressEvent::Status {
+                    agent: self.active_agent_name().to_string(),
                     phase: AgentStatusPhase::WaitingModel,
                     label: "正在调用模型".to_string(),
                 },
@@ -113,6 +116,7 @@ impl AgentSession {
                             on_event(
                                 self,
                                 AgentProgressEvent::Status {
+                                    agent: self.active_agent_name().to_string(),
                                     phase: AgentStatusPhase::Streaming,
                                     label: "正在生成回复".to_string(),
                                 },
@@ -120,6 +124,7 @@ impl AgentSession {
                             on_event(
                                 self,
                                 AgentProgressEvent::AssistantTextPreview {
+                                    agent: self.active_agent_name().to_string(),
                                     message: content_preview.clone(),
                                 },
                             )?;
@@ -197,6 +202,7 @@ impl AgentSession {
                 on_event(
                     self,
                     AgentProgressEvent::Status {
+                        agent: self.active_agent_name().to_string(),
                         phase: AgentStatusPhase::RunningTool,
                         label: "正在执行工具".to_string(),
                     },

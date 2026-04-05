@@ -3,24 +3,24 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 
 use crate::agent::{AgentSession, AgentStatusPhase, AgentToolStatus, DebugRound, DebugToolCall};
+use crate::agents::{AgentProfile, AgentProfileSource, MARCH_AGENT_NAME};
 use crate::context::{
     ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus,
     ToolSummary, join_text_blocks,
 };
 use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
-use crate::agents::{AgentProfile, AgentProfileSource, MARCH_AGENT_NAME};
 use crate::settings::{ProviderModelRecord, ProviderRecord, ProviderSettingsSnapshot};
 use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
 
 use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
 use super::{
-    UiAgentStatusPhase, UiAgentToolStatus, UiContextPressureView, UiContextUsageSectionView,
-    UiContextUsageView, UiDebugRoundView, UiDebugToolCallView, UiDebugTraceView,
-    UiAgentProfileView, UiFileSnapshotView, UiHintView, UiImageAttachmentView, UiModelCapabilitiesView,
-    UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView, UiProviderSettingsView,
-    UiProviderView, UiRoleView, UiRuntimeSnapshot, UiShellView, UiSkillView, UiSystemStatusView,
-    UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
+    UiAgentProfileView, UiAgentStatusPhase, UiAgentToolStatus, UiContextPressureView,
+    UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView, UiDebugToolCallView,
+    UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
+    UiModelCapabilitiesView, UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView,
+    UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot, UiShellView,
+    UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
 };
 
 impl UiTaskSnapshot {
@@ -55,6 +55,13 @@ impl UiTaskSnapshot {
             runtime: None,
             debug_trace: None,
         }
+    }
+
+    pub fn with_agent_display_names(mut self, session: &AgentSession) -> Self {
+        for turn in &mut self.history {
+            turn.agent_display_name = session.display_name_for_agent(&turn.agent);
+        }
+        self
     }
 
     pub fn with_runtime(mut self, runtime: &UiRuntimeSnapshot) -> Self {
@@ -108,6 +115,7 @@ impl From<crate::settings::AgentProfileRecord> for UiAgentProfileView {
             id: Some(profile.id),
             name: profile.name,
             display_name: profile.display_name,
+            description: profile.description,
             system_prompt: profile.system_prompt,
             avatar_color: profile.avatar_color,
             provider_id: profile.provider_id,
@@ -124,6 +132,7 @@ impl From<&AgentProfile> for UiAgentProfileView {
             id: None,
             name: profile.name.clone(),
             display_name: profile.display_name.clone(),
+            description: profile.description.clone(),
             system_prompt: profile.system_prompt.clone(),
             avatar_color: profile.avatar_color.clone(),
             provider_id: profile.provider_id,
@@ -234,6 +243,7 @@ impl From<DisplayTurn> for UiTurnView {
     fn from(turn: DisplayTurn) -> Self {
         Self {
             role: UiRoleView::from(turn.role),
+            agent_display_name: turn.agent.clone(),
             agent: turn.agent,
             content: join_text_blocks(&turn.content),
             images: turn

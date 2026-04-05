@@ -3,7 +3,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use super::{UiWorkspaceEntryKind, UiWorkspaceEntryView};
+use crate::agents::load_agent_profiles;
+
+use super::{UiMentionTargetView, UiWorkspaceEntryKind, UiWorkspaceEntryView};
 
 pub(super) fn search_workspace_entries(
     working_directory: &Path,
@@ -56,12 +58,73 @@ pub(super) fn search_workspace_entries(
 
     let mut ranked = entries
         .into_iter()
-        .filter_map(|entry| rank_workspace_entry(&entry.path, &query).map(|score| (score, entry)))
+        .filter_map(|entry| {
+            rank_workspace_entry(&entry.path, &query)
+                .map(workspace_score_key)
+                .map(|score| (score, entry))
+        })
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| {
         left.0
             .cmp(&right.0)
             .then_with(|| left.1.path.cmp(&right.1.path))
+    });
+    ranked.truncate(limit);
+    Ok(ranked.into_iter().map(|(_, entry)| entry).collect())
+}
+
+pub(super) fn search_mentions(
+    working_directory: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<UiMentionTargetView>> {
+    let query = query.trim().to_lowercase();
+    let agents = load_agent_profiles(working_directory)?
+        .into_iter()
+        .filter_map(|profile| {
+            rank_agent_profile(&profile.name, &profile.display_name, &profile.description, &query)
+                .map(|score| {
+                (
+                    score,
+                    UiMentionTargetView::Agent {
+                        name: profile.name,
+                        display_name: profile.display_name,
+                        description: profile.description,
+                        avatar_color: profile.avatar_color,
+                        source: match profile.source {
+                            crate::agents::AgentProfileSource::BuiltIn => "built_in".to_string(),
+                            crate::agents::AgentProfileSource::User => "user".to_string(),
+                            crate::agents::AgentProfileSource::Project => "project".to_string(),
+                        },
+                    },
+                )
+                })
+        })
+        .collect::<Vec<_>>();
+
+    let workspace_entries = search_workspace_entries(working_directory, &query, None, limit)?
+        .into_iter()
+        .map(|entry| match entry.kind {
+            UiWorkspaceEntryKind::File => UiMentionTargetView::File { path: entry.path },
+            UiWorkspaceEntryKind::Directory => UiMentionTargetView::Directory { path: entry.path },
+        })
+        .collect::<Vec<_>>();
+
+    let mut ranked = agents;
+    ranked.extend(workspace_entries.into_iter().filter_map(|entry| {
+        let path = match &entry {
+            UiMentionTargetView::File { path } | UiMentionTargetView::Directory { path } => path,
+            UiMentionTargetView::Agent { .. } => return None,
+        };
+        rank_workspace_entry(path, &query)
+            .map(workspace_score_key)
+            .map(|score| (score, entry))
+    }));
+
+    ranked.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| mention_sort_key(&left.1).cmp(&mention_sort_key(&right.1)))
     });
     ranked.truncate(limit);
     Ok(ranked.into_iter().map(|(_, entry)| entry).collect())
@@ -212,6 +275,63 @@ fn rank_workspace_entry(path: &str, query: &str) -> Option<(u8, usize)> {
         return Some((2, path.len()));
     }
     subsequence_score(&haystack, query).map(|score| (4, score))
+}
+
+fn workspace_score_key(score: (u8, usize)) -> (u8, usize, usize) {
+    (1, score.0 as usize, score.1)
+}
+
+fn rank_agent_profile(
+    name: &str,
+    display_name: &str,
+    description: &str,
+    query: &str,
+) -> Option<(u8, usize, usize)> {
+    if query.is_empty() {
+        return Some((0, 0, name.len()));
+    }
+
+    let name_lower = name.to_lowercase();
+    let display_lower = display_name.to_lowercase();
+    let description_lower = description.to_lowercase();
+
+    if name_lower == query {
+        return Some((0, 0, name.len()));
+    }
+    if name_lower.starts_with(query) {
+        return Some((0, 1, name.len()));
+    }
+    if name_lower.contains(query) {
+        return Some((0, 2, name.len()));
+    }
+    if display_lower == query {
+        return Some((0, 3, display_name.len()));
+    }
+    if display_lower.starts_with(query) {
+        return Some((0, 4, display_name.len()));
+    }
+    if display_lower.contains(query) {
+        return Some((0, 5, display_name.len()));
+    }
+    if description_lower.starts_with(query) {
+        return Some((0, 6, description.len()));
+    }
+    if description_lower.contains(query) {
+        return Some((0, 7, description.len()));
+    }
+
+    subsequence_score(&name_lower, query)
+        .map(|score| (0, 8, score))
+        .or_else(|| subsequence_score(&display_lower, query).map(|score| (0, 9, score)))
+        .or_else(|| subsequence_score(&description_lower, query).map(|score| (0, 10, score)))
+}
+
+fn mention_sort_key(entry: &UiMentionTargetView) -> (u8, String) {
+    match entry {
+        UiMentionTargetView::Agent { name, .. } => (0, name.clone()),
+        UiMentionTargetView::File { path } => (1, path.clone()),
+        UiMentionTargetView::Directory { path } => (2, path.clone()),
+    }
 }
 
 fn subsequence_score(haystack: &str, needle: &str) -> Option<usize> {

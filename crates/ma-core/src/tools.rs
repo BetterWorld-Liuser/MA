@@ -31,8 +31,12 @@ impl ToolRuntime {
 
     pub fn render_prompt_section(&self) -> String {
         let mut output = String::new();
-        output.push_str("The following tools are available in this session.\n");
-        output.push_str("Choose the narrowest tool that directly matches the task.\n\n");
+        output.push_str("The following tools are available in this session.\n\n");
+        output.push_str("Tool selection principles:\n");
+        output.push_str("- Choose the narrowest tool that directly matches the task.\n");
+        output.push_str("- For inspecting or editing workspace files, prefer the file tools (open_file, write_file, line-based edits) over run_command. File tools are deterministic, cross-platform, and integrated with the watcher-backed open-files context layer.\n");
+        output.push_str("- Reserve run_command for capabilities that require the external environment: compilation, tests, git, grep, shell pipelines, or CLI tools.\n");
+        output.push_str("- All file content in the open-files context is shown with line numbers. Line-based edit tools (replace_lines, insert_lines, delete_lines) use these line numbers as absolute positions — no text matching is needed.\n\n");
 
         for tool in &self.tools {
             output.push_str(&format!("## {}\n", tool.name));
@@ -87,7 +91,7 @@ fn run_command_tool(
 ) -> ToolDefinition {
     ToolDefinition {
         name: "run_command",
-        description: "Run a shell command in the workspace for compilation, tests, git, search, scripts, or other environment-backed operations.",
+        description: "Run a shell command in the workspace. Use this for capabilities that require the external environment: compilation, tests, git, grep/search, shell pipelines, build scripts, or any installed CLI tool. The command runs in a specified shell interpreter with the workspace root as the working directory.",
         parameters: vec![
             ToolParameter {
                 name: "shell",
@@ -121,7 +125,7 @@ fn run_command_tool(
 fn open_file_tool() -> ToolDefinition {
     ToolDefinition {
         name: "open_file",
-        description: "Start tracking a file so its latest watcher-backed snapshot appears in the open-files context layer.",
+        description: "Start tracking a file so its latest watcher-backed snapshot appears in the open-files context layer. The snapshot is kept in sync with disk: any external change is automatically reflected, and the content shown always includes line numbers for precise editing.",
         parameters: vec![ToolParameter {
             name: "path",
             kind: "path",
@@ -129,10 +133,11 @@ fn open_file_tool() -> ToolDefinition {
             description: "The file to add into Ma's open-file set.",
         }],
         notes: vec![
-            "There is no read_file tool in Ma's core design: opening a file makes its real on-disk content available in context.".to_string(),
+            "There is no read_file tool: opening a file IS reading it. The real on-disk content appears in context immediately and stays up to date via the file watcher.".to_string(),
             "Prefer open_file over run_command when the goal is to inspect a workspace file's content.".to_string(),
             "Once a file is open, reuse the open-files context instead of re-reading the same path through shell commands.".to_string(),
             "Use open_file before line-based edits when the file is not already present in the open-files layer.".to_string(),
+            "Content limits: binary files (null bytes in the first 8 KB) are rejected. Text files are truncated at 2,000 lines, each line is capped at 1,000 characters, and overall rendered content is capped at 100 KB. If a file is truncated, a header note explains the limits — use run_command with grep/head/tail to access the rest.".to_string(),
         ],
     }
 }
@@ -156,13 +161,13 @@ fn close_file_tool() -> ToolDefinition {
 fn write_file_tool() -> ToolDefinition {
     ToolDefinition {
         name: "write_file",
-        description: "Write the full content of a file in one operation and keep that file in Ma's watcher-backed open-files set.",
+        description: "Create a new file or overwrite an existing file with the given content in one operation. The file is automatically added to the watcher-backed open-files set so its snapshot stays current.",
         parameters: vec![
             ToolParameter {
                 name: "path",
                 kind: "path",
                 required: true,
-                description: "The file to create or overwrite.",
+                description: "The file to create or overwrite. Parent directories are created if they do not exist.",
             },
             ToolParameter {
                 name: "content",
@@ -173,8 +178,8 @@ fn write_file_tool() -> ToolDefinition {
         ],
         notes: vec![
             "Prefer write_file for creating a new file or replacing a file wholesale.".to_string(),
-            "After write_file, the written file remains tracked so subsequent context reflects the real on-disk state.".to_string(),
-            "Use line-based edit tools instead of write_file when only a small region needs to change.".to_string(),
+            "After write_file, the file is tracked and its snapshot in the open-files context reflects the written content.".to_string(),
+            "Use line-based edit tools (replace_lines, insert_lines, delete_lines) instead when only a small region needs to change — they save tokens by only outputting the diff.".to_string(),
         ],
     }
 }
@@ -182,36 +187,37 @@ fn write_file_tool() -> ToolDefinition {
 fn replace_lines_tool() -> ToolDefinition {
     ToolDefinition {
         name: "replace_lines",
-        description: "Replace an inclusive line range with new content.",
+        description: "Replace an inclusive line range [start_line, end_line] with new content. Line numbers come from the open-files snapshot — they are absolute positions, not text patterns.",
         parameters: vec![
             ToolParameter {
                 name: "path",
                 kind: "path",
                 required: true,
-                description: "The file to edit.",
+                description: "The file to edit (must be in the open-files set).",
             },
             ToolParameter {
                 name: "start_line",
                 kind: "integer",
                 required: true,
-                description: "The first line to replace.",
+                description: "The first line to replace (1-based, inclusive).",
             },
             ToolParameter {
                 name: "end_line",
                 kind: "integer",
                 required: true,
-                description: "The last line to replace.",
+                description: "The last line to replace (1-based, inclusive).",
             },
             ToolParameter {
                 name: "new_content",
                 kind: "string",
                 required: true,
-                description: "The replacement content for the selected line range.",
+                description: "The replacement text. Can be fewer or more lines than the replaced range.",
             },
         ],
         notes: vec![
-            "Use replace_lines when you know the precise line span to update.".to_string(),
-            "If the file changed after it was opened, Ma should refresh the snapshot before applying the edit.".to_string(),
+            "Use replace_lines for in-place edits where you only need to output the changed lines, saving tokens compared to write_file.".to_string(),
+            "The new_content may differ in line count from the replaced range — subsequent line numbers shift accordingly.".to_string(),
+            "If the file was modified externally after you last saw it, the watcher will detect the change and warn before the edit is applied.".to_string(),
         ],
     }
 }
@@ -219,30 +225,30 @@ fn replace_lines_tool() -> ToolDefinition {
 fn insert_lines_tool() -> ToolDefinition {
     ToolDefinition {
         name: "insert_lines",
-        description: "Insert new content after a specific line.",
+        description: "Insert new lines after a specific line number without replacing any existing content.",
         parameters: vec![
             ToolParameter {
                 name: "path",
                 kind: "path",
                 required: true,
-                description: "The file to edit.",
+                description: "The file to edit (must be in the open-files set).",
             },
             ToolParameter {
                 name: "after_line",
                 kind: "integer",
                 required: true,
-                description: "Insert new content after this line number.",
+                description: "Insert new content after this line number (1-based). Use 0 to prepend before the first line.",
             },
             ToolParameter {
                 name: "new_content",
                 kind: "string",
                 required: true,
-                description: "The content to insert.",
+                description: "The content to insert. Can be one or more lines.",
             },
         ],
         notes: vec![
-            "Use insert_lines for additive edits that do not replace an existing region."
-                .to_string(),
+            "Use insert_lines for purely additive edits — adding new functions, imports, or blocks without touching existing lines.".to_string(),
+            "Subsequent line numbers shift down by the number of inserted lines.".to_string(),
         ],
     }
 }
@@ -250,30 +256,30 @@ fn insert_lines_tool() -> ToolDefinition {
 fn delete_lines_tool() -> ToolDefinition {
     ToolDefinition {
         name: "delete_lines",
-        description: "Delete an inclusive line range from a file.",
+        description: "Delete an inclusive line range [start_line, end_line] from a file without replacing it with new content.",
         parameters: vec![
             ToolParameter {
                 name: "path",
                 kind: "path",
                 required: true,
-                description: "The file to edit.",
+                description: "The file to edit (must be in the open-files set).",
             },
             ToolParameter {
                 name: "start_line",
                 kind: "integer",
                 required: true,
-                description: "The first line to delete.",
+                description: "The first line to delete (1-based, inclusive).",
             },
             ToolParameter {
                 name: "end_line",
                 kind: "integer",
                 required: true,
-                description: "The last line to delete.",
+                description: "The last line to delete (1-based, inclusive).",
             },
         ],
         notes: vec![
-            "Use delete_lines when the change is a pure removal and the line span is known."
-                .to_string(),
+            "Use delete_lines for pure removal — dropping imports, dead code, or empty blocks.".to_string(),
+            "Subsequent line numbers shift up by the number of deleted lines.".to_string(),
         ],
     }
 }
@@ -297,11 +303,11 @@ fn write_note_tool() -> ToolDefinition {
             },
         ],
         notes: vec![
-            "Use write_note to preserve important state across turns, such as the current task target or a useful build error summary.".to_string(),
-            "Treat note ids as stable memory slots: reuse the same id when updating the same fact, plan, identity, or status.".to_string(),
-            "If a note with that id already exists, write_note replaces it; it does not append a second note.".to_string(),
-            "Prefer overwriting an existing semantically matching id over inventing near-duplicate ids like target_v2, latest_target, or user_identity_new.".to_string(),
-            "Create a new id only when the new information truly needs to coexist with the old note in future turns.".to_string(),
+            "Use write_note to preserve important state across turns, such as the current task target, a build error summary, or a working plan.".to_string(),
+            "Treat note ids as stable memory slots: reuse the same id when updating the same fact, plan, identity, or status. Recommended ids: target, plan, build_output, user_identity.".to_string(),
+            "If a note with that id already exists, write_note replaces it (upsert semantics); it does not append a second note.".to_string(),
+            "Do not invent near-duplicate ids like target_v2 or latest_target — overwrite the original id instead.".to_string(),
+            "Create a new id only when the new information truly needs to coexist with existing notes in future turns.".to_string(),
         ],
     }
 }
@@ -339,6 +345,12 @@ fn create_agent_tool() -> ToolDefinition {
                 kind: "string",
                 required: true,
                 description: "Human-friendly label shown in the UI.",
+            },
+            ToolParameter {
+                name: "description",
+                kind: "string",
+                required: true,
+                description: "One-sentence summary of what this agent is for.",
             },
             ToolParameter {
                 name: "system_prompt",
@@ -388,6 +400,12 @@ fn update_agent_tool() -> ToolDefinition {
                 kind: "string",
                 required: false,
                 description: "Optional new UI label.",
+            },
+            ToolParameter {
+                name: "description",
+                kind: "string",
+                required: false,
+                description: "Optional new one-sentence role summary.",
             },
             ToolParameter {
                 name: "system_prompt",

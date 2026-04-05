@@ -11,7 +11,7 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 use ma::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteAgentRequest,
     UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
-    UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiOpenFilesRequest,
+    UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest,
     UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
     UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
@@ -422,6 +422,17 @@ fn search_workspace_entries(
 }
 
 #[tauri::command]
+fn search_mentions(
+    state: tauri::State<'_, AppState>,
+    input: UiSearchWorkspaceEntriesRequest,
+) -> Result<Vec<UiMentionTargetView>, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .search_mentions(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn load_workspace_image(
     state: tauri::State<'_, AppState>,
     input: UiLoadWorkspaceImageRequest,
@@ -495,6 +506,7 @@ pub fn run() {
             restore_march_prompt,
             test_provider_connection,
             search_workspace_entries,
+            search_mentions,
             load_workspace_image,
             open_external_url
         ])

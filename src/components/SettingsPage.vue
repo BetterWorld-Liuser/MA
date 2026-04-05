@@ -413,7 +413,8 @@
                       <span v-if="agent.isBuiltIn" class="settings-default-badge">March</span>
                     </div>
                     <p class="mt-1 font-mono text-[11px] text-text-dim">@{{ agent.name }}</p>
-                    <p class="mt-2 line-clamp-2 text-[12px] leading-5 text-text-muted">{{ agent.systemPrompt }}</p>
+                    <p class="mt-2 text-[12px] leading-5 text-text-muted">{{ agent.description }}</p>
+                    <p class="mt-2 line-clamp-2 text-[11px] leading-5 text-text-dim">{{ agent.systemPrompt }}</p>
                     <p class="mt-2 text-[11px] text-text-dim">
                       {{ formatAgentBinding(agent.providerId, agent.modelId) }} · {{ formatAgentSource(agent.source) }}
                     </p>
@@ -466,6 +467,18 @@
                 </div>
               </div>
 
+              <div class="dialog-field">
+                <label class="dialog-label">短描述</label>
+                <Input
+                  v-model="agentDescription"
+                  :disabled="editingBuiltInMarch"
+                  placeholder="一句话说明这个角色主要负责什么"
+                />
+                <p class="dialog-hint">
+                  用于 `@` 面板、角色列表和 prompt 里的 agent roster。尽量保持简短稳定。
+                </p>
+              </div>
+
               <div class="grid gap-4 md:grid-cols-2">
                 <div class="dialog-field">
                   <label class="dialog-label">头像颜色</label>
@@ -501,7 +514,10 @@
 
               <div class="flex items-center justify-end gap-2">
                 <Button variant="ghost" type="button" @click="resetAgentForm">清空</Button>
-                <Button type="submit" :disabled="busy || !agentDisplayName.trim() || !agentSystemPrompt.trim() || !resolvedAgentName">
+                <Button
+                  type="submit"
+                  :disabled="busy || !agentDisplayName.trim() || (!editingBuiltInMarch && !agentDescription.trim()) || !agentSystemPrompt.trim() || !resolvedAgentName"
+                >
                   {{ editingBuiltInMarch || activeAgentName ? '保存角色' : '创建角色' }}
                 </Button>
               </div>
@@ -651,6 +667,7 @@ const emit = defineEmits<{
   saveAgent: [input: {
     name: string;
     displayName: string;
+    description: string;
     systemPrompt: string;
     avatarColor?: string;
     providerId?: number | null;
@@ -685,6 +702,7 @@ const defaultModelLocal = ref('');
 const activeAgentName = ref('');
 const agentName = ref('');
 const agentDisplayName = ref('');
+const agentDescription = ref('');
 const agentAvatarColor = ref('#64748B');
 const agentProviderIdString = ref('');
 const agentModelId = ref('');
@@ -946,6 +964,7 @@ function startCreateAgent() {
   activeAgentName.value = '';
   agentName.value = '';
   agentDisplayName.value = '';
+  agentDescription.value = '';
   agentAvatarColor.value = '#64748B';
   agentProviderIdString.value = '';
   agentModelId.value = '';
@@ -957,6 +976,7 @@ function startEditAgent(agent: ProviderSettingsView['agents'][number]) {
   activeAgentName.value = agent.name;
   agentName.value = agent.name;
   agentDisplayName.value = agent.displayName;
+  agentDescription.value = agent.description;
   agentAvatarColor.value = agent.avatarColor || '#64748B';
   agentProviderIdString.value = agent.providerId ? String(agent.providerId) : '';
   agentModelId.value = agent.modelId ?? '';
@@ -1014,6 +1034,7 @@ function submitAgent() {
   emit('saveAgent', {
     name: resolvedAgentName.value,
     displayName: agentDisplayName.value,
+    description: editingBuiltInMarch.value ? '' : agentDescription.value,
     systemPrompt: agentSystemPrompt.value,
     avatarColor: agentAvatarColor.value,
     providerId: agentProviderIdString.value ? Number(agentProviderIdString.value) : null,
