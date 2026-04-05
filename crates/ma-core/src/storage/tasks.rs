@@ -4,15 +4,17 @@ use std::time::SystemTime;
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
 
+use crate::agents::MARCH_AGENT_NAME;
 use crate::context::{ConversationHistory, DisplayTurn, Hint, NoteEntry};
 
 use super::codec::{
     decode_content_blocks, decode_tool_summaries, decode_working_directory,
-    normalize_working_directory,
-    optional_system_time, role_from_db, system_time_from_unix, unix_timestamp,
+    normalize_working_directory, optional_system_time, role_from_db, system_time_from_unix,
+    unix_timestamp,
 };
-use super::{MaStorage, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource};
-use indexmap::IndexMap;
+use super::{
+    MaStorage, PersistedNote, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource,
+};
 
 impl MaStorage {
     pub fn create_task(&self, name: impl AsRef<str>) -> Result<TaskRecord> {
@@ -76,10 +78,11 @@ impl MaStorage {
                     working_directory,
                     selected_provider_id,
                     selected_model,
+                    active_agent,
                     created_at,
                     last_active
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     name,
                     title_source.as_db_value(),
@@ -87,6 +90,7 @@ impl MaStorage {
                     working_directory.to_string_lossy().to_string(),
                     selected_provider_id,
                     normalized_model,
+                    MARCH_AGENT_NAME,
                     now_ts,
                     now_ts
                 ],
@@ -101,6 +105,7 @@ impl MaStorage {
             working_directory,
             selected_provider_id,
             selected_model: normalized_model,
+            active_agent: MARCH_AGENT_NAME.to_string(),
             created_at: now,
             last_active: now,
         })
@@ -259,12 +264,35 @@ impl MaStorage {
         Ok(())
     }
 
+    pub fn update_task_active_agent(&self, task_id: i64, active_agent: &str) -> Result<()> {
+        let active_agent = active_agent.trim();
+        if active_agent.is_empty() {
+            bail!("active_agent cannot be empty");
+        }
+
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE tasks
+                 SET active_agent = ?2
+                 WHERE id = ?1",
+                params![task_id, active_agent],
+            )
+            .context("failed to update task active_agent")?;
+
+        if affected == 0 {
+            bail!("task {} not found", task_id);
+        }
+
+        Ok(())
+    }
+
     pub fn list_tasks(&self) -> Result<Vec<TaskRecord>> {
         let mut statement = self
             .connection
             .prepare(
                 "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
-                 , selected_provider_id, selected_model
+                 , selected_provider_id, selected_model, active_agent
                  FROM tasks
                  ORDER BY last_active DESC, id DESC",
             )
@@ -282,6 +310,7 @@ impl MaStorage {
                     row.get::<_, i64>(6)?,
                     row.get::<_, Option<i64>>(7)?,
                     row.get::<_, Option<String>>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             })
             .context("failed to query tasks")?;
@@ -298,6 +327,7 @@ impl MaStorage {
                 last_active,
                 selected_provider_id,
                 selected_model,
+                active_agent,
             ) = row.context("failed to decode task row")?;
             tasks.push(TaskRecord {
                 id,
@@ -310,6 +340,7 @@ impl MaStorage {
                 )?,
                 selected_provider_id,
                 selected_model,
+                active_agent,
                 created_at: system_time_from_unix(created_at)?,
                 last_active: system_time_from_unix(last_active)?,
             });
@@ -325,6 +356,7 @@ impl MaStorage {
         let hints = self.load_hints()?;
 
         Ok(PersistedTask {
+            active_agent: task.active_agent.clone(),
             task,
             history,
             notes,
@@ -338,7 +370,7 @@ impl MaStorage {
             .connection
             .query_row(
                 "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
-                 , selected_provider_id, selected_model
+                 , selected_provider_id, selected_model, active_agent
                  FROM tasks
                  WHERE id = ?1",
                 params![task_id],
@@ -353,6 +385,7 @@ impl MaStorage {
                         row.get::<_, i64>(6)?,
                         row.get::<_, Option<i64>>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, String>(9)?,
                     ))
                 },
             )
@@ -368,6 +401,7 @@ impl MaStorage {
             working_directory: decode_working_directory(raw.4, &self.workspace_root)?,
             selected_provider_id: raw.7,
             selected_model: raw.8,
+            active_agent: raw.9,
             created_at: system_time_from_unix(raw.5)?,
             last_active: system_time_from_unix(raw.6)?,
         })
@@ -377,7 +411,7 @@ impl MaStorage {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT role, content, tool_summaries, created_at
+                "SELECT role, agent, content, tool_summaries, created_at
                  FROM conversation_turns
                  WHERE task_id = ?1
                  ORDER BY created_at ASC, id ASC",
@@ -389,18 +423,20 @@ impl MaStorage {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             })
             .context("failed to query conversation history")?;
 
         let mut turns = Vec::new();
         for row in rows {
-            let (role, content, tool_summaries_json, created_at) =
+            let (role, agent, content, tool_summaries_json, created_at) =
                 row.context("failed to decode conversation row")?;
             turns.push(DisplayTurn {
                 role: role_from_db(&role)?,
+                agent,
                 content: decode_content_blocks(&content)?,
                 tool_calls: decode_tool_summaries(tool_summaries_json.as_deref())?,
                 timestamp: system_time_from_unix(created_at)?,
@@ -409,27 +445,35 @@ impl MaStorage {
         Ok(ConversationHistory { turns })
     }
 
-    fn load_notes(&self, task_id: i64) -> Result<IndexMap<String, NoteEntry>> {
+    fn load_notes(&self, task_id: i64) -> Result<Vec<PersistedNote>> {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT note_id, content
+                "SELECT scope, note_id, content
                  FROM notes
                  WHERE task_id = ?1
-                 ORDER BY position ASC, note_id ASC",
+                 ORDER BY scope = 'shared' DESC, position ASC, note_id ASC",
             )
             .context("failed to prepare notes query")?;
 
         let rows = statement
             .query_map(params![task_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })
             .context("failed to query notes")?;
 
-        let mut notes = IndexMap::new();
+        let mut notes = Vec::new();
         for row in rows {
-            let (note_id, content) = row.context("failed to decode note row")?;
-            notes.insert(note_id, NoteEntry::new(content));
+            let (scope, note_id, content) = row.context("failed to decode note row")?;
+            notes.push(PersistedNote {
+                scope,
+                id: note_id,
+                entry: NoteEntry::new(content),
+            });
         }
         Ok(notes)
     }
@@ -438,23 +482,28 @@ impl MaStorage {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT path, locked
+                "SELECT scope, path, locked
                  FROM open_files
                  WHERE task_id = ?1
-                 ORDER BY position ASC, path ASC",
+                 ORDER BY scope = 'shared' DESC, position ASC, path ASC",
             )
             .context("failed to prepare open_files query")?;
 
         let rows = statement
             .query_map(params![task_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
             })
             .context("failed to query open files")?;
 
         let mut open_files = Vec::new();
         for row in rows {
-            let (path, locked) = row.context("failed to decode open file row")?;
+            let (scope, path, locked) = row.context("failed to decode open file row")?;
             open_files.push(PersistedOpenFile {
+                scope,
                 path: PathBuf::from(path),
                 locked: locked != 0,
             });

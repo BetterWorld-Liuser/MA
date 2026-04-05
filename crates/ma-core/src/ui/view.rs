@@ -4,28 +4,29 @@ use indexmap::IndexMap;
 
 use crate::agent::{AgentSession, AgentStatusPhase, AgentToolStatus, DebugRound, DebugToolCall};
 use crate::context::{
-    ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role,
-    SystemStatus, ToolSummary, join_text_blocks,
+    ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus,
+    ToolSummary, join_text_blocks,
 };
 use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
-use crate::settings::{ProviderRecord, ProviderSettingsSnapshot};
+use crate::settings::{ProviderModelRecord, ProviderRecord, ProviderSettingsSnapshot};
 use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
 
 use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
 use super::{
     UiAgentStatusPhase, UiAgentToolStatus, UiContextPressureView, UiContextUsageSectionView,
     UiContextUsageView, UiDebugRoundView, UiDebugToolCallView, UiDebugTraceView,
-    UiFileSnapshotView, UiHintView, UiModifiedByView, UiNoteView, UiOpenFileView,
-    UiImageAttachmentView, UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot,
-    UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary,
-    UiToolSummaryView, UiTurnView,
+    UiFileSnapshotView, UiHintView, UiImageAttachmentView, UiModelCapabilitiesView,
+    UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView, UiProviderSettingsView,
+    UiProviderView, UiRoleView, UiRuntimeSnapshot, UiShellView, UiSkillView, UiSystemStatusView,
+    UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
 };
 
 impl UiTaskSnapshot {
     pub fn from_persisted(task: PersistedTask) -> Self {
         let PersistedTask {
             task,
+            active_agent,
             history,
             notes,
             open_files,
@@ -34,12 +35,14 @@ impl UiTaskSnapshot {
 
         Self {
             task: UiTaskSummary::from(task),
+            active_agent,
             history: history.turns.into_iter().map(UiTurnView::from).collect(),
             notes: notes
                 .into_iter()
-                .map(|(id, note)| UiNoteView {
-                    id,
-                    content: note.content,
+                .map(|note| UiNoteView {
+                    scope: note.scope,
+                    id: note.id,
+                    content: note.entry.content,
                 })
                 .collect(),
             open_files: open_files.into_iter().map(UiOpenFileView::from).collect(),
@@ -79,12 +82,13 @@ impl UiTaskSnapshot {
 
 impl UiProviderSettingsView {
     pub fn from_snapshot(database_path: PathBuf, snapshot: ProviderSettingsSnapshot) -> Self {
+        let provider_models = snapshot.provider_models;
         Self {
             database_path: clean_path(database_path),
             providers: snapshot
                 .providers
                 .into_iter()
-                .map(UiProviderView::from)
+                .map(|provider| UiProviderView::from_record(provider, &provider_models))
                 .collect(),
             default_provider_id: snapshot.default_provider_id,
             default_model: snapshot.default_model,
@@ -130,8 +134,8 @@ impl UiTaskSummary {
     }
 }
 
-impl From<ProviderRecord> for UiProviderView {
-    fn from(provider: ProviderRecord) -> Self {
+impl UiProviderView {
+    fn from_record(provider: ProviderRecord, provider_models: &[ProviderModelRecord]) -> Self {
         Self {
             id: provider.id,
             name: provider.name,
@@ -139,6 +143,31 @@ impl From<ProviderRecord> for UiProviderView {
             base_url: provider.base_url,
             api_key_hint: mask_api_key(&provider.api_key),
             created_at: system_time_to_unix(provider.created_at),
+            models: provider_models
+                .iter()
+                .filter(|model| model.provider_id == provider.id)
+                .cloned()
+                .map(UiProviderModelView::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<ProviderModelRecord> for UiProviderModelView {
+    fn from(model: ProviderModelRecord) -> Self {
+        Self {
+            id: model.id,
+            provider_id: model.provider_id,
+            model_id: model.model_id,
+            display_name: model.display_name,
+            capabilities: UiModelCapabilitiesView {
+                context_window: model.context_window,
+                max_output_tokens: model.max_output_tokens,
+                supports_tool_use: model.supports_tool_use,
+                supports_vision: model.supports_vision,
+                supports_audio: model.supports_audio,
+                supports_pdf: model.supports_pdf,
+            },
         }
     }
 }
@@ -162,6 +191,7 @@ impl From<DisplayTurn> for UiTurnView {
     fn from(turn: DisplayTurn) -> Self {
         Self {
             role: UiRoleView::from(turn.role),
+            agent: turn.agent,
             content: join_text_blocks(&turn.content),
             images: turn
                 .content
@@ -194,9 +224,10 @@ fn image_attachment_from_content_block(
     };
 
     let display_name = name.clone().or_else(|| {
-        source_path
-            .as_ref()
-            .and_then(|path| path.file_name().map(|value| value.to_string_lossy().into_owned()))
+        source_path.as_ref().and_then(|path| {
+            path.file_name()
+                .map(|value| value.to_string_lossy().into_owned())
+        })
     });
     let normalized_source_path = source_path.clone().map(clean_path);
     Some(UiImageAttachmentView {
@@ -206,11 +237,7 @@ fn image_attachment_from_content_block(
             .unwrap_or_else(|| format!("inline-image-{index}")),
         name: display_name.unwrap_or_else(|| format!("image-{index}")),
         media_type: media_type.clone(),
-        data_url: format!(
-            "data:{};base64,{}",
-            media_type,
-            data_base64
-        ),
+        data_url: format!("data:{};base64,{}", media_type, data_base64),
         source_path: normalized_source_path,
     })
 }
@@ -278,6 +305,7 @@ impl From<DebugToolCall> for UiDebugToolCallView {
 impl From<PersistedOpenFile> for UiOpenFileView {
     fn from(open_file: PersistedOpenFile) -> Self {
         Self {
+            scope: open_file.scope,
             path: clean_path(open_file.path),
             locked: open_file.locked,
             snapshot: None,

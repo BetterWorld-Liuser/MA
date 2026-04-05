@@ -81,6 +81,7 @@ struct ProviderModel {
 struct ModelCapabilities {
     context_window: u32,         // 最大输入 token 数
     max_output_tokens: u32,      // 最大输出 token 数
+    supports_tool_use: bool,     // 工具调用（function calling）
     supports_vision: bool,       // 图片输入
     supports_audio: bool,        // 音频输入（预留）
     supports_pdf: bool,          // PDF 原生输入（预留）
@@ -122,11 +123,12 @@ CREATE TABLE provider_models (
     provider_id      INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     model_id         TEXT    NOT NULL,
     display_name     TEXT    NOT NULL,
-    context_window   INTEGER NOT NULL DEFAULT 131072,  -- tokens
-    max_output       INTEGER NOT NULL DEFAULT 4096,    -- tokens
-    supports_vision  INTEGER NOT NULL DEFAULT 0,       -- boolean
-    supports_audio   INTEGER NOT NULL DEFAULT 0,       -- boolean
-    supports_pdf     INTEGER NOT NULL DEFAULT 0        -- boolean
+    context_window     INTEGER NOT NULL DEFAULT 131072,  -- tokens
+    max_output         INTEGER NOT NULL DEFAULT 4096,    -- tokens
+    supports_tool_use  INTEGER NOT NULL DEFAULT 0,       -- boolean
+    supports_vision    INTEGER NOT NULL DEFAULT 0,       -- boolean
+    supports_audio     INTEGER NOT NULL DEFAULT 0,       -- boolean
+    supports_pdf       INTEGER NOT NULL DEFAULT 0        -- boolean
 );
 
 -- 全局键值设置
@@ -162,7 +164,7 @@ CREATE TABLE settings (
 1. 用户在设置页的手动覆盖（compat provider 的能力勾选、已知 provider 的自定义值）
 2. March 内置的模型能力表（已知 provider 的已知模型）
 3. provider `/models` 返回的元数据（best-effort 解析）
-4. 保守默认值（纯文本、128K context、4K output）
+4. 保守默认值（无工具调用、纯文本、128K context、4K output）
 ```
 
 已知 provider（Anthropic / OpenAI / Gemini）的内置模型，能力随 March 版本更新维护，正常情况下用户不需要手动配置。`/models` 解析作为第三优先级，主要服务于用户手填了一个内置表里没有的新模型 ID 的场景。
@@ -174,6 +176,7 @@ CREATE TABLE settings (
 | 消费方 | 使用的能力字段 |
 |--------|-------------|
 | 上下文预算（右侧面板 context usage） | `context_window` |
+| agent loop 可用性 | `supports_tool_use` → 不支持时降级为纯对话模式，不注入任何工具定义 |
 | 工具集动态裁剪 | `supports_vision` → 决定是否注入 `view_image` 工具 |
 | 图片输入通道 | `supports_vision` → 决定是否允许粘贴/拖入图片、`@` 引用图片文件 |
 | 输出截断 | `max_output_tokens` |
@@ -325,15 +328,33 @@ Base URL [http://localhost:11434/v1]  （必填）
 上下文窗口   [131072                ]  tokens
 最大输出     [8192                  ]  tokens
 
-输入能力
-  [✓] 图片    [ ] 音频    [ ] PDF
-
-                              [取消]  [确定]
+能力
+  [✓] 工具调用  [✓] 图片    [ ] 音频    [ ] PDF
 ```
 
-- 能力勾选默认全部关闭（保守假设纯文本），用户按实际模型能力手动开启
+- 能力勾选默认全部关闭（保守假设纯文本、无工具调用），用户按实际模型能力手动开启
 - 上下文窗口和最大输出有合理默认值（128K / 4K），用户可按需调整
 - 已知 provider 的内置模型不需要这些字段，能力由 March 内置表提供；但如果用户对已知 provider 手填了一个内置表里没有的 model_id，同样展示这些配置项
+
+### 已知 Provider 的能力覆盖
+
+已知 provider（Anthropic / OpenAI / Gemini）的内置模型通常不需要用户配置能力，但某些场景下用户可能需要覆盖内置值（例如 provider 更新了模型的 context window，March 版本还没跟上）。
+
+在 Provider 编辑页的模型列表中，内置模型右侧显示能力摘要和覆盖入口：
+
+```
+模型列表
+  claude-sonnet-4-6     200K · 16K · 工具 · 图片    [覆盖]
+  claude-opus-4-6       200K · 32K · 工具 · 图片    [覆盖]
+```
+
+点击 **[覆盖]** 展开与 OpenAICompat 相同的能力编辑表单，但各字段预填内置值，用户只改需要覆盖的。覆盖后显示标记，并提供 **[恢复内置值]** 快捷操作：
+
+```
+  claude-sonnet-4-6     200K · 32K · 工具 · 图片   (已覆盖) [编辑] [恢复内置值]
+```
+
+覆盖值写入 `provider_models` 表，解析优先级链自然生效（用户覆盖 > 内置表）。恢复内置值 = 删除该行记录。
 
 ---
 

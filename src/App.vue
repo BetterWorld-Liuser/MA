@@ -85,8 +85,10 @@
         @close="closeSettings"
         @update-theme="setTheme"
         @save-provider="saveProvider"
+        @save-provider-model="saveProviderModel"
         @test-provider="testProviderConnection"
         @delete-provider="confirmDeleteProvider"
+        @delete-provider-model="deleteProviderModel"
         @save-default-provider="saveDefaultProvider"
         @request-models="loadProviderModelsForSettings"
         @request-probe-models="requestProbeModels"
@@ -188,7 +190,9 @@ const {
   closeSettings,
   setTheme,
   saveProvider,
+  saveProviderModel,
   testProviderConnection,
+  deleteProviderModel,
   requestProbeModels,
   confirmDeleteProvider,
   saveDefaultProvider,

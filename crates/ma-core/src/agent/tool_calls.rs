@@ -200,6 +200,18 @@ impl AgentSession {
     }
 
     pub(super) fn track_written_file(&mut self, path: &Path) -> Result<()> {
+        let scope = self.active_agent_name().to_string();
+        if !self
+            .open_files
+            .iter()
+            .any(|entry| entry.scope == scope && entry.path == path)
+        {
+            self.open_files.push(crate::storage::PersistedOpenFile {
+                scope,
+                path: path.to_path_buf(),
+                locked: false,
+            });
+        }
         if self.open_file_snapshots().contains_key(path) {
             self.watcher
                 .store()

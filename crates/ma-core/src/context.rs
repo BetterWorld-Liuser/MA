@@ -296,7 +296,8 @@ impl ContentBlock {
                 name.clone()
                     .or_else(|| {
                         source_path.as_ref().and_then(|path| {
-                            path.file_name().map(|value| value.to_string_lossy().into_owned())
+                            path.file_name()
+                                .map(|value| value.to_string_lossy().into_owned())
                         })
                     })
                     .unwrap_or_else(|| "image".to_string()),
@@ -355,6 +356,7 @@ impl ConversationHistory {
 #[derive(Debug, Clone)]
 pub struct DisplayTurn {
     pub role: Role,
+    pub agent: String,
     pub content: Vec<ContentBlock>,
     pub tool_calls: Vec<ToolSummary>,
     pub timestamp: SystemTime,
@@ -370,14 +372,21 @@ pub struct ToolSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatTurn {
     pub role: Role,
+    pub agent: String,
     pub content: Vec<ContentBlock>,
     pub timestamp: SystemTime,
 }
 
 pub fn render_chat_turn_for_prompt(turn: &ChatTurn) -> String {
+    let speaker = match turn.role {
+        Role::Assistant => format!("Assistant({})", turn.agent),
+        Role::User => "User".to_string(),
+        Role::System => "System".to_string(),
+        Role::Tool => "Tool".to_string(),
+    };
     format!(
-        "{:?} @ {}: {}",
-        turn.role,
+        "{} @ {}: {}",
+        speaker,
         format_prompt_timestamp(turn.timestamp),
         render_content_blocks_for_prompt(&turn.content)
     )
@@ -528,6 +537,7 @@ impl ChatTurn {
         match turn.role {
             Role::User | Role::Assistant => Some(Self {
                 role: turn.role,
+                agent: turn.agent.clone(),
                 content: turn.content.clone(),
                 timestamp: turn.timestamp,
             }),
@@ -550,7 +560,8 @@ fn trim_older_chat_images(turns: &mut [ChatTurn], max_recent_chat_image_turns: u
             continue;
         }
 
-        turn.content.retain(|block| matches!(block, ContentBlock::Text { .. }));
+        turn.content
+            .retain(|block| matches!(block, ContentBlock::Text { .. }));
     }
 }
 
@@ -636,6 +647,7 @@ mod tests {
     fn prompt_chat_render_includes_role_and_timestamp() {
         let rendered = render_chat_turn_for_prompt(&ChatTurn {
             role: Role::User,
+            agent: "march".to_string(),
             content: vec![ContentBlock::text("hello")],
             timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(42),
         });
@@ -693,6 +705,7 @@ mod tests {
     fn display_turn(role: Role, content: &str) -> DisplayTurn {
         DisplayTurn {
             role,
+            agent: "march".to_string(),
             content: vec![ContentBlock::text(content.to_string())],
             tool_calls: Vec::new(),
             timestamp: SystemTime::UNIX_EPOCH,

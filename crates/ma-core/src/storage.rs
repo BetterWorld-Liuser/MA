@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use indexmap::IndexMap;
 use rusqlite::{Connection, params};
 
+use crate::agents::MARCH_AGENT_NAME;
 use crate::context::{ConversationHistory, Hint, NoteEntry};
 use crate::paths::clean_path;
 
@@ -34,6 +34,7 @@ pub struct TaskRecord {
     pub working_directory: PathBuf,
     pub selected_provider_id: Option<i64>,
     pub selected_model: Option<String>,
+    pub active_agent: String,
     pub created_at: SystemTime,
     pub last_active: SystemTime,
 }
@@ -47,23 +48,33 @@ pub enum TaskTitleSource {
 
 #[derive(Debug, Clone)]
 pub struct PersistedOpenFile {
+    pub scope: String,
     pub path: PathBuf,
     pub locked: bool,
 }
 
 #[derive(Debug, Clone)]
+pub struct PersistedNote {
+    pub scope: String,
+    pub id: String,
+    pub entry: NoteEntry,
+}
+
+#[derive(Debug, Clone)]
 pub struct PersistedTask {
     pub task: TaskRecord,
+    pub active_agent: String,
     pub history: ConversationHistory,
-    pub notes: IndexMap<String, NoteEntry>,
+    pub notes: Vec<PersistedNote>,
     pub open_files: Vec<PersistedOpenFile>,
     pub hints: Vec<Hint>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PersistedTaskState {
+    pub active_agent: String,
     pub history: ConversationHistory,
-    pub notes: IndexMap<String, NoteEntry>,
+    pub notes: Vec<PersistedNote>,
     pub open_files: Vec<PersistedOpenFile>,
     pub hints: Vec<Hint>,
     pub last_active: SystemTime,
@@ -128,6 +139,7 @@ impl MaStorage {
                     working_directory TEXT,
                     selected_provider_id INTEGER,
                     selected_model TEXT,
+                    active_agent TEXT NOT NULL DEFAULT 'march',
                     created_at  INTEGER NOT NULL,
                     last_active INTEGER NOT NULL
                 );
@@ -136,6 +148,7 @@ impl MaStorage {
                     id             INTEGER PRIMARY KEY,
                     task_id        INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
                     role           TEXT    NOT NULL,
+                    agent          TEXT    NOT NULL DEFAULT 'march',
                     content        TEXT    NOT NULL,
                     tool_summaries TEXT,
                     created_at     INTEGER NOT NULL
@@ -143,18 +156,20 @@ impl MaStorage {
 
                 CREATE TABLE IF NOT EXISTS notes (
                     task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    scope    TEXT    NOT NULL DEFAULT 'shared',
                     note_id  TEXT    NOT NULL,
                     content  TEXT    NOT NULL,
                     position INTEGER NOT NULL,
-                    PRIMARY KEY (task_id, note_id)
+                    PRIMARY KEY (task_id, scope, note_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS open_files (
                     task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    scope    TEXT    NOT NULL DEFAULT 'shared',
                     path     TEXT    NOT NULL,
                     position INTEGER NOT NULL,
                     locked   INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (task_id, path)
+                    PRIMARY KEY (task_id, scope, path)
                 );
 
                 CREATE TABLE IF NOT EXISTS hints (
@@ -197,6 +212,7 @@ impl MaStorage {
         let mut has_working_directory = false;
         let mut has_selected_provider_id = false;
         let mut has_selected_model = false;
+        let mut has_active_agent = false;
         for column in columns {
             let column = column.context("failed to decode tasks table_info row")?;
             if column == "title_source" {
@@ -213,6 +229,9 @@ impl MaStorage {
             }
             if column == "selected_model" {
                 has_selected_model = true;
+            }
+            if column == "active_agent" {
+                has_active_agent = true;
             }
         }
 
@@ -264,6 +283,24 @@ impl MaStorage {
                 .context("failed to add tasks.selected_model column")?;
         }
 
+        if !has_active_agent {
+            self.connection
+                .execute(
+                    "ALTER TABLE tasks ADD COLUMN active_agent TEXT NOT NULL DEFAULT 'march'",
+                    [],
+                )
+                .context("failed to add tasks.active_agent column")?;
+        }
+
+        self.connection
+            .execute(
+                "UPDATE tasks
+                 SET active_agent = ?1
+                 WHERE active_agent IS NULL OR TRIM(active_agent) = ''",
+                params![MARCH_AGENT_NAME],
+            )
+            .context("failed to backfill tasks.active_agent column")?;
+
         Ok(())
     }
 }
@@ -271,6 +308,8 @@ impl MaStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::SHARED_SCOPE;
+    use indexmap::IndexMap;
     use std::time::{Duration, UNIX_EPOCH};
 
     use crate::context::{ContentBlock, DisplayTurn, Role, ToolSummary};
@@ -289,15 +328,18 @@ mod tests {
             .save_task_state(
                 task.id,
                 &PersistedTaskState {
+                    active_agent: MARCH_AGENT_NAME.to_string(),
                     history: ConversationHistory::new(vec![
                         DisplayTurn {
                             role: Role::User,
+                            agent: MARCH_AGENT_NAME.to_string(),
                             content: vec![ContentBlock::text("继续")],
                             tool_calls: Vec::new(),
                             timestamp: UNIX_EPOCH + Duration::from_secs(1),
                         },
                         DisplayTurn {
                             role: Role::Assistant,
+                            agent: MARCH_AGENT_NAME.to_string(),
                             content: vec![ContentBlock::text("开始实现持久化")],
                             tool_calls: vec![ToolSummary {
                                 name: "write_file".to_string(),
@@ -306,13 +348,22 @@ mod tests {
                             timestamp: UNIX_EPOCH + Duration::from_secs(2),
                         },
                     ]),
-                    notes,
+                    notes: notes
+                        .into_iter()
+                        .map(|(id, entry)| PersistedNote {
+                            scope: SHARED_SCOPE.to_string(),
+                            id,
+                            entry,
+                        })
+                        .collect(),
                     open_files: vec![
                         PersistedOpenFile {
+                            scope: SHARED_SCOPE.to_string(),
                             path: workdir.join("src").join("main.rs"),
                             locked: false,
                         },
                         PersistedOpenFile {
+                            scope: SHARED_SCOPE.to_string(),
                             path: workdir.join("src").join("context.rs"),
                             locked: true,
                         },

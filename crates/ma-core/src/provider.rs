@@ -458,6 +458,7 @@ mod tests {
             hints: vec![Hint::new("tests red", None, None)],
             recent_chat: vec![ChatTurn {
                 role: Role::User,
+                agent: "march".to_string(),
                 content: vec![ContentBlock::text("hello")],
                 timestamp: SystemTime::now(),
             }],

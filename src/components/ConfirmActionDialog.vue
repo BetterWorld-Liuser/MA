@@ -17,7 +17,7 @@
       <AlertDialogFooter class="border-t border-white/8 px-5 py-4 sm:justify-end">
         <AlertDialogCancel :disabled="busy">取消</AlertDialogCancel>
         <AlertDialogAction
-          class="!border-[rgba(224,82,82,0.25)] !bg-[rgba(224,82,82,0.16)] !text-[#ffb2b2] hover:!bg-[rgba(224,82,82,0.24)]"
+          class="!border-[color:var(--color-error)] !bg-[color:var(--color-error)] !text-[var(--destructive-foreground)] hover:!border-[#b93f3f] hover:!bg-[#b93f3f] focus-visible:!ring-[rgba(224,82,82,0.28)]"
           :disabled="busy"
           @click="emit('confirm')"
         >

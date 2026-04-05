@@ -18,7 +18,7 @@ use crate::tools::ToolRuntime;
 
 use super::{AGENTS_FILENAME, CommandExecution};
 
-pub(super) fn default_system_core() -> &'static str {
+pub(crate) fn default_system_core() -> &'static str {
     r#"You are March, an agentic coding partner whose source of truth is the filesystem.
 
 Role:
@@ -223,6 +223,7 @@ pub(super) fn normalize_open_files_for_workspace(
             continue;
         }
         normalized.push(PersistedOpenFile {
+            scope: open_file.scope,
             path,
             locked: open_file.locked,
         });
@@ -233,6 +234,7 @@ pub(super) fn normalize_open_files_for_workspace(
         normalized.insert(
             0,
             PersistedOpenFile {
+                scope: crate::agents::SHARED_SCOPE.to_string(),
                 path: agents_path,
                 locked: true,
             },

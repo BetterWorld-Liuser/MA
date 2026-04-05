@@ -139,11 +139,11 @@ export function useProviderSettings({
   }) {
     providerTestMessage.value = '';
     providerTestSuccess.value = false;
-    let result: ProviderConnectionTestResult | null = null;
+    const resultHolder: { value?: ProviderConnectionTestResult } = {};
     let failureMessage = '';
     await runWorkspaceAction(async () => {
       try {
-        result = await invoke<ProviderConnectionTestResult>('test_provider_connection', {
+        resultHolder.value = await invoke<ProviderConnectionTestResult>('test_provider_connection', {
           input,
         });
       } catch (error) {
@@ -151,6 +151,7 @@ export function useProviderSettings({
         throw error;
       }
     });
+    const result = resultHolder.value;
     if (result) {
       providerTestSuccess.value = result.success;
       providerTestMessage.value = result.message;
@@ -159,6 +160,33 @@ export function useProviderSettings({
       providerTestMessage.value = failureMessage || '测试连通性失败，请查看顶部错误信息。';
     }
     return result;
+  }
+
+  async function saveProviderModel(input: {
+    id?: number;
+    providerId: number;
+    modelId: string;
+    displayName: string;
+    contextWindow: number;
+    maxOutputTokens: number;
+    supportsToolUse: boolean;
+    supportsVision: boolean;
+    supportsAudio: boolean;
+    supportsPdf: boolean;
+  }) {
+    await runWorkspaceAction(async () => {
+      providerSettings.value = await invoke<ProviderSettingsView>('upsert_provider_model', {
+        input,
+      });
+    });
+  }
+
+  async function deleteProviderModel(providerModelId: number) {
+    await runWorkspaceAction(async () => {
+      providerSettings.value = await invoke<ProviderSettingsView>('delete_provider_model', {
+        input: { providerModelId },
+      });
+    });
   }
 
   return {
@@ -178,6 +206,8 @@ export function useProviderSettings({
     saveProvider,
     testProviderConnection,
     deleteProvider,
+    saveProviderModel,
+    deleteProviderModel,
     saveDefaultProvider,
     loadProviderModelsForSettings,
     loadProbeModels,

@@ -134,15 +134,17 @@ export type BackendWorkspaceSnapshot = {
       working_directory: string;
       selected_model?: string | null;
     };
+    active_agent?: string;
     history: Array<{
       role: 'System' | 'User' | 'Assistant' | 'Tool';
+      agent?: string;
       content: string;
       images?: Array<{
         id: string;
         name: string;
-        media_type: string;
-        data_url: string;
-        source_path?: string | null;
+        mediaType: string;
+        dataUrl: string;
+        sourcePath?: string | null;
       }>;
       timestamp: number;
       tool_summaries: Array<{
@@ -151,23 +153,36 @@ export type BackendWorkspaceSnapshot = {
       }>;
     }>;
     notes: Array<{
+      scope?: string;
       id: string;
       content: string;
     }>;
     open_files: Array<{
+      scope?: string;
       path: string;
       locked: boolean;
-      snapshot?: {
-        Available?: {
-          last_modified_at: number;
-        };
-        Deleted?: {
-          last_seen_at: number;
-        };
-        Moved?: {
-          last_seen_at: number;
-        };
-      } | null;
+      snapshot?: (
+        | {
+            Available: {
+              path: string;
+              content: string;
+              last_modified_at: number;
+            };
+          }
+        | {
+            Deleted: {
+              path: string;
+              last_seen_at: number;
+            };
+          }
+        | {
+            Moved: {
+              path: string;
+              new_path: string;
+              last_seen_at: number;
+            };
+          }
+      ) | null;
     }>;
     hints: Array<{
       content: string;
@@ -293,8 +308,16 @@ export type ProviderModelsView = {
 };
 
 export type TaskModelSelectorView = {
-  current_provider_id?: number | null;
-  current_model: string;
+  currentProviderId?: number | null;
+  currentModel: string;
+  currentModelCapabilities: {
+    contextWindow: number;
+    maxOutputTokens: number;
+    supportsToolUse: boolean;
+    supportsVision: boolean;
+    supportsAudio: boolean;
+    supportsPdf: boolean;
+  };
   providers: Array<{
     providerId?: number | null;
     providerName: string;
@@ -320,6 +343,20 @@ export type ProviderSettingsView = {
     baseUrl?: string | null;
     apiKeyHint: string;
     createdAt: number;
+    models: Array<{
+      id: number;
+      providerId: number;
+      modelId: string;
+      displayName?: string | null;
+      capabilities: {
+        contextWindow: number;
+        maxOutputTokens: number;
+        supportsToolUse: boolean;
+        supportsVision: boolean;
+        supportsAudio: boolean;
+        supportsPdf: boolean;
+      };
+    }>;
   }>;
   defaultProviderId?: number | null;
   defaultModel?: string | null;
@@ -377,13 +414,13 @@ export const mockWorkspace: WorkspaceView = {
   skills: [
     {
       name: 'rust',
-      path: '~/.agent/skills/rust/SKILL.md',
+      path: 'C:/Users/CPCli/.agent/skills/rust/SKILL.md',
       description: 'Rust 项目工作流',
       opened: true,
     },
     {
       name: 'api-style',
-      path: './.march/skills/api-style/SKILL.md',
+      path: 'D:/playground/MA/.march/skills/api-style/SKILL.md',
       description: '本项目 API 风格约定',
       opened: false,
     },
@@ -444,16 +481,16 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
     selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
     chat: activeTask?.history.map((turn) => ({
       role: turn.role === 'User' ? 'user' : 'assistant',
-      author: turn.role === 'User' ? 'User' : 'March',
+      author: turn.role === 'User' ? 'User' : (turn.agent || 'March'),
       time: formatTime(turn.timestamp),
       timestamp: turn.timestamp * 1000,
       content: turn.content,
       images: turn.images?.map((image) => ({
         id: image.id,
         name: image.name,
-        previewUrl: image.data_url,
-        mediaType: image.media_type,
-        sourcePath: image.source_path ?? undefined,
+        previewUrl: image.dataUrl,
+        mediaType: image.mediaType,
+        sourcePath: image.sourcePath ?? undefined,
       })),
       tools: turn.tool_summaries.map((tool) => ({
         label: tool.name,

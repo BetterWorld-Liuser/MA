@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agents;
 pub mod config;
 pub mod context;
 pub mod model_capabilities;

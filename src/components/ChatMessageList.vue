@@ -6,8 +6,8 @@
     </div>
 
     <article
-      v-for="message in chat"
-      :key="`${message.role}-${message.time}-${message.author}`"
+      v-for="(message, index) in chat"
+      :key="messageKey(message, index)"
       class="chat-row"
       :class="message.role === 'assistant' ? 'chat-row-assistant' : 'chat-row-user'"
     >
@@ -22,6 +22,7 @@
         <div
           class="message-bubble"
           :class="message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user'"
+          @click.capture="message.role === 'assistant' ? handleMarkdownLinkClick($event) : undefined"
         >
           <div v-if="message.images?.length" class="message-image-grid">
             <button
@@ -39,7 +40,7 @@
           <MarkdownRender
             v-if="message.role === 'assistant'"
             custom-id="ma-chat-message"
-            :content="message.content"
+            :content="renderAssistantContent(message.content)"
             :final="true"
             :max-live-nodes="0"
             :render-batch-size="16"
@@ -85,7 +86,11 @@
           <time class="font-mono text-[9px] text-text-dim">...</time>
         </div>
 
-        <div class="message-bubble message-bubble-assistant opacity-90" :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''">
+        <div
+          class="message-bubble message-bubble-assistant opacity-90"
+          :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''"
+          @click.capture="handleMarkdownLinkClick"
+        >
           <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
             <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
               <span></span>
@@ -97,7 +102,7 @@
           <MarkdownRender
             v-if="liveTurn.content"
             custom-id="ma-chat-streaming"
-            :content="liveTurn.content"
+            :content="renderAssistantContent(liveTurn.content)"
             :final="liveTurn.state !== 'streaming'"
             :max-live-nodes="0"
             :render-batch-size="16"
@@ -154,6 +159,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
+import { invoke } from '@tauri-apps/api/core';
 import checkIcon from '@iconify-icons/lucide/check';
 import copyIcon from '@iconify-icons/lucide/copy';
 import MarkdownRender from 'markstream-vue';
@@ -171,6 +177,8 @@ const copiedContent = ref('');
 const previewImage = ref<ChatImageAttachment | null>(null);
 const hasInitializedTaskPosition = ref(false);
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
+const CODE_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]+`/g;
+const BARE_URL_PATTERN = /https?:\/\/[^\s<]+/g;
 
 const chatLength = computed(() => props.chat.length);
 
@@ -265,5 +273,100 @@ function normalizeCopyContent(content: string) {
 
 function formatToolSummaryLabel(count: number) {
   return `${count} 个动作`;
+}
+
+function renderAssistantContent(content: string) {
+  return autolinkBareUrls(content);
+}
+
+function autolinkBareUrls(content: string) {
+  let result = '';
+  let lastIndex = 0;
+
+  for (const match of content.matchAll(CODE_SPAN_PATTERN)) {
+    const matchIndex = match.index ?? 0;
+    result += autolinkTextSegment(content.slice(lastIndex, matchIndex));
+    result += match[0];
+    lastIndex = matchIndex + match[0].length;
+  }
+
+  result += autolinkTextSegment(content.slice(lastIndex));
+  return result;
+}
+
+function autolinkTextSegment(segment: string) {
+  return segment.replace(BARE_URL_PATTERN, (rawUrl, offset, source) => {
+    const previousChar = offset > 0 ? source[offset - 1] : '';
+    if (previousChar === '(' || previousChar === '[' || previousChar === '<' || previousChar === '"' || previousChar === '\'') {
+      return rawUrl;
+    }
+
+    const trimmed = trimTrailingUrlPunctuation(rawUrl);
+    if (!trimmed.url || !isOpenableExternalUrl(trimmed.url)) {
+      return rawUrl;
+    }
+
+    return `<${trimmed.url}>${trimmed.trailing}`;
+  });
+}
+
+function trimTrailingUrlPunctuation(rawUrl: string) {
+  let url = rawUrl;
+  let trailing = '';
+
+  while (url.length > 0) {
+    const lastChar = url[url.length - 1];
+    if (!'),.!?;:'.includes(lastChar)) {
+      break;
+    }
+    trailing = `${lastChar}${trailing}`;
+    url = url.slice(0, -1);
+  }
+
+  return { url, trailing };
+}
+
+function isOpenableExternalUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function handleMarkdownLinkClick(event: MouseEvent) {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const anchor = target.closest('a[href]');
+  if (!(anchor instanceof HTMLAnchorElement)) {
+    return;
+  }
+
+  const href = anchor.getAttribute('href')?.trim() ?? '';
+  if (!isOpenableExternalUrl(href)) {
+    return;
+  }
+
+  event.preventDefault();
+
+  try {
+    await invoke('open_external_url', { url: href });
+  } catch {
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }
+}
+
+function messageKey(message: ChatMessage, index: number) {
+  return [
+    message.role,
+    message.author,
+    message.timestamp ?? message.time,
+    message.content,
+    index,
+  ].join('::');
 }
 </script>

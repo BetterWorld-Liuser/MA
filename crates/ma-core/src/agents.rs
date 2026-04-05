@@ -1,0 +1,195 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+use crate::paths::clean_path;
+use crate::settings::march_settings_dir;
+
+pub const MARCH_AGENT_NAME: &str = "march";
+pub const SHARED_SCOPE: &str = "shared";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfile {
+    pub name: String,
+    pub display_name: String,
+    pub system_prompt: String,
+    pub avatar_color: String,
+    pub provider_id: Option<i64>,
+    pub model_id: Option<String>,
+}
+
+impl AgentProfile {
+    pub fn built_in_march() -> Self {
+        Self {
+            name: MARCH_AGENT_NAME.to_string(),
+            display_name: "March".to_string(),
+            system_prompt: crate::agent::default_system_core().to_string(),
+            avatar_color: "#64748B".to_string(),
+            provider_id: None,
+            model_id: None,
+        }
+    }
+}
+
+pub fn load_agent_profiles(working_directory: &Path) -> Result<Vec<AgentProfile>> {
+    let mut profiles = HashMap::new();
+    let march = AgentProfile::built_in_march();
+    profiles.insert(march.name.clone(), march);
+
+    let user_dir = march_settings_dir()?.join("agents");
+    for profile in load_profiles_from_dir(&user_dir)? {
+        profiles.insert(profile.name.clone(), profile);
+    }
+
+    let project_dir = working_directory.join(".march").join("agents");
+    for profile in load_profiles_from_dir(&project_dir)? {
+        profiles.insert(profile.name.clone(), profile);
+    }
+
+    let mut ordered = profiles.into_values().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.name.cmp(&right.name));
+    if let Some(index) = ordered
+        .iter()
+        .position(|profile| profile.name == MARCH_AGENT_NAME)
+    {
+        let march = ordered.remove(index);
+        ordered.insert(0, march);
+    }
+    Ok(ordered)
+}
+
+fn load_profiles_from_dir(dir: &Path) -> Result<Vec<AgentProfile>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = fs::read_dir(dir)
+        .with_context(|| format!("failed to read agents directory {}", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to enumerate agents directory {}", dir.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+
+    let mut profiles = Vec::new();
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read agent profile {}", path.display()))?;
+        if let Some(profile) = parse_agent_profile(&path, &content)? {
+            profiles.push(profile);
+        }
+    }
+    Ok(profiles)
+}
+
+fn parse_agent_profile(path: &Path, content: &str) -> Result<Option<AgentProfile>> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let (frontmatter, body) = split_frontmatter(content);
+    let frontmatter = frontmatter.unwrap_or_default();
+    let mut name = None;
+    let mut display_name = None;
+    let mut avatar_color = None;
+    let mut model = None;
+
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = trim_wrapped_quotes(value.trim());
+        match key {
+            "name" => name = Some(value.to_string()),
+            "display_name" => display_name = Some(value.to_string()),
+            "avatar_color" => avatar_color = Some(value.to_string()),
+            "model" => model = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    let file_stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("agent")
+        .trim()
+        .to_string();
+    let name = normalize_agent_name(name.unwrap_or(file_stem));
+    if name.is_empty() {
+        return Ok(None);
+    }
+
+    let model_id = parse_model_binding(model.as_deref());
+    let display_name = display_name.unwrap_or_else(|| name.clone());
+    Ok(Some(AgentProfile {
+        name,
+        display_name,
+        system_prompt: body.trim().to_string(),
+        avatar_color: avatar_color.unwrap_or_else(|| "#64748B".to_string()),
+        provider_id: None,
+        model_id,
+    }))
+}
+
+fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
+    let normalized = content.trim_start_matches('\u{feff}');
+    if !normalized.starts_with("---\n") && !normalized.starts_with("---\r\n") {
+        return (None, normalized);
+    }
+
+    let separator = if normalized.starts_with("---\r\n") {
+        "\r\n---"
+    } else {
+        "\n---"
+    };
+    let body_start = if normalized.starts_with("---\r\n") {
+        5
+    } else {
+        4
+    };
+    if let Some(end_index) = normalized[body_start..].find(separator) {
+        let frontmatter_end = body_start + end_index;
+        let body = &normalized[(frontmatter_end + separator.len())..];
+        let body = body
+            .strip_prefix("\r\n")
+            .or_else(|| body.strip_prefix('\n'))
+            .unwrap_or(body);
+        return (Some(&normalized[body_start..frontmatter_end]), body);
+    }
+
+    (None, normalized)
+}
+
+fn normalize_agent_name(raw: String) -> String {
+    raw.trim().to_ascii_lowercase().replace(' ', "-")
+}
+
+fn trim_wrapped_quotes(raw: &str) -> &str {
+    raw.trim_matches('"').trim_matches('\'')
+}
+
+fn parse_model_binding(raw: Option<&str>) -> Option<String> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return None;
+    };
+    Some(raw.to_string())
+}
+
+pub fn resolve_agent_file_path(working_directory: &Path, name: &str) -> PathBuf {
+    clean_path(
+        working_directory
+            .join(".march")
+            .join("agents")
+            .join(format!("{name}.md")),
+    )
+}

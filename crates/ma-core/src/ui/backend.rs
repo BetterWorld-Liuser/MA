@@ -8,9 +8,10 @@ use base64::Engine;
 use crate::agent::{
     AgentConfig, AgentProgressEvent, AgentSession, DebugRound, is_turn_cancelled_error,
 };
+use crate::agents::SHARED_SCOPE;
 use crate::context::{ContentBlock, ConversationHistory, join_text_blocks};
-use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
 use crate::paths::{canonicalize_clean, clean_path};
+use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
 use crate::settings::{ProviderType, SettingsStorage};
 use crate::storage::{PersistedTask, PersistedTaskState, TaskRecord, TaskTitleSource};
 
@@ -18,12 +19,12 @@ use super::provider::provider_config_for_task;
 use super::util::{resolve_context_window_fallback, system_time_to_unix};
 use super::{
     DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProgressEvent,
-    UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDebugTraceView,
-    UiDeleteNoteRequest, UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest,
-    UiComposerContentBlock, UiLoadWorkspaceImageRequest,
-    UiProviderSettingsView, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
-    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot, UiUpsertNoteRequest, UiUpsertProviderRequest,
+    UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock, UiCreateTaskRequest,
+    UiDebugTraceView, UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
+    UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiOpenFilesRequest, UiProviderSettingsView,
+    UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest, UiSendMessageRequest,
+    UiSetDefaultProviderRequest, UiSetTaskModelRequest, UiSetTaskWorkingDirectoryRequest,
+    UiTaskSnapshot, UiUpsertNoteRequest, UiUpsertProviderModelRequest, UiUpsertProviderRequest,
     UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
@@ -101,36 +102,32 @@ impl UiAppBackend {
         content: impl Into<String>,
     ) -> Result<()> {
         let mut session = self.load_session(task_id)?;
-        session.write_note(note_id, content);
+        session.write_note_in_scope(SHARED_SCOPE.to_string(), note_id, content);
         self.save_session(task_id, &session)
     }
 
     pub fn delete_note(&mut self, task_id: i64, note_id: &str) -> Result<()> {
         let mut session = self.load_session(task_id)?;
-        session.remove_note(note_id);
+        session.remove_note_in_scope(SHARED_SCOPE.to_string(), note_id);
         self.save_session(task_id, &session)
     }
 
     pub fn set_open_file_lock(&mut self, task_id: i64, path: PathBuf, locked: bool) -> Result<()> {
         let mut session = self.load_session(task_id)?;
-        if locked {
-            session.lock_file(path)?;
-        } else {
-            session.unlock_file(path)?;
-        }
+        session.set_lock_file_in_scope(SHARED_SCOPE.to_string(), path, locked)?;
         self.save_session(task_id, &session)
     }
 
     pub fn close_open_file(&mut self, task_id: i64, path: PathBuf) -> Result<()> {
         let mut session = self.load_session(task_id)?;
-        session.close_file(path)?;
+        session.close_file_in_scope(SHARED_SCOPE.to_string(), path)?;
         self.save_session(task_id, &session)
     }
 
     pub fn open_files(&mut self, task_id: i64, paths: Vec<PathBuf>) -> Result<()> {
         let mut session = self.load_session(task_id)?;
         for path in paths {
-            session.open_file(path)?;
+            session.open_file_in_scope(SHARED_SCOPE.to_string(), path)?;
         }
         self.save_session(task_id, &session)
     }
@@ -241,6 +238,11 @@ impl UiAppBackend {
                     resolve_context_window_fallback(Some(provider_config.model.as_str()))
                 });
         let mut session = self.load_session(task_id)?;
+        if let Some(agent_name) = detect_agent_mention(&content_text, &session) {
+            session.set_active_agent(agent_name);
+            self.storage
+                .update_task_active_agent(task_id, session.active_agent_name())?;
+        }
         let turn_id = format!(
             "turn-{}-{}",
             task_id,
@@ -395,6 +397,7 @@ impl UiAppBackend {
         context_budget_tokens: usize,
     ) -> Result<UiTaskSnapshot> {
         let PersistedTaskState {
+            active_agent,
             history,
             notes,
             open_files,
@@ -405,6 +408,7 @@ impl UiAppBackend {
 
         Ok(UiTaskSnapshot::from_persisted(PersistedTask {
             task,
+            active_agent,
             history,
             notes,
             open_files,
@@ -574,8 +578,8 @@ impl UiAppBackend {
 
     fn normalize_task_working_directory(&self, path: Option<PathBuf>) -> Result<PathBuf> {
         let requested = path.unwrap_or_else(|| self.workspace_path.clone());
-        let normalized =
-            canonicalize_clean(&requested).with_context(|| format!("failed to resolve {}", requested.display()))?;
+        let normalized = canonicalize_clean(&requested)
+            .with_context(|| format!("failed to resolve {}", requested.display()))?;
         if !normalized.is_dir() {
             bail!(
                 "working directory must be a directory: {}",
@@ -634,6 +638,41 @@ impl UiAppBackend {
         ))
     }
 
+    pub fn handle_upsert_provider_model(
+        &self,
+        request: UiUpsertProviderModelRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        settings.upsert_provider_model(
+            request.id,
+            request.provider_id,
+            request.model_id,
+            request.display_name,
+            request.context_window,
+            request.max_output_tokens,
+            request.supports_tool_use,
+            request.supports_vision,
+            request.supports_audio,
+            request.supports_pdf,
+        )?;
+        Ok(UiProviderSettingsView::from_snapshot(
+            settings.database_path().to_path_buf(),
+            settings.snapshot()?,
+        ))
+    }
+
+    pub fn handle_delete_provider_model(
+        &self,
+        request: UiDeleteProviderModelRequest,
+    ) -> Result<UiProviderSettingsView> {
+        let settings = SettingsStorage::open()?;
+        settings.delete_provider_model(request.provider_model_id)?;
+        Ok(UiProviderSettingsView::from_snapshot(
+            settings.database_path().to_path_buf(),
+            settings.snapshot()?,
+        ))
+    }
+
     pub fn handle_set_default_provider(
         &mut self,
         request: UiSetDefaultProviderRequest,
@@ -669,8 +708,9 @@ impl UiAppBackend {
     ) -> Result<UiWorkspaceImageView> {
         let working_directory = self.working_directory_for_task(request.task_id)?;
         let resolved_path = resolve_workspace_path(&working_directory, &request.path)?;
-        let media_type = infer_image_media_type(&resolved_path)
-            .ok_or_else(|| anyhow::anyhow!("unsupported image format: {}", resolved_path.display()))?;
+        let media_type = infer_image_media_type(&resolved_path).ok_or_else(|| {
+            anyhow::anyhow!("unsupported image format: {}", resolved_path.display())
+        })?;
         let bytes = fs::read(&resolved_path)
             .with_context(|| format!("failed to read image {}", resolved_path.display()))?;
 
@@ -761,11 +801,17 @@ fn resolve_workspace_path(working_directory: &Path, path: &Path) -> Result<PathB
         working_directory.join(path)
     };
 
-    canonicalize_clean(&candidate).with_context(|| format!("failed to resolve {}", candidate.display()))
+    canonicalize_clean(&candidate)
+        .with_context(|| format!("failed to resolve {}", candidate.display()))
 }
 
 fn infer_image_media_type(path: &Path) -> Option<&'static str> {
-    match path.extension()?.to_string_lossy().to_ascii_lowercase().as_str() {
+    match path
+        .extension()?
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
@@ -786,4 +832,23 @@ fn content_block_from_ui(block: UiComposerContentBlock) -> ContentBlock {
             name,
         } => ContentBlock::image(media_type, data_base64, source_path, name),
     }
+}
+
+fn detect_agent_mention(text: &str, session: &AgentSession) -> Option<String> {
+    text.split_whitespace().find_map(|segment| {
+        if !segment.contains('@') {
+            return None;
+        }
+        let candidate = segment
+            .trim()
+            .trim_start_matches('@')
+            .trim_matches(|ch: char| {
+                ch == ',' || ch == ':' || ch == '，' || ch == '：' || ch == '。' || ch == '!'
+            })
+            .to_ascii_lowercase();
+        if candidate.is_empty() {
+            return None;
+        }
+        session.has_agent(&candidate).then_some(candidate)
+    })
 }

@@ -98,6 +98,8 @@ export function useWorkspaceApp() {
     saveProvider,
     testProviderConnection,
     deleteProvider,
+    saveProviderModel,
+    deleteProviderModel,
     saveDefaultProvider,
     loadProviderModelsForSettings,
     loadProbeModels,
@@ -276,14 +278,15 @@ export function useWorkspaceApp() {
               : []),
             ...payload.images.map((image) => ({
               type: 'image',
-              mediaType: image.mediaType,
-              dataBase64: extractBase64Payload(image.previewUrl),
-              sourcePath: image.sourcePath ?? null,
+              media_type: image.mediaType,
+              data_base64: extractBase64Payload(image.previewUrl),
+              source_path: image.sourcePath ?? null,
               name: image.name,
             })),
           ],
         },
       });
+      clearLocalComposerMessages(taskId);
       clearLiveTurn(taskId);
       if (snapshot.value?.active_task?.task.id === taskId) {
         snapshot.value = nextSnapshot;
@@ -302,9 +305,10 @@ export function useWorkspaceApp() {
           state: 'error',
           statusLabel: '本轮执行失败',
           errorMessage: humanizeError(error),
-        };
+        } as const;
         upsertLiveTurn(taskId, failedTurn);
         archiveFailedTurn(taskId, failedTurn);
+        clearLiveTurn(taskId);
       }
       errorMessage.value = humanizeError(error);
     } finally {
@@ -571,6 +575,16 @@ export function useWorkspaceApp() {
     };
   }
 
+  function clearLocalComposerMessages(taskId: number) {
+    if (!(taskId in localComposerMessages.value)) {
+      return;
+    }
+
+    const nextMessages = { ...localComposerMessages.value };
+    delete nextMessages[taskId];
+    localComposerMessages.value = nextMessages;
+  }
+
   function mergeChatWithComposerMessages(taskId: number | undefined, chat: ChatMessage[]) {
     if (!taskId) {
       return chat;
@@ -688,6 +702,8 @@ export function useWorkspaceApp() {
     setTheme,
     saveProvider,
     testProviderConnection,
+    saveProviderModel,
+    deleteProviderModel,
     requestProbeModels,
     confirmDeleteProvider,
     saveDefaultProvider,

@@ -6,9 +6,7 @@ use genai::chat::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::context::{
-    AgentContext, ChatTurn, ContentBlock, render_file_snapshot_for_prompt,
-};
+use crate::context::{AgentContext, ChatTurn, ContentBlock, render_file_snapshot_for_prompt};
 use crate::tools::{ToolDefinition, ToolParameter};
 
 /// RequestMessage 保持显式结构，方便 tool loop 在同一轮里累积 assistant/tool 消息。
@@ -84,9 +82,9 @@ pub fn build_messages(context: &AgentContext) -> Vec<RequestMessage> {
         messages.push(RequestMessage::system(render_injections(context)));
     }
 
-    messages.push(RequestMessage::user(MessageContent::from_text(render_context_body(
-        context,
-    ))));
+    messages.push(RequestMessage::user(MessageContent::from_text(
+        render_context_body(context),
+    )));
     for turn in &context.recent_chat {
         messages.push(request_message_from_chat_turn(turn));
     }

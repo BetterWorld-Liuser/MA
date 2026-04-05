@@ -264,6 +264,127 @@
                 {{ props.providerTestMessage }}
               </p>
             </form>
+
+            <div v-if="activeEditorProvider" class="mt-6 border-t border-[color:var(--ma-line-soft)] pt-5">
+              <div class="settings-panel-header">
+                <div>
+                  <h3 class="settings-section-title">模型能力</h3>
+                  <p class="settings-section-copy">这里维护该 provider 下的模型能力。OpenAI-compatible 依赖这份配置决定图片入口、工具能力与上下文预算；已知 provider 也可以在这里补充或覆盖新模型。</p>
+                </div>
+                <Button variant="outline" size="sm" type="button" @click="startCreateProviderModel">
+                  添加模型
+                </Button>
+              </div>
+
+              <div v-if="activeEditorProvider.models.length" class="space-y-3">
+                <article
+                  v-for="model in activeEditorProvider.models"
+                  :key="model.id"
+                  class="settings-provider-card"
+                  :class="activeProviderModelId === model.id ? 'settings-provider-card-active' : ''"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <h4 class="truncate text-[14px] font-medium text-text">{{ model.displayName || model.modelId }}</h4>
+                        <span class="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-text-dim">{{ model.modelId }}</span>
+                      </div>
+                      <p class="mt-2 text-[12px] text-text-muted">
+                        {{ formatCapabilitiesSummary(model.capabilities) }}
+                      </p>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-1">
+                      <Button variant="ghost" size="sm" type="button" @click="startEditProviderModel(model)">编辑</Button>
+                      <Button variant="ghost" size="sm" type="button" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProviderModel', model.id)">
+                        删除
+                      </Button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <div v-else class="settings-empty">
+                这个 provider 还没有单独配置模型能力。
+              </div>
+
+              <form class="mt-4 space-y-4" @submit.prevent="submitProviderModel">
+                <div class="grid gap-4 md:grid-cols-2">
+                  <div class="dialog-field">
+                    <label class="dialog-label" for="provider-model-id">模型 ID</label>
+                    <template v-if="providerModelIdOptions.length">
+                      <SettingsSelect
+                        v-model="providerModelId"
+                        :options="providerModelIdOptions"
+                        placeholder="从已探测或已配置模型中选择"
+                        searchable
+                        search-placeholder="搜索模型 ID…"
+                      />
+                    </template>
+                    <template v-else>
+                      <Input id="provider-model-id" v-model="providerModelId" placeholder="gpt-4o-mini / qwen2.5-coder:32b" />
+                    </template>
+                    <Input
+                      v-if="providerModelIdOptions.length"
+                      v-model="providerModelId"
+                      class="mt-2"
+                      placeholder="也可以直接手填新的 model_id"
+                    />
+                  </div>
+                  <div class="dialog-field">
+                    <label class="dialog-label" for="provider-model-display-name">显示名称</label>
+                    <Input id="provider-model-display-name" v-model="providerModelDisplayName" placeholder="可选，留空则界面显示 model_id" />
+                  </div>
+                  <div class="dialog-field">
+                    <label class="dialog-label" for="provider-model-context-window">上下文窗口</label>
+                    <Input id="provider-model-context-window" v-model="providerModelContextWindow" type="number" min="1" />
+                  </div>
+                  <div class="dialog-field">
+                    <label class="dialog-label" for="provider-model-max-output">最大输出</label>
+                    <Input id="provider-model-max-output" v-model="providerModelMaxOutputTokens" type="number" min="1" />
+                  </div>
+                </div>
+
+                <div v-if="providerModelIdSuggestions.length" class="flex flex-wrap gap-2">
+                  <button
+                    v-for="model in providerModelIdSuggestions"
+                    :key="model"
+                    type="button"
+                    class="rounded-full border border-[color:var(--ma-line-soft)] px-2.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
+                    @click="providerModelId = model"
+                  >
+                    {{ model }}
+                  </button>
+                </div>
+
+                <div class="dialog-field">
+                  <label class="dialog-label">能力</label>
+                  <div class="grid gap-3 md:grid-cols-2">
+                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
+                      <input v-model="providerModelSupportsToolUse" type="checkbox" />
+                      <span>工具调用</span>
+                    </label>
+                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
+                      <input v-model="providerModelSupportsVision" type="checkbox" />
+                      <span>图片输入</span>
+                    </label>
+                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
+                      <input v-model="providerModelSupportsAudio" type="checkbox" />
+                      <span>音频输入</span>
+                    </label>
+                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
+                      <input v-model="providerModelSupportsPdf" type="checkbox" />
+                      <span>PDF 输入</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-2">
+                  <Button variant="ghost" type="button" @click="resetProviderModelForm">清空</Button>
+                  <Button type="submit" :disabled="busy || !providerModelId.trim()">
+                    {{ activeProviderModelId ? '保存模型能力' : '添加模型能力' }}
+                  </Button>
+                </div>
+              </form>
+            </div>
           </section>
         </div>
 
@@ -390,8 +511,21 @@ const emit = defineEmits<{
   close: [];
   updateTheme: [theme: ThemeMode];
   saveProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string }];
+  saveProviderModel: [input: {
+    id?: number;
+    providerId: number;
+    modelId: string;
+    displayName: string;
+    contextWindow: number;
+    maxOutputTokens: number;
+    supportsToolUse: boolean;
+    supportsVision: boolean;
+    supportsAudio: boolean;
+    supportsPdf: boolean;
+  }];
   testProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string; probeModel?: string }];
   deleteProvider: [providerId: number];
+  deleteProviderModel: [providerModelId: number];
   saveDefaultProvider: [input: { providerId: number; model: string }];
   requestModels: [providerId: number];
   requestProbeModels: [input: { id?: number; providerType: string; baseUrl: string; apiKey: string; probeModel?: string }];
@@ -404,6 +538,15 @@ const providerName = ref('');
 const providerBaseUrl = ref('');
 const providerApiKey = ref('');
 const providerProbeModel = ref('');
+const activeProviderModelId = ref<number | null>(null);
+const providerModelId = ref('');
+const providerModelDisplayName = ref('');
+const providerModelContextWindow = ref('131072');
+const providerModelMaxOutputTokens = ref('4096');
+const providerModelSupportsToolUse = ref(false);
+const providerModelSupportsVision = ref(false);
+const providerModelSupportsAudio = ref(false);
+const providerModelSupportsPdf = ref(false);
 const defaultProviderIdString = ref('');
 const defaultModelLocal = ref('');
 
@@ -448,6 +591,10 @@ const defaultProviderIdLocal = computed(() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 });
 
+const activeEditorProvider = computed(() =>
+  props.settings?.providers.find((provider) => provider.id === activeEditorId.value) ?? null,
+);
+
 const providerOptions = computed(() =>
   (props.settings?.providers ?? []).map((provider) => ({
     value: String(provider.id),
@@ -485,6 +632,31 @@ const probeModelOptions = computed(() =>
     value: model,
     label: model,
   })),
+);
+
+const providerModelIdOptions = computed(() => {
+  const configured = activeEditorProvider.value?.models.map((model) => model.modelId) ?? [];
+  const merged = Array.from(new Set([...props.probeModels, ...configured]))
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  return merged.map((model) => ({
+    value: model,
+    label: model,
+  }));
+});
+
+const providerModelIdSuggestions = computed(() =>
+  Array.from(
+    new Set([
+      ...props.probeSuggestedModels,
+      ...props.probeModels.slice(0, 8),
+      ...(activeEditorProvider.value?.models.map((model) => model.modelId) ?? []),
+    ]),
+  )
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .slice(0, 10),
 );
 
 const providerNamePlaceholder = computed(() => {
@@ -580,6 +752,7 @@ function startCreate() {
   providerBaseUrl.value = '';
   providerApiKey.value = '';
   providerProbeModel.value = '';
+  resetProviderModelForm();
 }
 
 function startEdit(provider: ProviderSettingsView['providers'][number]) {
@@ -590,6 +763,7 @@ function startEdit(provider: ProviderSettingsView['providers'][number]) {
   providerBaseUrl.value = provider.baseUrl ?? '';
   providerApiKey.value = '';
   providerProbeModel.value = '';
+  resetProviderModelForm();
 }
 
 function resetForm() {
@@ -611,6 +785,54 @@ function submitProvider() {
     baseUrl: providerBaseUrl.value,
     apiKey: providerApiKey.value,
   });
+}
+
+function startCreateProviderModel() {
+  activeProviderModelId.value = null;
+  providerModelId.value = '';
+  providerModelDisplayName.value = '';
+  providerModelContextWindow.value = '131072';
+  providerModelMaxOutputTokens.value = '4096';
+  providerModelSupportsToolUse.value = false;
+  providerModelSupportsVision.value = false;
+  providerModelSupportsAudio.value = false;
+  providerModelSupportsPdf.value = false;
+}
+
+function startEditProviderModel(model: NonNullable<typeof activeEditorProvider.value>['models'][number]) {
+  activeProviderModelId.value = model.id;
+  providerModelId.value = model.modelId;
+  providerModelDisplayName.value = model.displayName ?? '';
+  providerModelContextWindow.value = String(model.capabilities.contextWindow);
+  providerModelMaxOutputTokens.value = String(model.capabilities.maxOutputTokens);
+  providerModelSupportsToolUse.value = model.capabilities.supportsToolUse;
+  providerModelSupportsVision.value = model.capabilities.supportsVision;
+  providerModelSupportsAudio.value = model.capabilities.supportsAudio;
+  providerModelSupportsPdf.value = model.capabilities.supportsPdf;
+}
+
+function resetProviderModelForm() {
+  startCreateProviderModel();
+}
+
+function submitProviderModel() {
+  if (!activeEditorProvider.value) {
+    return;
+  }
+
+  emit('saveProviderModel', {
+    id: activeProviderModelId.value ?? undefined,
+    providerId: activeEditorProvider.value.id,
+    modelId: providerModelId.value,
+    displayName: providerModelDisplayName.value,
+    contextWindow: Math.max(1, Number(providerModelContextWindow.value) || 131072),
+    maxOutputTokens: Math.max(1, Number(providerModelMaxOutputTokens.value) || 4096),
+    supportsToolUse: providerModelSupportsToolUse.value,
+    supportsVision: providerModelSupportsVision.value,
+    supportsAudio: providerModelSupportsAudio.value,
+    supportsPdf: providerModelSupportsPdf.value,
+  });
+  resetProviderModelForm();
 }
 
 function testProvider() {
@@ -666,5 +888,33 @@ function scheduleProbeModelsRequest() {
   probeModelRequestTimer = window.setTimeout(() => {
     requestProbeModelsNow();
   }, 350);
+}
+
+function formatCapabilitiesSummary(capabilities: {
+  contextWindow: number;
+  maxOutputTokens: number;
+  supportsToolUse: boolean;
+  supportsVision: boolean;
+  supportsAudio: boolean;
+  supportsPdf: boolean;
+}) {
+  const featureLabels = [
+    capabilities.supportsToolUse ? '工具' : null,
+    capabilities.supportsVision ? '图片' : null,
+    capabilities.supportsAudio ? '音频' : null,
+    capabilities.supportsPdf ? 'PDF' : null,
+  ].filter(Boolean);
+  const summary = featureLabels.length ? featureLabels.join(' · ') : '纯文本';
+  return `${formatTokenMetric(capabilities.contextWindow)} context · ${formatTokenMetric(capabilities.maxOutputTokens)} output · ${summary}`;
+}
+
+function formatTokenMetric(value: number) {
+  if (value >= 1_000_000) {
+    return `${Math.round(value / 100_000) / 10}M`;
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 100) / 10}K`;
+  }
+  return String(value);
 }
 </script>

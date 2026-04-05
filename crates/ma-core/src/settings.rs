@@ -88,8 +88,23 @@ pub struct ProviderRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProviderModelRecord {
+    pub id: i64,
+    pub provider_id: i64,
+    pub model_id: String,
+    pub display_name: Option<String>,
+    pub context_window: usize,
+    pub max_output_tokens: usize,
+    pub supports_tool_use: bool,
+    pub supports_vision: bool,
+    pub supports_audio: bool,
+    pub supports_pdf: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProviderSettingsSnapshot {
     pub providers: Vec<ProviderRecord>,
+    pub provider_models: Vec<ProviderModelRecord>,
     pub default_provider_id: Option<i64>,
     pub default_model: Option<String>,
 }
@@ -127,6 +142,7 @@ impl SettingsStorage {
     pub fn snapshot(&self) -> Result<ProviderSettingsSnapshot> {
         Ok(ProviderSettingsSnapshot {
             providers: self.list_providers()?,
+            provider_models: self.list_provider_models()?,
             default_provider_id: self.get_setting_i64("default_provider_id")?,
             default_model: self.get_setting("default_model")?,
         })
@@ -171,6 +187,194 @@ impl SettingsStorage {
             });
         }
         Ok(providers)
+    }
+
+    pub fn list_provider_models(&self) -> Result<Vec<ProviderModelRecord>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT id, provider_id, model_id, display_name,
+                        context_window, max_output, supports_tool_use,
+                        supports_vision, supports_audio, supports_pdf
+                 FROM provider_models
+                 ORDER BY provider_id ASC, model_id COLLATE NOCASE ASC, id ASC",
+            )
+            .context("failed to prepare provider model list query")?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ProviderModelRecord {
+                    id: row.get::<_, i64>(0)?,
+                    provider_id: row.get::<_, i64>(1)?,
+                    model_id: row.get::<_, String>(2)?,
+                    display_name: normalize_optional_string(row.get::<_, String>(3)?),
+                    context_window: row.get::<_, i64>(4)? as usize,
+                    max_output_tokens: row.get::<_, i64>(5)? as usize,
+                    supports_tool_use: row.get::<_, i64>(6)? != 0,
+                    supports_vision: row.get::<_, i64>(7)? != 0,
+                    supports_audio: row.get::<_, i64>(8)? != 0,
+                    supports_pdf: row.get::<_, i64>(9)? != 0,
+                })
+            })
+            .context("failed to query provider models")?;
+
+        let mut provider_models = Vec::new();
+        for row in rows {
+            provider_models.push(row.context("failed to decode provider model row")?);
+        }
+        Ok(provider_models)
+    }
+
+    pub fn list_provider_models_for_provider(
+        &self,
+        provider_id: i64,
+    ) -> Result<Vec<ProviderModelRecord>> {
+        self.load_provider(provider_id)?;
+        Ok(self
+            .list_provider_models()?
+            .into_iter()
+            .filter(|model| model.provider_id == provider_id)
+            .collect())
+    }
+
+    pub fn load_provider_model_by_model_id(
+        &self,
+        provider_id: i64,
+        model_id: &str,
+    ) -> Result<Option<ProviderModelRecord>> {
+        let normalized_model = model_id.trim();
+        if normalized_model.is_empty() {
+            return Ok(None);
+        }
+
+        self.connection
+            .query_row(
+                "SELECT id, provider_id, model_id, display_name,
+                        context_window, max_output, supports_tool_use,
+                        supports_vision, supports_audio, supports_pdf
+                 FROM provider_models
+                 WHERE provider_id = ?1 AND lower(model_id) = lower(?2)",
+                params![provider_id, normalized_model],
+                |row| {
+                    Ok(ProviderModelRecord {
+                        id: row.get::<_, i64>(0)?,
+                        provider_id: row.get::<_, i64>(1)?,
+                        model_id: row.get::<_, String>(2)?,
+                        display_name: normalize_optional_string(row.get::<_, String>(3)?),
+                        context_window: row.get::<_, i64>(4)? as usize,
+                        max_output_tokens: row.get::<_, i64>(5)? as usize,
+                        supports_tool_use: row.get::<_, i64>(6)? != 0,
+                        supports_vision: row.get::<_, i64>(7)? != 0,
+                        supports_audio: row.get::<_, i64>(8)? != 0,
+                        supports_pdf: row.get::<_, i64>(9)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .context("failed to load provider model")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_provider_model(
+        &self,
+        provider_model_id: Option<i64>,
+        provider_id: i64,
+        model_id: impl AsRef<str>,
+        display_name: impl AsRef<str>,
+        context_window: usize,
+        max_output_tokens: usize,
+        supports_tool_use: bool,
+        supports_vision: bool,
+        supports_audio: bool,
+        supports_pdf: bool,
+    ) -> Result<ProviderModelRecord> {
+        self.load_provider(provider_id)?;
+        let model_id = model_id.as_ref().trim();
+        if model_id.is_empty() {
+            bail!("provider model_id cannot be empty");
+        }
+        if context_window == 0 {
+            bail!("provider model context_window must be greater than 0");
+        }
+        if max_output_tokens == 0 {
+            bail!("provider model max_output_tokens must be greater than 0");
+        }
+        let display_name = normalize_optional_string(display_name.as_ref().to_string());
+
+        match provider_model_id {
+            Some(id) => {
+                let affected = self
+                    .connection
+                    .execute(
+                        "UPDATE provider_models
+                         SET provider_id = ?2,
+                             model_id = ?3,
+                             display_name = ?4,
+                             context_window = ?5,
+                             max_output = ?6,
+                             supports_tool_use = ?7,
+                             supports_vision = ?8,
+                             supports_audio = ?9,
+                             supports_pdf = ?10
+                         WHERE id = ?1",
+                        params![
+                            id,
+                            provider_id,
+                            model_id,
+                            display_name.as_deref().unwrap_or_default(),
+                            context_window as i64,
+                            max_output_tokens as i64,
+                            if supports_tool_use { 1 } else { 0 },
+                            if supports_vision { 1 } else { 0 },
+                            if supports_audio { 1 } else { 0 },
+                            if supports_pdf { 1 } else { 0 },
+                        ],
+                    )
+                    .context("failed to update provider model")?;
+                if affected == 0 {
+                    bail!("provider model {} not found", id);
+                }
+                self.load_provider_model(id)
+            }
+            None => {
+                self.connection
+                    .execute(
+                        "INSERT INTO provider_models (
+                            provider_id, model_id, display_name, context_window,
+                            max_output, supports_tool_use, supports_vision,
+                            supports_audio, supports_pdf
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        params![
+                            provider_id,
+                            model_id,
+                            display_name.as_deref().unwrap_or_default(),
+                            context_window as i64,
+                            max_output_tokens as i64,
+                            if supports_tool_use { 1 } else { 0 },
+                            if supports_vision { 1 } else { 0 },
+                            if supports_audio { 1 } else { 0 },
+                            if supports_pdf { 1 } else { 0 },
+                        ],
+                    )
+                    .context("failed to insert provider model")?;
+                let id = self.connection.last_insert_rowid();
+                self.load_provider_model(id)
+            }
+        }
+    }
+
+    pub fn delete_provider_model(&self, provider_model_id: i64) -> Result<()> {
+        let affected = self
+            .connection
+            .execute(
+                "DELETE FROM provider_models WHERE id = ?1",
+                params![provider_model_id],
+            )
+            .context("failed to delete provider model")?;
+        if affected == 0 {
+            bail!("provider model {} not found", provider_model_id);
+        }
+        Ok(())
     }
 
     pub fn upsert_provider(
@@ -340,6 +544,35 @@ impl SettingsStorage {
         })
     }
 
+    pub fn load_provider_model(&self, provider_model_id: i64) -> Result<ProviderModelRecord> {
+        self.connection
+            .query_row(
+                "SELECT id, provider_id, model_id, display_name,
+                        context_window, max_output, supports_tool_use,
+                        supports_vision, supports_audio, supports_pdf
+                 FROM provider_models
+                 WHERE id = ?1",
+                params![provider_model_id],
+                |row| {
+                    Ok(ProviderModelRecord {
+                        id: row.get::<_, i64>(0)?,
+                        provider_id: row.get::<_, i64>(1)?,
+                        model_id: row.get::<_, String>(2)?,
+                        display_name: normalize_optional_string(row.get::<_, String>(3)?),
+                        context_window: row.get::<_, i64>(4)? as usize,
+                        max_output_tokens: row.get::<_, i64>(5)? as usize,
+                        supports_tool_use: row.get::<_, i64>(6)? != 0,
+                        supports_vision: row.get::<_, i64>(7)? != 0,
+                        supports_audio: row.get::<_, i64>(8)? != 0,
+                        supports_pdf: row.get::<_, i64>(9)? != 0,
+                    })
+                },
+            )
+            .optional()
+            .context("failed to load provider model")?
+            .ok_or_else(|| anyhow::anyhow!("provider model {} not found", provider_model_id))
+    }
+
     fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.connection
             .query_row(
@@ -373,6 +606,19 @@ impl SettingsStorage {
                 CREATE TABLE IF NOT EXISTS settings (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS provider_models (
+                    id               INTEGER PRIMARY KEY,
+                    provider_id      INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                    model_id         TEXT    NOT NULL,
+                    display_name     TEXT    NOT NULL DEFAULT '',
+                    context_window   INTEGER NOT NULL DEFAULT 131072,
+                    max_output       INTEGER NOT NULL DEFAULT 4096,
+                    supports_tool_use INTEGER NOT NULL DEFAULT 0,
+                    supports_vision   INTEGER NOT NULL DEFAULT 0,
+                    supports_audio    INTEGER NOT NULL DEFAULT 0,
+                    supports_pdf      INTEGER NOT NULL DEFAULT 0
                 );
                 ",
             )

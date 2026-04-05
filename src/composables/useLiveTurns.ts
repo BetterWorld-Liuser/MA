@@ -121,7 +121,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         if (!liveTurns.value[event.task_id]) {
           return;
         }
-        const failedTurn = {
+        const failedTurn: LiveTurn = {
           ...liveTurns.value[event.task_id],
           state: 'error',
           statusLabel: '本轮执行失败',

@@ -79,7 +79,7 @@ impl SkillLoader {
             content.push_str("- (none)\n");
         } else {
             for entry in entries {
-                let display_path = normalize_display_path(&self.display_path(&entry.path));
+                let display_path = normalize_display_path(&entry.path);
                 let trigger_suffix = entry
                     .trigger_reason
                     .as_deref()
@@ -156,16 +156,6 @@ impl SkillLoader {
         }
 
         Ok(skills)
-    }
-
-    fn display_path(&self, path: &Path) -> PathBuf {
-        if let Ok(relative) = path.strip_prefix(&self.work_dir) {
-            return PathBuf::from(".").join(relative);
-        }
-        if let Ok(relative) = path.strip_prefix(&self.home_dir) {
-            return PathBuf::from("~").join(relative);
-        }
-        path.to_path_buf()
     }
 }
 
@@ -403,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn injection_uses_workspace_and_home_friendly_paths() {
+    fn injection_uses_absolute_paths() {
         let fixture = SkillFixture::new("injection");
         let shared_path = fixture.home_dir.join(".agent").join("skills").join("rust");
         let project_path = fixture
@@ -420,11 +410,15 @@ mod tests {
             .expect("load skills should succeed");
         let injection = loader.to_injection(&entries);
 
-        assert!(injection.content.contains("~/.agent/skills/rust/SKILL.md"));
         assert!(
             injection
                 .content
-                .contains("./.march/skills/deploy/SKILL.md")
+                .contains(&normalize_display_path(&shared_path.join(SKILL_FILE_NAME)))
+        );
+        assert!(
+            injection
+                .content
+                .contains(&normalize_display_path(&project_path.join(SKILL_FILE_NAME)))
         );
     }
 

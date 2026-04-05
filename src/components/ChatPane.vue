@@ -306,7 +306,8 @@ const emit = defineEmits<{
 const disabledRef = computed(() => !!props.disabled);
 const interactionLockedRef = computed(() => !!props.interactionLocked);
 const taskIdRef = toRef(props, 'taskId');
-const supportsVision = computed(() => modelSupportsVision(props.selectedModel));
+const resolvedModelSupportsVision = ref(false);
+const supportsVision = computed(() => resolvedModelSupportsVision.value);
 
 const {
   draft,
@@ -484,6 +485,7 @@ function restoreModelStateFromCache(taskId?: number | null) {
   if (!taskId) {
     resolvedCurrentProviderId.value = null;
     resolvedCurrentModel.value = '';
+    resolvedModelSupportsVision.value = false;
     providerGroups.value = [];
     return;
   }
@@ -573,6 +575,7 @@ function applyProviderModels(response: TaskModelSelectorView, taskId: number) {
   taskModelSelectorCache.set(taskId, cacheEntry);
   resolvedCurrentProviderId.value = cacheEntry.currentProviderId ?? null;
   resolvedCurrentModel.value = cacheEntry.currentModel;
+  resolvedModelSupportsVision.value = response.currentModelCapabilities.supportsVision;
   providerGroups.value = cacheEntry.providers.map((group) => ({
     ...group,
     availableModels: [...group.availableModels],
@@ -716,19 +719,6 @@ function normalizePath(path?: string) {
     return normalized.slice('//?/'.length);
   }
   return normalized;
-}
-
-function modelSupportsVision(model?: string) {
-  const normalized = model?.trim().toLowerCase() ?? '';
-  if (!normalized) {
-    return false;
-  }
-
-  return normalized.includes('gpt-4o')
-    || normalized.includes('claude-3')
-    || normalized.includes('gemini')
-    || normalized.includes('vision')
-    || normalized.includes('vl');
 }
 
 </script>

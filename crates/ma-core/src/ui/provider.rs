@@ -1,13 +1,16 @@
 use anyhow::Result;
 
+use crate::agent::DEFAULT_CONTEXT_WINDOW_TOKENS;
+use crate::model_capabilities::get_model_capabilities;
 use crate::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
-use crate::settings::{ProviderType, SettingsStorage};
+use crate::settings::{ProviderModelRecord, ProviderType, SettingsStorage};
 use crate::storage::TaskRecord;
 
 use super::util::normalize_ui_optional_string;
 use super::{
-    UiProbeProviderModelsRequest, UiProviderModelGroupView, UiProviderModelsView,
-    UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
+    UiModelCapabilitiesView, UiProbeProviderModelsRequest, UiProviderModelGroupView,
+    UiProviderModelsView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
+    UiTestProviderConnectionResult,
 };
 
 pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
@@ -119,6 +122,12 @@ pub async fn fetch_task_model_selector(
             model: provider_current_model.clone(),
         });
         let mut available_models = client.list_models().await.unwrap_or_default();
+        let persisted_models = settings
+            .list_provider_models_for_provider(provider.id)?
+            .into_iter()
+            .map(|model| model.model_id)
+            .collect::<Vec<_>>();
+        available_models.extend(persisted_models);
         if !provider_current_model.is_empty()
             && !available_models
                 .iter()
@@ -154,6 +163,7 @@ pub async fn fetch_task_model_selector(
     Ok(UiTaskModelSelectorView {
         current_provider_id,
         current_model,
+        current_model_capabilities: resolve_current_model_capabilities(task)?,
         providers,
     })
 }
@@ -172,6 +182,12 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
         model: current_model.clone(),
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
+    available_models.extend(
+        settings
+            .list_provider_models_for_provider(provider_id)?
+            .into_iter()
+            .map(|model| model.model_id),
+    );
     if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
         available_models.insert(0, current_model.clone());
     }
@@ -327,6 +343,100 @@ fn provider_cache_key(provider_type: &ProviderType, base_url: Option<&str>) -> S
         }
         _ => provider_type.as_db_value().to_string(),
     }
+}
+
+fn resolve_current_model_capabilities(
+    task: Option<&TaskRecord>,
+) -> Result<UiModelCapabilitiesView> {
+    let config = resolve_active_provider_config(task)?;
+    let settings = SettingsStorage::open()?;
+    let selected_provider_id = task
+        .and_then(|value| value.selected_provider_id)
+        .or(settings.snapshot()?.default_provider_id);
+    let persisted = selected_provider_id
+        .map(|provider_id| settings.load_provider_model_by_model_id(provider_id, &config.model))
+        .transpose()?
+        .flatten();
+
+    Ok(resolve_model_capabilities(
+        config.provider_type,
+        &config.model,
+        persisted.as_ref(),
+    ))
+}
+
+fn resolve_model_capabilities(
+    provider_type: ProviderType,
+    model_id: &str,
+    persisted: Option<&ProviderModelRecord>,
+) -> UiModelCapabilitiesView {
+    if let Some(model) = persisted {
+        return UiModelCapabilitiesView {
+            context_window: model.context_window,
+            max_output_tokens: model.max_output_tokens,
+            supports_tool_use: model.supports_tool_use,
+            supports_vision: model.supports_vision,
+            supports_audio: model.supports_audio,
+            supports_pdf: model.supports_pdf,
+        };
+    }
+
+    let builtin = get_model_capabilities(model_id);
+    let normalized = model_id.trim().to_ascii_lowercase();
+    let context_window = builtin
+        .as_ref()
+        .map(|value| value.context_window)
+        .or_else(|| guess_context_window_from_model_name(&normalized))
+        .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS);
+    let max_output_tokens = builtin
+        .as_ref()
+        .map(|value| value.max_output_tokens)
+        .unwrap_or(4_096);
+
+    let supports_vision = matches!(provider_type, ProviderType::Gemini)
+        || normalized.contains("gpt-4o")
+        || normalized.contains("claude-3")
+        || normalized.contains("claude-sonnet-4")
+        || normalized.contains("gemini")
+        || normalized.contains("vision")
+        || normalized.contains("vl");
+    let supports_tool_use = !matches!(provider_type, ProviderType::Cohere);
+
+    UiModelCapabilitiesView {
+        context_window,
+        max_output_tokens,
+        supports_tool_use,
+        supports_vision,
+        supports_audio: false,
+        supports_pdf: false,
+    }
+}
+
+fn guess_context_window_from_model_name(model_id: &str) -> Option<usize> {
+    for suffix in ['k', 'm'] {
+        if let Some(index) = model_id.find(suffix) {
+            let digits = model_id[..index]
+                .chars()
+                .rev()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            if digits.is_empty() {
+                continue;
+            }
+            if let Ok(base) = digits.parse::<usize>() {
+                return Some(match suffix {
+                    'k' => base * 1_000,
+                    'm' => base * 1_000_000,
+                    _ => unreachable!(),
+                });
+            }
+        }
+    }
+
+    None
 }
 
 fn suggested_models_for_provider_type(provider_type: ProviderType) -> Vec<String> {

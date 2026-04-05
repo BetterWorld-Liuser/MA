@@ -5,17 +5,19 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use anyhow::Context;
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 use ma::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteNoteRequest,
-    UiDeleteProviderRequest, UiDeleteTaskRequest, UiOpenFilesRequest, UiProbeProviderModelsRequest,
+    UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
+    UiLoadWorkspaceImageRequest, UiOpenFilesRequest, UiProbeProviderModelsRequest,
     UiProviderModelsView, UiProviderSettingsView, UiSearchWorkspaceEntriesRequest,
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
     UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
     UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertNoteRequest,
-    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
-    UiLoadWorkspaceImageRequest, fetch_probe_models,
+    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
+    UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_models,
     fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
@@ -332,6 +334,28 @@ fn delete_provider(
 }
 
 #[tauri::command]
+fn upsert_provider_model(
+    state: tauri::State<'_, AppState>,
+    input: UiUpsertProviderModelRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_upsert_provider_model(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_provider_model(
+    state: tauri::State<'_, AppState>,
+    input: UiDeleteProviderModelRequest,
+) -> Result<UiProviderSettingsView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_delete_provider_model(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_default_provider(
     state: tauri::State<'_, AppState>,
     input: UiSetDefaultProviderRequest,
@@ -372,6 +396,20 @@ fn load_workspace_image(
     backend
         .load_workspace_image(input)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(&url).map_err(|error| error.to_string())?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return Err("only http/https URLs are supported".to_string()),
+    }
+
+    webbrowser::open(parsed.as_str())
+        .with_context(|| format!("failed to open external URL: {}", parsed))
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -415,10 +453,13 @@ pub fn run() {
             load_provider_settings,
             upsert_provider,
             delete_provider,
+            upsert_provider_model,
+            delete_provider_model,
             set_default_provider,
             test_provider_connection,
             search_workspace_entries,
-            load_workspace_image
+            load_workspace_image,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running March");

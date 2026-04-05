@@ -1,16 +1,15 @@
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use indexmap::IndexMap;
 use rusqlite::{Transaction, params};
 
-use crate::context::{ConversationHistory, Hint, NoteEntry};
+use crate::context::{ConversationHistory, Hint};
 
-use super::PersistedOpenFile;
 use super::codec::{
     encode_content_blocks, encode_tool_summaries, optional_unix_timestamp, role_to_db,
     unix_timestamp,
 };
+use super::{PersistedNote, PersistedOpenFile};
 
 pub fn update_task_last_active(
     transaction: &Transaction<'_>,
@@ -41,8 +40,8 @@ pub fn replace_conversation_history(
     let mut insert = transaction
         .prepare(
             "INSERT INTO conversation_turns
-             (task_id, role, content, tool_summaries, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             (task_id, role, agent, content, tool_summaries, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
         .context("failed to prepare conversation insert")?;
 
@@ -52,6 +51,7 @@ pub fn replace_conversation_history(
             .execute(params![
                 task_id,
                 role_to_db(turn.role),
+                turn.agent,
                 encode_content_blocks(&turn.content)?,
                 summaries,
                 unix_timestamp(turn.timestamp)?,
@@ -64,7 +64,7 @@ pub fn replace_conversation_history(
 pub fn replace_notes(
     transaction: &Transaction<'_>,
     task_id: i64,
-    notes: &IndexMap<String, NoteEntry>,
+    notes: &[PersistedNote],
 ) -> Result<()> {
     transaction
         .execute("DELETE FROM notes WHERE task_id = ?1", params![task_id])
@@ -72,14 +72,20 @@ pub fn replace_notes(
 
     let mut insert = transaction
         .prepare(
-            "INSERT INTO notes (task_id, note_id, content, position)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO notes (task_id, scope, note_id, content, position)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )
         .context("failed to prepare note insert")?;
 
-    for (position, (id, note)) in notes.iter().enumerate() {
+    for (position, note) in notes.iter().enumerate() {
         insert
-            .execute(params![task_id, id, note.content, position as i64])
+            .execute(params![
+                task_id,
+                note.scope,
+                note.id,
+                note.entry.content,
+                position as i64
+            ])
             .context("failed to insert note")?;
     }
     Ok(())
@@ -99,8 +105,8 @@ pub fn replace_open_files(
 
     let mut insert = transaction
         .prepare(
-            "INSERT INTO open_files (task_id, path, position, locked)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO open_files (task_id, scope, path, position, locked)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )
         .context("failed to prepare open_file insert")?;
 
@@ -108,6 +114,7 @@ pub fn replace_open_files(
         insert
             .execute(params![
                 task_id,
+                open_file.scope,
                 open_file.path.to_string_lossy().to_string(),
                 position as i64,
                 if open_file.locked { 1 } else { 0 },

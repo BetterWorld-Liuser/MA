@@ -1288,6 +1288,18 @@
     margin-top: 0.08rem !important;
   }
 
+  .message-bubble-assistant .markstream-vue a {
+    color: var(--color-accent) !important;
+    text-decoration: underline !important;
+    text-decoration-thickness: 1px !important;
+    text-underline-offset: 0.16em !important;
+    word-break: break-all;
+  }
+
+  .message-bubble-assistant .markstream-vue a:hover {
+    color: var(--color-accent-hover) !important;
+  }
+
   html,
   body,
   #app {
