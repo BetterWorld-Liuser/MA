@@ -1,14 +1,30 @@
-import { ref, type Ref } from 'vue';
-import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, LiveTurn } from '@/data/mock';
+import { ref, watch, type Ref } from 'vue';
+import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, ChatMessage, LiveTurn } from '@/data/mock';
 
 type UseLiveTurnsOptions = {
   snapshot: Ref<BackendWorkspaceSnapshot | null>;
   sendingTaskId: Ref<number | null>;
   errorMessage: Ref<string>;
+  workspacePath: Ref<string | undefined>;
 };
 
-export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveTurnsOptions) {
+type ArchivedFailedTurn = {
+  turnId: string;
+  createdAt: number;
+  message: ChatMessage;
+};
+
+export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspacePath }: UseLiveTurnsOptions) {
   const liveTurns = ref<Record<number, LiveTurn>>({});
+  const archivedFailedTurns = ref<Record<number, ArchivedFailedTurn[]>>({});
+
+  watch(
+    workspacePath,
+    () => {
+      archivedFailedTurns.value = loadArchivedFailedTurns(workspacePath.value);
+    },
+    { immediate: true },
+  );
 
   function applyAgentProgress(event: BackendAgentProgressEvent) {
     switch (event.kind) {
@@ -18,6 +34,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
           state: 'pending',
           statusLabel: '正在整理上下文',
           content: '',
+          errorMessage: '',
           tools: [],
         });
         return;
@@ -79,6 +96,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
           state: 'streaming',
           statusLabel: '正在生成回复',
           content: event.message,
+          errorMessage: '',
         });
         return;
       case 'final_assistant_message':
@@ -103,11 +121,14 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
         if (!liveTurns.value[event.task_id]) {
           return;
         }
-        upsertLiveTurn(event.task_id, {
+        const failedTurn = {
           ...liveTurns.value[event.task_id],
           state: 'error',
           statusLabel: '本轮执行失败',
-        });
+          errorMessage: event.message,
+        };
+        upsertLiveTurn(event.task_id, failedTurn);
+        archiveFailedTurn(event.task_id, failedTurn);
         if (sendingTaskId.value === event.task_id) {
           sendingTaskId.value = null;
         }
@@ -141,6 +162,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
       state: 'running',
       statusLabel: '正在处理',
       content: '',
+      errorMessage: '',
       tools: [],
     });
   }
@@ -150,6 +172,39 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
       ...liveTurns.value,
       [taskId]: turn,
     };
+  }
+
+  function archiveFailedTurn(taskId: number, turn: LiveTurn) {
+    const errorDetail = turn.errorMessage?.trim() || '这轮没有成功完成。';
+    const content = turn.content.trim()
+      ? `${turn.content.trim()}\n\n[本轮执行失败]\n${errorDetail}`
+      : `本轮执行失败\n\n${errorDetail}`;
+    const message: ChatMessage = {
+      role: 'assistant',
+      author: 'March',
+      time: formatArchivedTurnTime(Date.now()),
+      timestamp: Date.now(),
+      content,
+      tools: turn.tools.map((tool) => ({
+        label: tool.label,
+        summary: tool.summary || tool.preview || tool.label,
+      })),
+    };
+
+    const nextTaskEntries = [
+      ...(archivedFailedTurns.value[taskId] ?? []).filter((entry) => entry.turnId !== turn.turnId),
+      {
+        turnId: turn.turnId,
+        createdAt: Date.now(),
+        message,
+      },
+    ].sort((left, right) => left.createdAt - right.createdAt);
+
+    archivedFailedTurns.value = {
+      ...archivedFailedTurns.value,
+      [taskId]: nextTaskEntries,
+    };
+    persistArchivedFailedTurns(workspacePath.value, archivedFailedTurns.value);
   }
 
   function clearLiveTurn(taskId: number) {
@@ -162,10 +217,68 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage }: UseLiveT
     liveTurns.value = nextTurns;
   }
 
+  function clearArchivedFailedTurns(taskId: number) {
+    if (!(taskId in archivedFailedTurns.value)) {
+      return;
+    }
+
+    const nextTurns = { ...archivedFailedTurns.value };
+    delete nextTurns[taskId];
+    archivedFailedTurns.value = nextTurns;
+    persistArchivedFailedTurns(workspacePath.value, archivedFailedTurns.value);
+  }
+
   return {
     liveTurns,
+    archivedFailedTurns,
     applyAgentProgress,
     upsertLiveTurn,
+    archiveFailedTurn,
     clearLiveTurn,
+    clearArchivedFailedTurns,
   };
+}
+
+function storageKey(workspacePath?: string) {
+  return workspacePath ? `ma:archived-failed-turns:${workspacePath}` : '';
+}
+
+function loadArchivedFailedTurns(workspacePath?: string) {
+  const key = storageKey(workspacePath);
+  if (!key || typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return {};
+    }
+    return JSON.parse(raw) as Record<number, ArchivedFailedTurn[]>;
+  } catch {
+    return {};
+  }
+}
+
+function persistArchivedFailedTurns(
+  workspacePath: string | undefined,
+  records: Record<number, ArchivedFailedTurn[]>,
+) {
+  const key = storageKey(workspacePath);
+  if (!key || typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(records));
+  } catch {
+    // Ignore local cache persistence failures; this layer is user-view only.
+  }
+}
+
+function formatArchivedTurnTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }

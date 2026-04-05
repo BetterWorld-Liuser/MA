@@ -72,14 +72,14 @@
           <time class="font-mono text-[9px] text-text-dim">...</time>
         </div>
 
-        <div class="message-bubble message-bubble-assistant opacity-90">
-          <div class="live-status-row">
-            <span class="live-status-dots" aria-hidden="true">
+        <div class="message-bubble message-bubble-assistant opacity-90" :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''">
+          <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
+            <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
               <span></span>
               <span></span>
               <span></span>
             </span>
-            <span class="live-status-label">{{ liveTurn.statusLabel }}</span>
+            <span class="live-status-label" :class="liveTurn.state === 'error' ? 'text-error' : ''">{{ liveTurn.statusLabel }}</span>
           </div>
           <MarkdownRender
             v-if="liveTurn.content"
@@ -90,8 +90,15 @@
             :render-batch-size="16"
             :render-batch-delay="8"
           />
-          <p v-else class="mt-1 text-[11px] text-text-dim">
-            {{ liveTurn.state === 'error' ? '这轮没有成功完成。' : 'March 正在处理这一轮请求。' }}
+          <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
+            {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : 'March 正在处理这一轮请求。' }}
+          </p>
+
+          <p
+            v-if="liveTurn.state === 'error' && liveTurn.content && liveTurn.errorMessage"
+            class="mt-2 whitespace-pre-wrap text-[11px] text-error"
+          >
+            {{ liveTurn.errorMessage }}
           </p>
 
           <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">

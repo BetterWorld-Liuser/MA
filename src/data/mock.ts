@@ -23,6 +23,7 @@ export type LiveTurn = {
   state: 'pending' | 'running' | 'streaming' | 'error';
   statusLabel: string;
   content: string;
+  errorMessage?: string;
   tools: LiveToolItem[];
 };
 
@@ -30,6 +31,7 @@ export type ChatMessage = {
   role: 'user' | 'assistant';
   author: string;
   time: string;
+  timestamp?: number;
   content: string;
   tools?: ChatTool[];
 };
@@ -381,6 +383,7 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       role: turn.role === 'User' ? 'user' : 'assistant',
       author: turn.role === 'User' ? 'User' : 'March',
       time: formatTime(turn.timestamp),
+      timestamp: turn.timestamp * 1000,
       content: turn.content,
       tools: turn.tool_summaries.map((tool) => ({
         label: tool.name,

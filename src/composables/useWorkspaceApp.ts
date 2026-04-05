@@ -25,6 +25,7 @@ export function useWorkspaceApp() {
   const appTitle = 'March';
   const appWindow = getCurrentWindow();
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
+  const workspacePath = computed(() => snapshot.value?.workspace_path);
   const busy = ref(false);
   const sendingTaskId = ref<number | null>(null);
   const cancellingTaskId = ref<number | null>(null);
@@ -36,10 +37,19 @@ export function useWorkspaceApp() {
   let unlistenAgentProgress: UnlistenFn | null = null;
   let unlistenWindowResize: UnlistenFn | null = null;
 
-  const { liveTurns, applyAgentProgress, upsertLiveTurn, clearLiveTurn } = useLiveTurns({
+  const {
+    liveTurns,
+    archivedFailedTurns,
+    applyAgentProgress,
+    upsertLiveTurn,
+    archiveFailedTurn,
+    clearLiveTurn,
+    clearArchivedFailedTurns,
+  } = useLiveTurns({
     snapshot,
     sendingTaskId,
     errorMessage,
+    workspacePath,
   });
 
   const {
@@ -100,8 +110,16 @@ export function useWorkspaceApp() {
     const activeTaskId = snapshot.value?.active_task?.task.id ?? (snapshot.value?.tasks[0]?.id ?? null);
 
     if (snapshot.value) {
+      const baseWorkspace = toWorkspaceView(snapshot.value);
+      const archivedMessages = activeTaskId
+        ? (archivedFailedTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
+        : [];
+      const mergedChat = [...baseWorkspace.chat, ...archivedMessages].sort(
+        (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
+      );
       return {
-        ...toWorkspaceView(snapshot.value),
+        ...baseWorkspace,
+        chat: mergedChat,
         liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
       };
     }
@@ -197,6 +215,7 @@ export function useWorkspaceApp() {
           });
         });
         clearLiveTurn(Number(taskId));
+        clearArchivedFailedTurns(Number(taskId));
         if (sendingTaskId.value === Number(taskId)) {
           sendingTaskId.value = null;
         }
@@ -219,6 +238,7 @@ export function useWorkspaceApp() {
       state: 'pending',
       statusLabel: '已发送，正在准备',
       content: '',
+      errorMessage: '',
       tools: [],
     });
     sendingTaskId.value = taskId;
@@ -243,11 +263,14 @@ export function useWorkspaceApp() {
     } catch (error) {
       const currentLiveTurn = liveTurns.value[taskId];
       if (currentLiveTurn) {
-        upsertLiveTurn(taskId, {
+        const failedTurn = {
           ...currentLiveTurn,
           state: 'error',
           statusLabel: '本轮执行失败',
-        });
+          errorMessage: humanizeError(error),
+        };
+        upsertLiveTurn(taskId, failedTurn);
+        archiveFailedTurn(taskId, failedTurn);
       }
       errorMessage.value = humanizeError(error);
     } finally {

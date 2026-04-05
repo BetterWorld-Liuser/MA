@@ -397,6 +397,10 @@
   @apply flex items-center gap-1.5 text-[9px] uppercase tracking-[0.14em] text-text-muted;
 }
 
+@utility live-status-row-error {
+  color: var(--color-error);
+}
+
 @utility live-status-dots {
   @apply inline-flex items-center gap-1;
 
@@ -418,8 +422,23 @@
   }
 }
 
+@utility live-status-dots-error {
+  & span {
+    background: var(--color-error);
+    opacity: 0.8;
+    animation: none;
+  }
+}
+
 @utility live-status-label {
   @apply text-text-muted;
+}
+
+@utility live-bubble-error {
+  border-color: rgba(224, 82, 82, 0.22);
+  background:
+    linear-gradient(180deg, rgba(224, 82, 82, 0.04), rgba(224, 82, 82, 0.02)),
+    var(--ma-panel-surface);
 }
 
 @utility live-tools {
