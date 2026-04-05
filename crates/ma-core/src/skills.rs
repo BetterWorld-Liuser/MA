@@ -357,7 +357,11 @@ mod tests {
     fn agents_directory_is_scanned_as_shared_skill_root() {
         let fixture = SkillFixture::new("agents-root");
         fixture.write_skill(
-            &fixture.home_dir.join(".agents").join("skills").join("find-skills"),
+            &fixture
+                .home_dir
+                .join(".agents")
+                .join("skills")
+                .join("find-skills"),
             "find-skills",
             "Scan local skill inventory",
         );
@@ -402,7 +406,11 @@ mod tests {
     fn injection_uses_workspace_and_home_friendly_paths() {
         let fixture = SkillFixture::new("injection");
         let shared_path = fixture.home_dir.join(".agent").join("skills").join("rust");
-        let project_path = fixture.work_dir.join(".march").join("skills").join("deploy");
+        let project_path = fixture
+            .work_dir
+            .join(".march")
+            .join("skills")
+            .join("deploy");
         fixture.write_skill(&shared_path, "Rust", "共享 skill");
         fixture.write_skill(&project_path, "Deploy", "项目 skill");
 
@@ -413,7 +421,11 @@ mod tests {
         let injection = loader.to_injection(&entries);
 
         assert!(injection.content.contains("~/.agent/skills/rust/SKILL.md"));
-        assert!(injection.content.contains("./.march/skills/deploy/SKILL.md"));
+        assert!(
+            injection
+                .content
+                .contains("./.march/skills/deploy/SKILL.md")
+        );
     }
 
     #[test]
@@ -424,8 +436,11 @@ mod tests {
             "rust",
             "Rust 项目工作流",
         );
-        fs::write(fixture.work_dir.join("Cargo.toml"), "[package]\nname = \"demo\"\n")
-            .expect("write cargo");
+        fs::write(
+            fixture.work_dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .expect("write cargo");
 
         let loader = SkillLoader::new(&fixture.work_dir, &fixture.home_dir);
         let entries = loader
@@ -512,12 +527,19 @@ mod tests {
     fn multiple_rules_can_activate_same_skill() {
         let fixture = SkillFixture::new("many-files-one-skill");
         fixture.write_skill(
-            &fixture.home_dir.join(".agent").join("skills").join("python"),
+            &fixture
+                .home_dir
+                .join(".agent")
+                .join("skills")
+                .join("python"),
             "python",
             "Python 工作流",
         );
-        fs::write(fixture.work_dir.join("pyproject.toml"), "[project]\nname='demo'\n")
-            .expect("write pyproject");
+        fs::write(
+            fixture.work_dir.join("pyproject.toml"),
+            "[project]\nname='demo'\n",
+        )
+        .expect("write pyproject");
         fs::write(fixture.work_dir.join("requirements.txt"), "pytest\n").expect("write reqs");
 
         let loader = SkillLoader::new(&fixture.work_dir, &fixture.home_dir);
@@ -559,9 +581,7 @@ mod tests {
             fs::create_dir_all(dir).expect("create skill dir");
             fs::write(
                 dir.join(SKILL_FILE_NAME),
-                format!(
-                    "---\nname: {name}\ndescription: {description}\n---\n\n{description}\n"
-                ),
+                format!("---\nname: {name}\ndescription: {description}\n---\n\n{description}\n"),
             )
             .expect("write skill");
         }

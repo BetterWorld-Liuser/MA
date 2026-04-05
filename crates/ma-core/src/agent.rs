@@ -1,24 +1,14 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, bail};
 use indexmap::IndexMap;
-use serde::Deserialize;
-use serde_json::Value;
 
 use crate::context::{
     AgentContext, AgentContextBuilder, ContextBuildConfig, ContextPressure, ConversationHistory,
     DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role, SessionStatus, SystemStatus,
-    ToolSummary, render_file_snapshot_for_prompt,
+    ToolSummary,
 };
-use crate::config::MarchConfig;
-use crate::provider::{
-    ApiToolCallRequest, ApiToolFunctionCallRequest, OpenAiCompatibleClient, ProviderProgressEvent,
-    ProviderToolCall, RequestMessage, build_messages,
-};
-use crate::settings::user_home_dir;
-use crate::skills::{SkillEntry, SkillLoader};
 use crate::storage::{PersistedOpenFile, PersistedTask, PersistedTaskState};
 use crate::tools::ToolRuntime;
 use crate::ui::{
@@ -28,14 +18,19 @@ use crate::ui::{
 use crate::watcher::FileWatcherService;
 
 mod editing;
+mod prompting;
+mod runner;
 mod shells;
+mod tool_calls;
 
+#[cfg(test)]
+use prompting::append_assistant_tool_call_message;
+use prompting::{default_system_core, normalize_open_files_for_workspace};
+use prompting::{load_skills_for_workspace, render_prompt, upsert_injection};
+pub use runner::is_turn_cancelled_error;
+use shells::decode_command_output;
 pub use shells::{AvailableShell, CommandShell};
-use editing::{delete_line_range, edit_lines, insert_line_block, replace_line_range};
-use shells::{
-    decode_command_output, detect_available_shells, parse_shell, platform_label, shell_command,
-    workspace_entries,
-};
+use shells::{detect_available_shells, platform_label, shell_command, workspace_entries};
 
 const AGENTS_FILENAME: &str = "AGENTS.md";
 const TURN_CANCELLED_ERROR_MESSAGE: &str = "turn cancelled";
@@ -48,7 +43,7 @@ pub struct AgentSession {
     locked_files: Vec<PathBuf>,
     hints: Vec<Hint>,
     injections: Vec<Injection>,
-    skills: Vec<SkillEntry>,
+    skills: Vec<crate::skills::SkillEntry>,
     available_shells: Vec<AvailableShell>,
     working_directory: PathBuf,
 }
@@ -59,8 +54,6 @@ pub struct AgentConfig {
     pub max_recent_turns: usize,
 }
 
-// 当 provider 元数据和内置能力表都拿不到时，UI 与上下文压力估算统一回退到 128k。
-// 这样对现代通用模型更保守，也避免把未知模型默认压成过小的 24k。
 pub const DEFAULT_CONTEXT_WINDOW_TOKENS: usize = 128_000;
 
 impl Default for AgentConfig {
@@ -70,50 +63,6 @@ impl Default for AgentConfig {
             max_recent_turns: 3,
         }
     }
-}
-
-fn default_system_core() -> &'static str {
-    r#"You are March, an agentic coding partner whose source of truth is the filesystem.
-
-Role:
-- You are a calm, capable coding assistant for a real local workspace.
-- You help with software tasks, but you can also chat naturally when the user is simply greeting, confirming, or asking casual questions.
-- Do not assume every user message is a request for a project status report or engineering summary.
-
-Core operating rule:
-- The local workspace is the source of truth for project and code questions.
-- Do not guess about repository contents, architecture, implementation status, test status, or file contents when they can be verified from the workspace.
-
-Behavior:
-- If the user is greeting you or making small talk, reply naturally, briefly, and in the user's language.
-- If the user asks about the project, code, bugs, architecture, tests, implementation details, or anything that depends on the current workspace, switch into coding-assistant mode and ground your answer in tool-based inspection.
-- For concrete coding or investigation requests, act with initiative: inspect the workspace, choose sensible next steps, and make progress without asking the user to manually fetch local files or restate obvious context.
-- Default to doing the next useful step yourself. Ask for confirmation only when the decision would change scope, risk destructive effects, or has multiple non-obvious directions with meaningful tradeoffs.
-- Do not turn straightforward execution into a back-and-forth approval loop. When the user says to choose, decide and proceed.
-- Stay grounded in the current filesystem-backed context. Never pretend stale snapshots are the truth.
-- Do not invent work you have not done. If you are unsure, say so plainly.
-
-Tool use:
-- For any request that depends on the current workspace, repository, codebase, files, tests, configuration, build system, or local environment, you must inspect the workspace with one or more tools before giving a substantive answer.
-- Do not end the turn with only a preamble, intention, or plan such as “I’ll inspect the repo first”.
-- If the answer depends on filesystem or environment evidence, gather that evidence first via tools.
-- Prefer the open-files context layer for file contents that are already tracked; do not re-read the same file through shell commands unless you need a view that open files cannot provide.
-- Only finish without tool use if the user's request can be fully and safely answered without inspecting the workspace.
-- Do not use tools for simple greetings or casual conversation.
-- When all work is complete, output your final response as plain text without calling any tools. That is what ends the turn.
-- Do not call any tool to deliver the final answer.
-- A repository-dependent request answered without tool use is incomplete.
-
-Completion rule:
-- Only end your turn when one of these is true:
-  1. you have completed the necessary tool-assisted investigation or work, or
-  2. you have determined that no tool use is actually necessary for this request.
-- If the task is repository-dependent, a tool-free answer is usually not sufficient.
-
-Tone:
-- Be direct, warm, and concise.
-- Match the user's language when practical.
-- Avoid unnecessary status dumps unless the user explicitly asks for them."#
 }
 
 #[derive(Debug, Clone)]
@@ -279,231 +228,6 @@ impl AgentSession {
             available_shells: detect_available_shells()?,
             working_directory,
         })
-    }
-
-    pub async fn handle_user_message(
-        &mut self,
-        client: &OpenAiCompatibleClient,
-        content: impl Into<String>,
-    ) -> Result<AgentRunResult> {
-        self.handle_user_message_with_events_and_cancel(client, content, || false, |_, _| Ok(()))
-            .await
-    }
-
-    pub async fn handle_user_message_with_events<F>(
-        &mut self,
-        client: &OpenAiCompatibleClient,
-        content: impl Into<String>,
-        on_event: F,
-    ) -> Result<AgentRunResult>
-    where
-        F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
-    {
-        self.handle_user_message_with_events_and_cancel(client, content, || false, on_event)
-            .await
-    }
-
-    pub async fn handle_user_message_with_events_and_cancel<F, C>(
-        &mut self,
-        client: &OpenAiCompatibleClient,
-        content: impl Into<String>,
-        is_cancelled: C,
-        mut on_event: F,
-    ) -> Result<AgentRunResult>
-    where
-        F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
-        C: Fn() -> bool,
-    {
-        self.add_user_turn(content);
-
-        let mut final_messages = Vec::new();
-        let mut summaries = Vec::new();
-        let mut debug_rounds = Vec::new();
-        let mut transient_messages: Vec<RequestMessage> = Vec::new();
-        let mut iteration = 0usize;
-
-        loop {
-            ensure_turn_not_cancelled(&is_cancelled)?;
-            iteration += 1;
-            on_event(
-                self,
-                AgentProgressEvent::Status {
-                    phase: AgentStatusPhase::BuildingContext,
-                    label: "正在整理上下文".to_string(),
-                },
-            )?;
-            let context = self.build_context();
-            let context_preview = render_prompt(&context);
-            let mut conversation = build_messages(&context);
-            conversation.extend(transient_messages.clone());
-            let mut content_preview = String::new();
-            on_event(
-                self,
-                AgentProgressEvent::Status {
-                    phase: AgentStatusPhase::WaitingModel,
-                    label: "正在调用模型".to_string(),
-                },
-            )?;
-            let response = client
-                .complete_context_with_events(&context, conversation, |event| {
-                    ensure_turn_not_cancelled(&is_cancelled)?;
-                    if let ProviderProgressEvent::ContentDelta(ref delta) = event {
-                        if !delta.is_empty() {
-                            content_preview.push_str(delta);
-                            on_event(
-                                self,
-                                AgentProgressEvent::Status {
-                                    phase: AgentStatusPhase::Streaming,
-                                    label: "正在生成回复".to_string(),
-                                },
-                            )?;
-                            on_event(
-                                self,
-                                AgentProgressEvent::AssistantTextPreview {
-                                    message: content_preview.clone(),
-                                },
-                            )?;
-                        }
-                    }
-                    Ok(())
-                })
-                .await?;
-            ensure_turn_not_cancelled(&is_cancelled)?;
-            let assistant_text = response
-                .content
-                .as_deref()
-                .filter(|text| !text.trim().is_empty())
-                .map(ToOwned::to_owned);
-            let mut debug_round = DebugRound {
-                iteration,
-                context_preview,
-                provider_request_json: response.request_json.clone(),
-                provider_raw_response: response.raw_response.clone(),
-                tool_calls: response
-                    .tool_calls
-                    .iter()
-                    .map(|tool_call| DebugToolCall {
-                        id: tool_call.id.clone(),
-                        name: tool_call.name.clone(),
-                        arguments_json: tool_call.arguments_json.clone(),
-                    })
-                    .collect(),
-                tool_results: Vec::new(),
-            };
-
-            if response.tool_calls.is_empty() {
-                // No tool calls: the model is done. Plain text output is the final reply.
-                // This is the only legitimate turn exit — mirroring Codex's "text output = done" contract.
-                let final_message = match assistant_text {
-                    Some(text) if !text.trim().is_empty() => text,
-                    _ => bail!("provider returned no tool calls and no text; cannot end turn"),
-                };
-                let final_message = FinalAssistantMessage {
-                    message: final_message,
-                };
-                self.add_assistant_turn(final_message.message.clone(), summaries.clone());
-                on_event(
-                    self,
-                    AgentProgressEvent::FinalAssistantMessage(final_message.clone()),
-                )?;
-                final_messages.push(final_message);
-                debug_rounds.push(debug_round);
-                on_event(
-                    self,
-                    AgentProgressEvent::RoundCompleted(
-                        debug_rounds
-                            .last()
-                            .cloned()
-                            .expect("debug round just pushed"),
-                    ),
-                )?;
-                return Ok(AgentRunResult {
-                    final_messages,
-                    debug_rounds,
-                });
-            }
-
-            append_assistant_tool_call_message(
-                &mut transient_messages,
-                assistant_text,
-                &response.tool_calls,
-            );
-
-            for tool_call in response.tool_calls {
-                ensure_turn_not_cancelled(&is_cancelled)?;
-                let tool_summary =
-                    summarize_tool_call(tool_call.name.as_str(), &tool_call.arguments_json);
-                on_event(
-                    self,
-                    AgentProgressEvent::Status {
-                        phase: AgentStatusPhase::RunningTool,
-                        label: "正在执行工具".to_string(),
-                    },
-                )?;
-                on_event(
-                    self,
-                    AgentProgressEvent::ToolStarted {
-                        tool_call_id: tool_call.id.clone(),
-                        tool_name: tool_call.name.clone(),
-                        summary: tool_summary.clone(),
-                    },
-                )?;
-                let outcome = match self.execute_tool_call(&tool_call) {
-                    Ok(outcome) => {
-                        on_event(
-                            self,
-                            AgentProgressEvent::ToolFinished {
-                                tool_call_id: tool_call.id.clone(),
-                                status: AgentToolStatus::Success,
-                                summary: outcome
-                                    .summary
-                                    .as_ref()
-                                    .map(|summary| summary.summary.clone())
-                                    .unwrap_or_else(|| tool_summary.clone()),
-                                preview: preview_tool_result(&outcome.result_text),
-                            },
-                        )?;
-                        outcome
-                    }
-                    Err(error) => {
-                        let result_text = format_tool_error(&tool_call.name, &error);
-                        on_event(
-                            self,
-                            AgentProgressEvent::ToolFinished {
-                                tool_call_id: tool_call.id.clone(),
-                                status: AgentToolStatus::Error,
-                                summary: tool_summary.clone(),
-                                preview: preview_tool_result(&result_text),
-                            },
-                        )?;
-                        ToolOutcome {
-                            result_text,
-                            summary: None,
-                        }
-                    }
-                };
-                ensure_turn_not_cancelled(&is_cancelled)?;
-                transient_messages.push(RequestMessage::tool(
-                    tool_call.id,
-                    outcome.result_text.clone(),
-                ));
-                debug_round.tool_results.push(outcome.result_text.clone());
-                if let Some(summary) = outcome.summary {
-                    summaries.push(summary);
-                }
-            }
-
-            debug_rounds.push(debug_round);
-            on_event(
-                self,
-                AgentProgressEvent::RoundCompleted(
-                    debug_rounds
-                        .last()
-                        .cloned()
-                        .expect("debug round just pushed"),
-                ),
-            )?;
-        }
     }
 
     pub fn add_injection(&mut self, id: impl Into<String>, content: impl Into<String>) {
@@ -673,7 +397,7 @@ impl AgentSession {
         &self.available_shells
     }
 
-    pub fn skills(&self) -> &[SkillEntry] {
+    pub fn skills(&self) -> &[crate::skills::SkillEntry] {
         &self.skills
     }
 
@@ -779,6 +503,10 @@ impl AgentSession {
         )
     }
 
+    pub(crate) fn open_file_snapshots(&self) -> IndexMap<PathBuf, FileSnapshot> {
+        self.watcher.store().snapshots()
+    }
+
     fn session_status(&self) -> SessionStatus {
         SessionStatus {
             workspace_root: self.working_directory.clone(),
@@ -795,206 +523,6 @@ impl AgentSession {
                 .collect(),
             workspace_entries: workspace_entries(&self.working_directory),
         }
-    }
-
-    fn execute_tool_call(&mut self, tool_call: &ProviderToolCall) -> Result<ToolOutcome> {
-        let args: Value = serde_json::from_str(&tool_call.arguments_json).with_context(|| {
-            format!(
-                "failed to decode arguments for tool {}: {}",
-                tool_call.name, tool_call.arguments_json
-            )
-        })?;
-
-        match tool_call.name.as_str() {
-            "run_command" => {
-                let args: RunCommandArgs =
-                    serde_json::from_value(args).context("invalid run_command args")?;
-                let execution = self.run_command(CommandRequest {
-                    command: args.command,
-                    shell: parse_shell(&args.shell)?,
-                })?;
-                Ok(ToolOutcome {
-                    result_text: format_tool_output(&execution),
-                    summary: Some(ToolSummary {
-                        name: "run_command".to_string(),
-                        summary: format!(
-                            "{} (exit code {})",
-                            execution.command, execution.exit_code
-                        ),
-                    }),
-                })
-            }
-            "open_file" => {
-                let args: PathArgs =
-                    serde_json::from_value(args).context("invalid open_file args")?;
-                let path = self.resolve_path(args.path);
-                self.open_file(path.clone())?;
-                Ok(simple_tool(
-                    format!("opened {}", path.display()),
-                    "open_file",
-                    format!("开始追踪 {}", path.display()),
-                ))
-            }
-            "close_file" => {
-                let args: PathArgs =
-                    serde_json::from_value(args).context("invalid close_file args")?;
-                let path = self.resolve_path(args.path);
-                self.close_file(path.clone())?;
-                Ok(simple_tool(
-                    format!("closed {}", path.display()),
-                    "close_file",
-                    format!("停止追踪 {}", path.display()),
-                ))
-            }
-            "write_file" => {
-                let args: WriteFileArgs =
-                    serde_json::from_value(args).context("invalid write_file args")?;
-                let path = self.resolve_path(args.path);
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("failed to create {}", parent.display()))?;
-                }
-                let _guard = if path.exists() {
-                    Some(self.watcher.store().begin_agent_write([path.clone()])?)
-                } else {
-                    None
-                };
-                fs::write(&path, args.content)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
-                self.track_written_file(&path)?;
-                Ok(simple_tool(
-                    format!("wrote {}", path.display()),
-                    "write_file",
-                    format!("写入了 {}", path.display()),
-                ))
-            }
-            "replace_lines" => {
-                let args: ReplaceLinesArgs =
-                    serde_json::from_value(args).context("invalid replace_lines args")?;
-                let path = self.resolve_path(args.path);
-                edit_lines(&path, |lines| {
-                    replace_line_range(lines, args.start_line, args.end_line, &args.new_content)
-                })?;
-                self.refresh_if_watched(&path)?;
-                Ok(simple_tool(
-                    format!(
-                        "replaced lines {}-{} in {}",
-                        args.start_line,
-                        args.end_line,
-                        path.display()
-                    ),
-                    "replace_lines",
-                    format!(
-                        "修改了 {} 第 {}-{} 行",
-                        path.display(),
-                        args.start_line,
-                        args.end_line
-                    ),
-                ))
-            }
-            "insert_lines" => {
-                let args: InsertLinesArgs =
-                    serde_json::from_value(args).context("invalid insert_lines args")?;
-                let path = self.resolve_path(args.path);
-                edit_lines(&path, |lines| {
-                    insert_line_block(lines, args.after_line, &args.new_content)
-                })?;
-                self.refresh_if_watched(&path)?;
-                Ok(simple_tool(
-                    format!("inserted after {} in {}", args.after_line, path.display()),
-                    "insert_lines",
-                    format!("在 {} 第 {} 行后插入内容", path.display(), args.after_line),
-                ))
-            }
-            "delete_lines" => {
-                let args: DeleteLinesArgs =
-                    serde_json::from_value(args).context("invalid delete_lines args")?;
-                let path = self.resolve_path(args.path);
-                edit_lines(&path, |lines| {
-                    delete_line_range(lines, args.start_line, args.end_line)
-                })?;
-                self.refresh_if_watched(&path)?;
-                Ok(simple_tool(
-                    format!(
-                        "deleted lines {}-{} in {}",
-                        args.start_line,
-                        args.end_line,
-                        path.display()
-                    ),
-                    "delete_lines",
-                    format!(
-                        "删除了 {} 第 {}-{} 行",
-                        path.display(),
-                        args.start_line,
-                        args.end_line
-                    ),
-                ))
-            }
-            "write_note" => {
-                let args: WriteNoteArgs =
-                    serde_json::from_value(args).context("invalid write_note args")?;
-                self.write_note(args.id.clone(), args.content);
-                Ok(simple_tool(
-                    format!("stored note {}", args.id),
-                    "write_note",
-                    format!("更新了 note {}", args.id),
-                ))
-            }
-            "remove_note" => {
-                let args: RemoveNoteArgs =
-                    serde_json::from_value(args).context("invalid remove_note args")?;
-                self.remove_note(&args.id);
-                Ok(simple_tool(
-                    format!("removed note {}", args.id),
-                    "remove_note",
-                    format!("移除了 note {}", args.id),
-                ))
-            }
-            other => bail!("unknown tool call: {}", other),
-        }
-    }
-
-    fn resolve_shell(&self, shell: CommandShell) -> Result<AvailableShell> {
-        self.available_shells
-            .iter()
-            .find(|candidate| candidate.kind == shell)
-            .cloned()
-            .with_context(|| format!("requested shell {} is not available", shell.label()))
-    }
-
-    fn resolve_path(&self, path: PathBuf) -> PathBuf {
-        if path.is_absolute() {
-            path
-        } else {
-            self.working_directory.join(path)
-        }
-    }
-
-    fn open_file_snapshots(&self) -> IndexMap<PathBuf, FileSnapshot> {
-        self.watcher.store().snapshots()
-    }
-
-    fn refresh_if_watched(&self, path: &Path) -> Result<()> {
-        if self.open_file_snapshots().contains_key(path) {
-            self.watcher
-                .store()
-                .refresh_file(path, crate::context::ModifiedBy::Agent)?;
-        }
-        Ok(())
-    }
-
-    fn track_written_file(&mut self, path: &Path) -> Result<()> {
-        if self.open_file_snapshots().contains_key(path) {
-            self.watcher
-                .store()
-                .refresh_file(path, crate::context::ModifiedBy::Agent)?;
-        } else {
-            self.watcher.watch_file(path.to_path_buf())?;
-            self.watcher
-                .store()
-                .refresh_file(path, crate::context::ModifiedBy::Agent)?;
-        }
-        Ok(())
     }
 
     fn prune_expired_hints(&mut self) {
@@ -1048,354 +576,10 @@ impl AgentSession {
     }
 }
 
-fn ensure_turn_not_cancelled<C>(is_cancelled: &C) -> Result<()>
-where
-    C: Fn() -> bool,
-{
-    if is_cancelled() {
-        return Err(anyhow!(TURN_CANCELLED_ERROR_MESSAGE));
-    }
-    Ok(())
-}
-
-pub fn is_turn_cancelled_error(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.to_string().contains(TURN_CANCELLED_ERROR_MESSAGE))
-}
-
-/// 这里用轻量估算而不是 provider 专属 tokenizer：
-/// - ASCII 文本粗略按 4 chars ≈ 1 token
-/// - 非 ASCII 字符（尤其中文）按 1 char ≈ 1 token
-/// 这样不会冒充“精确 token”，但比直接用字节数更接近真实上下文消耗。
 fn estimate_token_count(text: &str) -> usize {
     let ascii_chars = text.chars().filter(|ch| ch.is_ascii()).count();
     let non_ascii_chars = text.chars().count().saturating_sub(ascii_chars);
     ascii_chars.div_ceil(4) + non_ascii_chars
-}
-
-fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
-    let args = serde_json::from_str::<Value>(arguments_json).unwrap_or(Value::Null);
-    match name {
-        "run_command" => {
-            let shell = args.get("shell").and_then(Value::as_str).unwrap_or("shell");
-            let command = args.get("command").and_then(Value::as_str).unwrap_or("");
-            if command.is_empty() {
-                "run_command".to_string()
-            } else {
-                format!("run_command {} {}", shell, command)
-            }
-        }
-        "open_file" | "close_file" | "write_file" => {
-            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-            if path.is_empty() {
-                name.to_string()
-            } else {
-                format!("{name} {path}")
-            }
-        }
-        "replace_lines" | "delete_lines" => {
-            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-            let start_line = args.get("start_line").and_then(Value::as_u64).unwrap_or(0);
-            let end_line = args.get("end_line").and_then(Value::as_u64).unwrap_or(0);
-            if path.is_empty() || start_line == 0 || end_line == 0 {
-                name.to_string()
-            } else {
-                format!("{name} {path}:{start_line}-{end_line}")
-            }
-        }
-        "insert_lines" => {
-            let path = args.get("path").and_then(Value::as_str).unwrap_or("");
-            let after_line = args.get("after_line").and_then(Value::as_u64).unwrap_or(0);
-            if path.is_empty() || after_line == 0 {
-                name.to_string()
-            } else {
-                format!("{name} {path}:{after_line}")
-            }
-        }
-        "write_note" | "remove_note" => {
-            let id = args.get("id").and_then(Value::as_str).unwrap_or("");
-            if id.is_empty() {
-                name.to_string()
-            } else {
-                format!("{name} {id}")
-            }
-        }
-        _ => name.to_string(),
-    }
-}
-
-fn preview_tool_result(result_text: &str) -> Option<String> {
-    let preview = result_text
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(str::trim)
-        .unwrap_or("");
-    if preview.is_empty() {
-        return None;
-    }
-
-    if preview.chars().count() > 120 {
-        Some(format!(
-            "{}…",
-            preview.chars().take(120).collect::<String>()
-        ))
-    } else {
-        Some(preview.to_string())
-    }
-}
-
-fn format_tool_error(tool_name: &str, error: &anyhow::Error) -> String {
-    format!("Tool `{tool_name}` failed.\nError: {error:#}")
-}
-
-fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome {
-    ToolOutcome {
-        result_text,
-        summary: Some(ToolSummary {
-            name: name.to_string(),
-            summary,
-        }),
-    }
-}
-
-fn to_request_tool_call(tool_call: &ProviderToolCall) -> ApiToolCallRequest {
-    ApiToolCallRequest {
-        id: tool_call.id.clone(),
-        tool_type: "function".to_string(),
-        function: ApiToolFunctionCallRequest {
-            name: tool_call.name.clone(),
-            arguments: tool_call.arguments_json.clone(),
-        },
-    }
-}
-
-fn append_assistant_tool_call_message(
-    transient_messages: &mut Vec<RequestMessage>,
-    assistant_text: Option<String>,
-    tool_calls: &[ProviderToolCall],
-) {
-    transient_messages.push(RequestMessage::assistant_tool_calls_with_text(
-        assistant_text,
-        tool_calls.iter().map(to_request_tool_call).collect(),
-    ));
-}
-
-fn render_prompt(context: &AgentContext) -> String {
-    let mut output = String::new();
-    output.push_str("# System Core\n");
-    output.push_str(&context.system_core);
-    output.push_str("\n\n# Injections\n");
-    if context.injections.is_empty() {
-        output.push_str("(none)\n");
-    } else {
-        for injection in &context.injections {
-            output.push_str(&format!("## {}\n{}\n", injection.id, injection.content));
-        }
-    }
-    output.push_str("\n# Tools\n");
-    output.push_str(
-        &ToolRuntime {
-            tools: context.tools.clone(),
-        }
-        .render_prompt_section(),
-    );
-    output.push_str("\n\n# Session Status\n");
-    if context.session_status.is_empty() {
-        output.push_str("(none)\n");
-    } else {
-        output.push_str(&format!(
-            "workspace_root: {}\nplatform: {}\ndefault_shell: {}\n",
-            context.session_status.workspace_root.display(),
-            context.session_status.platform,
-            context.session_status.shell
-        ));
-        if context.session_status.available_shells.is_empty() {
-            output.push_str("available_shells: (none)\n");
-        } else {
-            output.push_str(&format!(
-                "available_shells: {}\n",
-                context.session_status.available_shells.join(", ")
-            ));
-        }
-        if context.session_status.workspace_entries.is_empty() {
-            output.push_str("workspace_entries: (none)\n");
-        } else {
-            output.push_str("workspace_entries:\n");
-            for entry in &context.session_status.workspace_entries {
-                output.push_str(&format!("- {entry}\n"));
-            }
-        }
-    }
-    output.push_str("\n# Open Files\n");
-    for snapshot in context.open_files_in_prompt_order() {
-        output.push_str(&render_file_snapshot_for_prompt(snapshot));
-        output.push('\n');
-    }
-    output.push_str("# Notes\n");
-    if context.notes.is_empty() {
-        output.push_str("(none)\n");
-    } else {
-        for (id, note) in &context.notes {
-            output.push_str(&format!("{id}: {}\n", note.content));
-        }
-    }
-    output.push_str("\n# Runtime Status\n");
-    if context.runtime_status.is_empty() {
-        output.push_str("(none)\n");
-    } else {
-        if !context.runtime_status.locked_files.is_empty() {
-            output.push_str("locked_files:\n");
-            for path in &context.runtime_status.locked_files {
-                output.push_str(&format!("- {}\n", path.display()));
-            }
-        }
-        if let Some(pressure) = &context.runtime_status.context_pressure {
-            output.push_str(&format!(
-                "context_pressure: {}% - {}\n",
-                pressure.used_percent, pressure.message
-            ));
-        }
-    }
-    output.push_str("\n# Hints\n");
-    if context.hints.is_empty() {
-        output.push_str("(none)\n");
-    } else {
-        for hint in &context.hints {
-            output.push_str(&format!("- {}\n", hint.content));
-        }
-    }
-    output.push_str("\n# Recent Chat\n");
-    for turn in &context.recent_chat {
-        output.push_str(&format!("{:?}: {}\n", turn.role, turn.content));
-    }
-    output
-}
-
-fn format_tool_output(execution: &CommandExecution) -> String {
-    let mut text = format!(
-        "Command: {}\nShell: {:?}\nWorking directory: {}\nExit code: {}\nStarted at: {:?}\nFinished at: {:?}",
-        execution.command,
-        execution.shell,
-        execution.working_directory.display(),
-        execution.exit_code,
-        execution.started_at,
-        execution.finished_at
-    );
-    if !execution.stdout.is_empty() {
-        text.push_str(&format!("\nStdout:\n{}", execution.stdout));
-    }
-    if !execution.stderr.is_empty() {
-        text.push_str(&format!("\nStderr:\n{}", execution.stderr));
-    }
-    text
-}
-fn load_skills_for_workspace(working_directory: &Path) -> Result<(Vec<SkillEntry>, Injection)> {
-    let config = MarchConfig::load_for_workspace(working_directory)?;
-    let loader = SkillLoader::new(working_directory.to_path_buf(), user_home_dir()?);
-    let skills = loader.load(&config)?;
-    let injection = loader.to_injection(&skills);
-    Ok((skills, injection))
-}
-
-fn upsert_injection(injections: &mut Vec<Injection>, next: Injection) {
-    if let Some(existing) = injections.iter_mut().find(|injection| injection.id == next.id) {
-        existing.content = next.content;
-    } else {
-        injections.push(next);
-    }
-}
-
-
-fn normalize_open_files_for_workspace(
-    working_directory: &Path,
-    open_files: impl IntoIterator<Item = PersistedOpenFile>,
-) -> Vec<PersistedOpenFile> {
-    let mut normalized = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    for open_file in open_files {
-        let path = absolutize_workspace_path(working_directory, open_file.path);
-        if !path.exists() || !seen.insert(path.clone()) {
-            continue;
-        }
-        normalized.push(PersistedOpenFile {
-            path,
-            locked: open_file.locked,
-        });
-    }
-
-    let agents_path = working_directory.join(AGENTS_FILENAME);
-    if agents_path.exists() && seen.insert(agents_path.clone()) {
-        normalized.insert(
-            0,
-            PersistedOpenFile {
-                path: agents_path,
-                locked: true,
-            },
-        );
-    }
-
-    normalized
-}
-
-fn absolutize_workspace_path(working_directory: &Path, path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        path
-    } else {
-        working_directory.join(path)
-    }
-}
-
-
-#[derive(Debug, Deserialize)]
-struct RunCommandArgs {
-    shell: String,
-    command: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PathArgs {
-    path: PathBuf,
-}
-
-#[derive(Debug, Deserialize)]
-struct WriteFileArgs {
-    path: PathBuf,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReplaceLinesArgs {
-    path: PathBuf,
-    start_line: usize,
-    end_line: usize,
-    new_content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct InsertLinesArgs {
-    path: PathBuf,
-    after_line: usize,
-    new_content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeleteLinesArgs {
-    path: PathBuf,
-    start_line: usize,
-    end_line: usize,
-}
-
-#[derive(Debug, Deserialize)]
-struct WriteNoteArgs {
-    id: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoveNoteArgs {
-    id: String,
 }
 
 #[cfg(test)]
@@ -1405,12 +589,12 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use super::shells::resolve_shell_program_with;
     use super::{
         AGENTS_FILENAME, AgentConfig, AgentSession, CommandShell,
         append_assistant_tool_call_message, decode_command_output, default_system_core,
         normalize_open_files_for_workspace,
     };
-    use super::shells::resolve_shell_program_with;
     use crate::context::{ConversationHistory, Hint, NoteEntry};
     use crate::provider::{ProviderToolCall, RequestMessage};
     use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource};
@@ -1449,14 +633,13 @@ mod tests {
             .expect("current dir")
             .join(format!("ma-write-file-{unique}.txt"));
 
-        let mut session =
-            AgentSession::new(
-                AgentConfig::default(),
-                ConversationHistory::default(),
-                [],
-                std::env::current_dir().expect("current dir"),
-            )
-                .expect("create agent session");
+        let mut session = AgentSession::new(
+            AgentConfig::default(),
+            ConversationHistory::default(),
+            [],
+            std::env::current_dir().expect("current dir"),
+        )
+        .expect("create agent session");
         let tool_call = ProviderToolCall {
             id: "call_write".to_string(),
             name: "write_file".to_string(),

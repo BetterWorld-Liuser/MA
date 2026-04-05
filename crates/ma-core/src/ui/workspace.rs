@@ -94,15 +94,22 @@ fn git_visible_files(working_directory: &Path) -> Result<Vec<String>> {
     let repo_root_output = repo_root_output.context("failed to inspect git repo root")?;
     let prefix_output = prefix_output.context("failed to inspect git prefix")?;
     let output = output.context("failed to list git visible files")?;
-    if !repo_root_output.status.success() || !prefix_output.status.success() || !output.status.success()
+    if !repo_root_output.status.success()
+        || !prefix_output.status.success()
+        || !output.status.success()
     {
-        bail!("git metadata unavailable for {}", working_directory.display());
+        bail!(
+            "git metadata unavailable for {}",
+            working_directory.display()
+        );
     }
 
     let repo_root = String::from_utf8_lossy(&repo_root_output.stdout)
         .trim()
         .to_string();
-    let prefix = String::from_utf8_lossy(&prefix_output.stdout).trim().to_string();
+    let prefix = String::from_utf8_lossy(&prefix_output.stdout)
+        .trim()
+        .to_string();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // git 在子目录中执行时仍然返回 repo-root 相对路径。

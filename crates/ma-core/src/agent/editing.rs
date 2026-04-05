@@ -47,7 +47,11 @@ pub fn replace_line_range(
     Ok(())
 }
 
-pub fn insert_line_block(lines: &mut Vec<String>, after_line: usize, new_content: &str) -> Result<()> {
+pub fn insert_line_block(
+    lines: &mut Vec<String>,
+    after_line: usize,
+    new_content: &str,
+) -> Result<()> {
     if after_line > lines.len() {
         bail!(
             "insert_lines after_line {} is out of range for {} lines",
@@ -68,7 +72,11 @@ pub fn insert_line_block(lines: &mut Vec<String>, after_line: usize, new_content
     Ok(())
 }
 
-pub fn delete_line_range(lines: &mut Vec<String>, start_line: usize, end_line: usize) -> Result<()> {
+pub fn delete_line_range(
+    lines: &mut Vec<String>,
+    start_line: usize,
+    end_line: usize,
+) -> Result<()> {
     validate_line_range(lines, start_line, end_line)?;
     lines.drain((start_line - 1)..end_line);
     Ok(())

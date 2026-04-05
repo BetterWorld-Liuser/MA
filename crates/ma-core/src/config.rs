@@ -122,10 +122,8 @@ fn normalize_trigger_rules(raw_rules: &[RawSkillTriggerRuleConfig]) -> Vec<Skill
                 .filter(|skill| !skill.is_empty())
                 .collect::<Vec<_>>();
 
-            (!paths.is_empty() && !skills.is_empty()).then_some(SkillTriggerRuleConfig {
-                paths,
-                skills,
-            })
+            (!paths.is_empty() && !skills.is_empty())
+                .then_some(SkillTriggerRuleConfig { paths, skills })
         })
         .collect()
 }

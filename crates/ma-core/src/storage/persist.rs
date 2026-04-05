@@ -6,10 +6,8 @@ use rusqlite::{Transaction, params};
 
 use crate::context::{ConversationHistory, Hint, NoteEntry};
 
-use super::codec::{
-    encode_tool_summaries, optional_unix_timestamp, role_to_db, unix_timestamp,
-};
 use super::PersistedOpenFile;
+use super::codec::{encode_tool_summaries, optional_unix_timestamp, role_to_db, unix_timestamp};
 
 pub fn update_task_last_active(
     transaction: &Transaction<'_>,

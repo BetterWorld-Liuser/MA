@@ -4,11 +4,11 @@ use crate::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use crate::settings::{ProviderType, SettingsStorage};
 use crate::storage::TaskRecord;
 
+use super::util::normalize_ui_optional_string;
 use super::{
     UiProbeProviderModelsRequest, UiProviderModelGroupView, UiProviderModelsView,
     UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
 };
-use super::util::normalize_ui_optional_string;
 
 pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
     let settings = SettingsStorage::open()?;
@@ -120,7 +120,9 @@ pub async fn fetch_task_model_selector(
         });
         let mut available_models = client.list_models().await.unwrap_or_default();
         if !provider_current_model.is_empty()
-            && !available_models.iter().any(|model| model == &provider_current_model)
+            && !available_models
+                .iter()
+                .any(|model| model == &provider_current_model)
         {
             available_models.insert(0, provider_current_model);
         }
