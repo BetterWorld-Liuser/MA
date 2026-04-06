@@ -13,10 +13,10 @@ use super::codec::{
     unix_timestamp,
 };
 use super::{
-    MaStorage, PersistedNote, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource,
+    MarchStorage, PersistedNote, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource,
 };
 
-impl MaStorage {
+impl MarchStorage {
     pub fn create_task(&self, name: impl AsRef<str>) -> Result<TaskRecord> {
         self.create_task_with_metadata_and_selection(
             name,

@@ -18,3 +18,4 @@
 | [ui-events.md](ui-events.md) | 聊天运行事件模型、事件字段、状态机、前端聚合方式 |
 | [provider.md](provider.md) | genai 选型理由、与上下文管理的分工、cache_control 映射 |
 | [browser.md](browser.md) | 截图策略、CDP 浏览器操作、桌面 GUI 操作 |
+| [march-md.md](march-md.md) | 自研 Markdown 渲染引擎：Sealed Prefix + Live Tail、Block Parser 状态机、Lenient Inline 解析 |

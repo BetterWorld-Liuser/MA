@@ -6,7 +6,7 @@ use crate::config::MarchConfig;
 use crate::context::{
     AgentContext, Injection, render_chat_turn_for_prompt, render_file_snapshot_for_prompt,
 };
-use crate::paths::clean_path;
+use crate::paths::{clean_path, resolve_project_root};
 use crate::provider::{
     ApiToolCallRequest, ApiToolFunctionCallRequest, MessageContent, ProviderToolCall,
     RequestMessage,
@@ -226,8 +226,9 @@ pub(super) fn format_tool_output(execution: &CommandExecution) -> String {
 pub(super) fn load_skills_for_workspace(
     working_directory: &Path,
 ) -> Result<(Vec<SkillEntry>, Injection)> {
-    let config = MarchConfig::load_for_workspace(working_directory)?;
-    let loader = SkillLoader::new(working_directory.to_path_buf(), user_home_dir()?);
+    let project_root = resolve_project_root(working_directory);
+    let config = MarchConfig::load_for_workspace(&project_root)?;
+    let loader = SkillLoader::new(project_root, user_home_dir()?);
     let skills = loader.load(&config)?;
     let injection = loader.to_injection(&skills);
     Ok((skills, injection))

@@ -1,5 +1,11 @@
 import { ref, watch, type Ref } from 'vue';
-import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, ChatMessage, LiveTurn } from '@/data/mock';
+import type {
+  BackendAgentProgressEvent,
+  BackendWorkspaceSnapshot,
+  ChatMessage,
+  LiveTurn,
+  TaskActivityStatus,
+} from '@/data/mock';
 
 type UseLiveTurnsOptions = {
   snapshot: Ref<BackendWorkspaceSnapshot | null>;
@@ -25,6 +31,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
   const liveTurns = ref<Record<number, LiveTurn>>({});
   const archivedFailedTurns = ref<Record<number, ArchivedFailedTurn[]>>({});
   const archivedIntermediateTurns = ref<Record<number, ArchivedIntermediateTurn[]>>({});
+  const taskActivityStatuses = ref<Record<number, TaskActivityStatus>>({});
 
   watch(
     workspacePath,
@@ -38,6 +45,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
   function applyAgentProgress(event: BackendAgentProgressEvent) {
     switch (event.kind) {
       case 'turn_started':
+        setTaskActivity(event.task_id, 'working');
         upsertLiveTurn(event.task_id, {
           turnId: event.turn_id,
           author: formatAgentAuthor(event.agent_display_name || event.agent),
@@ -49,6 +57,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'status':
+        setTaskActivity(event.task_id, 'working');
         mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
@@ -62,6 +71,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'tool_started':
+        setTaskActivity(event.task_id, 'working');
         mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
@@ -81,6 +91,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'tool_finished':
+        setTaskActivity(event.task_id, 'working');
         mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
@@ -101,6 +112,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'assistant_text_preview':
+        setTaskActivity(event.task_id, 'working');
         mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
@@ -116,6 +128,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'assistant_message_checkpoint':
+        setTaskActivity(event.task_id, 'working');
         mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
@@ -139,6 +152,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         }
         return;
       case 'final_assistant_message':
+        setTaskActivity(event.task_id, 'review');
         if (snapshot.value?.active_task?.task.id === event.task_id) {
           snapshot.value = {
             ...snapshot.value,
@@ -148,6 +162,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         clearLiveTurn(event.task_id);
         return;
       case 'round_complete':
+        setTaskActivity(event.task_id, 'review');
         if (snapshot.value?.active_task?.task.id === event.task_id) {
           snapshot.value = {
             ...snapshot.value,
@@ -156,6 +171,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         }
         return;
       case 'turn_failed':
+        clearTaskActivity(event.task_id);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -176,6 +192,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         }
         return;
       case 'turn_cancelled':
+        clearTaskActivity(event.task_id);
         if (snapshot.value?.active_task?.task.id === event.task_id) {
           snapshot.value = {
             ...snapshot.value,
@@ -267,6 +284,23 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
     persistArchivedFailedTurns(workspacePath.value, archivedFailedTurns.value);
   }
 
+  function setTaskActivity(taskId: number, status: TaskActivityStatus) {
+    taskActivityStatuses.value = {
+      ...taskActivityStatuses.value,
+      [taskId]: status,
+    };
+  }
+
+  function clearTaskActivity(taskId: number) {
+    if (!(taskId in taskActivityStatuses.value)) {
+      return;
+    }
+
+    const nextStatuses = { ...taskActivityStatuses.value };
+    delete nextStatuses[taskId];
+    taskActivityStatuses.value = nextStatuses;
+  }
+
   function archiveIntermediateTurn(taskId: number, turn: LiveTurn, messageId?: string) {
     const content = turn.content.trim();
     if (!content) {
@@ -342,11 +376,13 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
     liveTurns,
     archivedFailedTurns,
     archivedIntermediateTurns,
+    taskActivityStatuses,
     applyAgentProgress,
     upsertLiveTurn,
     archiveFailedTurn,
     archiveIntermediateTurn,
     clearLiveTurn,
+    clearTaskActivity,
     clearArchivedFailedTurns,
     clearArchivedIntermediateTurns,
   };

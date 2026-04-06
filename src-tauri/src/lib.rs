@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
-use ma::agent::TurnCancellation;
+use march::agent::TurnCancellation;
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
-use ma::ui::{
+use march::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteAgentRequest,
     UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
     UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest,
@@ -152,7 +152,7 @@ async fn send_message(
         .handle_send_message_with_progress_and_cancel(
             request,
             |event| {
-                app.emit("ma://agent-progress", &event).map_err(|error| {
+                app.emit("march://agent-progress", &event).map_err(|error| {
                     anyhow::anyhow!("failed to emit agent progress event: {}", error)
                 })
             },

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::paths::clean_path;
+use crate::paths::{clean_path, resolve_project_root};
 use crate::settings::{SettingsStorage, march_settings_dir};
 
 pub const MARCH_AGENT_NAME: &str = "march";
@@ -45,6 +45,7 @@ impl AgentProfile {
 }
 
 pub fn load_agent_profiles(working_directory: &Path) -> Result<Vec<AgentProfile>> {
+    let project_root = resolve_project_root(working_directory);
     let mut profiles = HashMap::new();
     let mut march = AgentProfile::built_in_march();
     if let Ok(settings) = SettingsStorage::open() {
@@ -77,7 +78,7 @@ pub fn load_agent_profiles(working_directory: &Path) -> Result<Vec<AgentProfile>
         profiles.insert(profile.name.clone(), profile);
     }
 
-    let project_dir = working_directory.join(".march").join("agents");
+    let project_dir = project_root.join(".march").join("agents");
     for profile in load_profiles_from_dir(&project_dir)? {
         profiles.insert(profile.name.clone(), profile);
     }

@@ -714,5 +714,5 @@ pub struct UiContextUsageSectionView {
 
 pub struct UiAppBackend {
     workspace_path: PathBuf,
-    storage: crate::storage::MaStorage,
+    storage: crate::storage::MarchStorage,
 }

@@ -1,10 +1,10 @@
 [package]
-name = "ma-core"
+name = "march-core"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "ma"
+name = "march"
 
 [dependencies]
 anyhow = "1.0"

@@ -4,16 +4,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
-use ma::agent::{AgentConfig, AgentRunResult, AgentSession, DebugRound};
-use ma::context::{ContentBlock, ConversationHistory};
-use ma::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
-use ma::storage::MaStorage;
+use march::agent::{AgentConfig, AgentRunResult, AgentSession, DebugRound};
+use march::context::{ContentBlock, ConversationHistory};
+use march::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
+use march::storage::MarchStorage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
     let cwd = std::env::current_dir()?;
-    let mut storage = MaStorage::open(&cwd)?;
+    let mut storage = MarchStorage::open(&cwd)?;
     let cli_args = std::env::args().skip(1).collect::<Vec<_>>();
     let cli_request = (!cli_args.is_empty()).then(|| cli_args.join(" "));
     let config = AgentConfig {
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
 
     let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::from_env()?);
     let mut debug_enabled = false;
-    let debug_logs = DebugLogs::new(cwd.join(".ma").join("debug"))?;
+    let debug_logs = DebugLogs::new(cwd.join(".march").join("debug"))?;
 
     if let Some(request) = cli_request {
         match session

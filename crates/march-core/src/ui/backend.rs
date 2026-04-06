@@ -37,7 +37,7 @@ use super::{
 impl UiAppBackend {
     pub fn open(workspace_path: impl Into<PathBuf>) -> Result<Self> {
         let workspace_path = clean_path(workspace_path.into());
-        let storage = crate::storage::MaStorage::open(&workspace_path)?;
+        let storage = crate::storage::MarchStorage::open(&workspace_path)?;
         Ok(Self {
             workspace_path,
             storage,
@@ -686,10 +686,7 @@ impl UiAppBackend {
             request.api_key,
             request.base_url,
         )?;
-        Ok(UiProviderSettingsView::from_snapshot(
-            settings.database_path().to_path_buf(),
-            settings.snapshot()?,
-        ))
+        self.provider_settings()
     }
 
     pub fn handle_delete_provider(
@@ -698,10 +695,7 @@ impl UiAppBackend {
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
         settings.delete_provider(request.provider_id)?;
-        Ok(UiProviderSettingsView::from_snapshot(
-            settings.database_path().to_path_buf(),
-            settings.snapshot()?,
-        ))
+        self.provider_settings()
     }
 
     pub fn handle_upsert_provider_model(
@@ -736,10 +730,7 @@ impl UiAppBackend {
             request.supports_pdf,
             server_tools,
         )?;
-        Ok(UiProviderSettingsView::from_snapshot(
-            settings.database_path().to_path_buf(),
-            settings.snapshot()?,
-        ))
+        self.provider_settings()
     }
 
     pub fn handle_delete_provider_model(
@@ -748,10 +739,7 @@ impl UiAppBackend {
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
         settings.delete_provider_model(request.provider_model_id)?;
-        Ok(UiProviderSettingsView::from_snapshot(
-            settings.database_path().to_path_buf(),
-            settings.snapshot()?,
-        ))
+        self.provider_settings()
     }
 
     pub fn handle_set_default_provider(
@@ -763,10 +751,7 @@ impl UiAppBackend {
         self.storage
             .backfill_missing_task_defaults(previous.default_provider_id, previous.default_model)?;
         settings.set_default_provider(request.provider_id, request.model)?;
-        Ok(UiProviderSettingsView::from_snapshot(
-            settings.database_path().to_path_buf(),
-            settings.snapshot()?,
-        ))
+        self.provider_settings()
     }
 
     pub fn search_workspace_entries(

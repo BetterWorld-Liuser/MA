@@ -28,6 +28,7 @@ export function useWorkspaceApp() {
   const appWindow = getCurrentWindow();
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
   const optimisticTaskId = ref<string | null>(null);
+  const optimisticActiveTaskId = ref<string | null>(null);
   const optimisticDeletedTaskIds = ref<Set<string>>(new Set());
   const localComposerMessages = ref<Record<number, ChatMessage[]>>({});
   const workspacePath = computed(() => snapshot.value?.workspace_path);
@@ -46,10 +47,12 @@ export function useWorkspaceApp() {
     liveTurns,
     archivedFailedTurns,
     archivedIntermediateTurns,
+    taskActivityStatuses,
     applyAgentProgress,
     upsertLiveTurn,
     archiveFailedTurn,
     clearLiveTurn,
+    clearTaskActivity,
     clearArchivedFailedTurns,
     clearArchivedIntermediateTurns,
   } = useLiveTurns({
@@ -134,6 +137,14 @@ export function useWorkspaceApp() {
       );
       return {
         ...baseWorkspace,
+        tasks: baseWorkspace.tasks.map((task) => {
+          const taskId = Number(task.id);
+          const activityStatus = Number.isFinite(taskId) ? taskActivityStatuses.value[taskId] : undefined;
+          return {
+            ...task,
+            activityStatus: task.id === String(activeTaskId) ? undefined : activityStatus,
+          };
+        }),
         chat: mergeChatWithComposerMessages(activeTaskId ?? undefined, mergedChat),
         liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
       };
@@ -191,7 +202,7 @@ export function useWorkspaceApp() {
     }
 
     if (!optimisticDeletedTaskIds.value.size) {
-      return nextWorkspace;
+      return applyOptimisticActiveTask(nextWorkspace);
     }
 
     const visibleTasks = nextWorkspace.tasks.filter((task) => !optimisticDeletedTaskIds.value.has(task.id));
@@ -199,15 +210,15 @@ export function useWorkspaceApp() {
     const fallbackActiveTaskId = activeTaskVisible ? nextWorkspace.activeTaskId : (visibleTasks[0]?.id ?? '');
 
     if (activeTaskVisible) {
-      return {
+      return applyOptimisticActiveTask({
         ...nextWorkspace,
         tasks: visibleTasks,
-      };
+      });
     }
 
     const fallbackTaskName = visibleTasks.find((task) => task.id === fallbackActiveTaskId)?.name ?? 'March';
 
-    return {
+    return applyOptimisticActiveTask({
       ...nextWorkspace,
       title: fallbackTaskName,
       tasks: visibleTasks,
@@ -232,8 +243,43 @@ export function useWorkspaceApp() {
       },
       debugRounds: [],
       liveTurn: undefined,
-    };
+    });
   });
+
+  function applyOptimisticActiveTask(w: WorkspaceView): WorkspaceView {
+    const targetId = optimisticActiveTaskId.value;
+    if (!targetId || targetId === w.activeTaskId) {
+      return w;
+    }
+    const targetTask = w.tasks.find((task) => task.id === targetId);
+    if (!targetTask) {
+      return w;
+    }
+    return {
+      ...w,
+      activeTaskId: targetId,
+      title: targetTask.name,
+      selectedModel: undefined,
+      selectedTemperature: undefined,
+      selectedTopP: undefined,
+      selectedPresencePenalty: undefined,
+      selectedFrequencyPenalty: undefined,
+      selectedMaxOutputTokens: undefined,
+      chat: [],
+      notes: [],
+      openFiles: [],
+      hints: [],
+      skills: [],
+      contextUsage: {
+        percent: 0,
+        current: '0',
+        limit: w.contextUsage.limit,
+        sections: [],
+      },
+      debugRounds: [],
+      liveTurn: undefined,
+    };
+  }
 
   const activeTaskIdNumber = computed(() => {
     const raw = resolvedWorkspace.value.activeTaskId;
@@ -254,7 +300,7 @@ export function useWorkspaceApp() {
 
   async function initialize() {
     isMaximized.value = await appWindow.isMaximized();
-    unlistenAgentProgress = await listen<BackendAgentProgressEvent>('ma://agent-progress', (event) => {
+    unlistenAgentProgress = await listen<BackendAgentProgressEvent>('march://agent-progress', (event) => {
       applyAgentProgress(event.payload);
     });
     unlistenWindowResize = await appWindow.onResized(async () => {
@@ -306,11 +352,20 @@ export function useWorkspaceApp() {
       return;
     }
 
+    const numericTaskId = Number(taskId);
+    if (Number.isFinite(numericTaskId)) {
+      clearTaskActivity(numericTaskId);
+    }
+
+    optimisticActiveTaskId.value = taskId;
+
     await runWorkspaceAction(async () => {
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('select_task', {
-        input: { taskId: Number(taskId) },
+        input: { taskId: numericTaskId },
       });
     });
+
+    optimisticActiveTaskId.value = null;
   }
 
   async function deleteTask(taskId: string) {
@@ -338,6 +393,7 @@ export function useWorkspaceApp() {
           return;
         }
         clearLiveTurn(Number(taskId));
+        clearTaskActivity(Number(taskId));
         clearArchivedFailedTurns(Number(taskId));
         clearArchivedIntermediateTurns(Number(taskId));
         delete localComposerMessages.value[Number(taskId)];

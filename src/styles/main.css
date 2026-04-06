@@ -130,6 +130,26 @@
   @apply shrink-0 text-[10px] text-text-dim transition-opacity;
 }
 
+@utility task-item-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+@utility task-item-status-dot-working {
+  background: var(--color-warning);
+  opacity: 0.58;
+  transform: scale(0.94);
+  box-shadow: 0 0 0 1px rgba(230, 168, 23, 0.08);
+  animation: ma-task-status-pulse 1.6s ease-in-out infinite alternate;
+}
+
+@utility task-item-status-dot-review {
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(76, 175, 125, 0.12);
+}
+
 @utility task-item-delete {
   @apply shrink-0 inline-flex items-center justify-center rounded-md p-1 text-text-dim opacity-0 pointer-events-none invisible transition hover:bg-bg;
 }
@@ -1471,5 +1491,19 @@
   40% {
     transform: translateY(-1px);
     opacity: 1;
+  }
+}
+
+@keyframes ma-task-status-pulse {
+  0% {
+    opacity: 0.58;
+    transform: scale(0.94);
+    box-shadow: 0 0 0 1px rgba(230, 168, 23, 0.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 4px rgba(230, 168, 23, 0.14);
   }
 }

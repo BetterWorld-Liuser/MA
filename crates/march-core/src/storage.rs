@@ -19,7 +19,7 @@ use persist::{
     update_task_last_active,
 };
 
-pub struct MaStorage {
+pub struct MarchStorage {
     workspace_root: PathBuf,
     db_path: PathBuf,
     connection: Connection,
@@ -85,14 +85,14 @@ pub struct PersistedTaskState {
     pub last_active: SystemTime,
 }
 
-impl MaStorage {
+impl MarchStorage {
     pub fn open(workdir: impl AsRef<Path>) -> Result<Self> {
         let workdir = workdir.as_ref();
-        let ma_dir = workdir.join(".ma");
+        let ma_dir = workdir.join(".march");
         fs::create_dir_all(&ma_dir)
             .with_context(|| format!("failed to create {}", ma_dir.display()))?;
 
-        let db_path = ma_dir.join("ma.db");
+        let db_path = ma_dir.join("march.db");
         let connection = Connection::open(&db_path)
             .with_context(|| format!("failed to open {}", db_path.display()))?;
 
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn storage_roundtrips_task_state() {
         let workdir = temp_workspace();
-        let mut storage = MaStorage::open(&workdir).expect("open storage");
+        let mut storage = MarchStorage::open(&workdir).expect("open storage");
         let task = storage.create_task("demo").expect("create task");
 
         let mut notes = IndexMap::new();
@@ -533,18 +533,18 @@ mod tests {
     }
 
     #[test]
-    fn opening_storage_creates_ma_directory_and_db() {
+    fn opening_storage_creates_march_directory_and_db() {
         let workdir = temp_workspace();
-        let storage = MaStorage::open(&workdir).expect("open storage");
+        let storage = MarchStorage::open(&workdir).expect("open storage");
 
-        assert!(workdir.join(".ma").is_dir());
+        assert!(workdir.join(".march").is_dir());
         assert!(storage.database_path().is_file());
     }
 
     #[test]
     fn task_title_metadata_roundtrips() {
         let workdir = temp_workspace();
-        let storage = MaStorage::open(&workdir).expect("open storage");
+        let storage = MarchStorage::open(&workdir).expect("open storage");
         let task = storage
             .create_task_with_metadata("检查 main.rs 问题", TaskTitleSource::Auto, false)
             .expect("create task");
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn task_selection_roundtrips() {
         let workdir = temp_workspace();
-        let storage = MaStorage::open(&workdir).expect("open storage");
+        let storage = MarchStorage::open(&workdir).expect("open storage");
         let task = storage
             .create_task_with_metadata_and_selection(
                 "demo",
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn backfill_only_updates_missing_task_defaults() {
         let workdir = temp_workspace();
-        let storage = MaStorage::open(&workdir).expect("open storage");
+        let storage = MarchStorage::open(&workdir).expect("open storage");
         let inherited = storage
             .create_task("inherited")
             .expect("create inherited task");
@@ -630,9 +630,9 @@ mod tests {
     #[test]
     fn delete_task_cleans_up_legacy_child_rows_without_cascade() {
         let workdir = temp_workspace();
-        let ma_dir = workdir.join(".ma");
+        let ma_dir = workdir.join(".march");
         fs::create_dir_all(&ma_dir).expect("create .ma dir");
-        let db_path = ma_dir.join("ma.db");
+        let db_path = ma_dir.join("march.db");
         let connection = Connection::open(&db_path).expect("open legacy db");
 
         connection
@@ -701,7 +701,7 @@ mod tests {
             .expect("insert open file");
         drop(connection);
 
-        let storage = MaStorage::open(&workdir).expect("open migrated storage");
+        let storage = MarchStorage::open(&workdir).expect("open migrated storage");
         storage.delete_task(1).expect("delete legacy task");
 
         assert!(storage.list_tasks().expect("list tasks").is_empty());

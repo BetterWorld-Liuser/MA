@@ -1,7 +1,8 @@
 export type TaskItem = {
   id: string;
   name: string;
-  status: 'active' | 'running' | 'idle';
+  status: 'active' | 'idle';
+  activityStatus?: 'working' | 'review';
   updatedAt: string;
 };
 
@@ -125,6 +126,8 @@ export type WorkspaceView = {
   workspacePath?: string;
   databasePath?: string;
 };
+
+export type TaskActivityStatus = 'working' | 'review';
 
 export type BackendWorkspaceSnapshot = {
   workspace_path?: string;
@@ -494,7 +497,7 @@ export const mockWorkspace: WorkspaceView = {
   tasks: [
     { id: 'task-1', name: '重构认证模块', status: 'active', updatedAt: '14:32' },
     { id: 'task-2', name: '添加支付集成', status: 'idle', updatedAt: '11:08' },
-    { id: 'task-3', name: '修复登录 bug', status: 'running', updatedAt: '09:41' },
+    { id: 'task-3', name: '修复登录 bug', status: 'idle', activityStatus: 'working', updatedAt: '09:41' },
   ] satisfies TaskItem[],
   activeTaskId: 'task-1',
   selectedModel: 'claude-sonnet-4-6',

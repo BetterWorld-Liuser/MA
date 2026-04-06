@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use eventsource_stream::Eventsource;
@@ -16,6 +17,12 @@ use super::{
     ProviderToolCallDelta, RequestMessage, RequestOptions, RuntimeProviderConfig,
 };
 use crate::agent::{TurnCancellation, is_turn_cancelled_error};
+
+/// 流式模式下，两次 SSE 事件之间的最长等待时间。超过此时间视为连接空闲。
+pub(super) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// 非流式请求（含 fallback）的总超时。超过此时间视为请求超时。
+pub(super) const NON_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderDeliveryMode {
@@ -59,6 +66,9 @@ pub(super) enum StreamFailureKind {
     Start,
     ReadEvent,
     UnexpectedEnd,
+    /// 两次 SSE 事件之间超过 STREAM_IDLE_TIMEOUT 没有收到任何数据。
+    /// 属于网络抖动，不代表 provider 协议不兼容，不应标记为永久非流式。
+    IdleTimeout,
 }
 
 impl StreamAttemptFailure {
@@ -71,6 +81,10 @@ impl StreamAttemptFailure {
                 format!("failed to read provider stream event: {}", self.source)
             }
             StreamFailureKind::UnexpectedEnd => "provider stream ended unexpectedly".to_string(),
+            StreamFailureKind::IdleTimeout => format!(
+                "provider stream idle: no event received for {}s",
+                STREAM_IDLE_TIMEOUT.as_secs()
+            ),
         }
     }
 
@@ -84,8 +98,23 @@ impl StreamAttemptFailure {
             .is_some_and(|error| error.status == StatusCode::TOO_MANY_REQUESTS)
     }
 
+    /// IdleTimeout 是网络抖动，不是协议不兼容，不应永久标记该 provider 为非流式。
     pub fn should_remember_non_streaming(&self) -> bool {
-        !self.should_skip_fallback()
+        !self.should_skip_fallback() && !matches!(self.kind, StreamFailureKind::IdleTimeout)
+    }
+
+    /// 是否允许在流式层面重试（仅当尚未向 UI 推送任何内容时才安全重连）。
+    /// ReadEvent 失败通常表示数据已损坏，不在此处重试。
+    pub fn is_stream_retryable(&self) -> bool {
+        if self.should_skip_fallback() {
+            return false;
+        }
+        matches!(
+            self.kind,
+            StreamFailureKind::IdleTimeout
+                | StreamFailureKind::Start
+                | StreamFailureKind::UnexpectedEnd
+        )
     }
 }
 
@@ -245,17 +274,41 @@ impl ProviderClient {
         let mut stream = response.bytes_stream().eventsource();
         let mut collector = StreamCollector::default();
 
-        while let Some(event) = select! {
-            _ = cancellation.cancelled() => Err(StreamAttemptFailure {
-                kind: StreamFailureKind::ReadEvent,
-                source: anyhow::anyhow!("turn cancelled"),
-            }),
-            event = stream.next() => Ok(event),
-        }? {
-            let event = event.map_err(|error| StreamAttemptFailure {
-                kind: StreamFailureKind::ReadEvent,
-                source: error.into(),
-            })?;
+        loop {
+            // 同时监听取消信号和带空闲超时的下一个 SSE 事件。
+            let next_item = select! {
+                _ = cancellation.cancelled() => {
+                    return Err(StreamAttemptFailure {
+                        kind: StreamFailureKind::ReadEvent,
+                        source: anyhow::anyhow!("turn cancelled"),
+                    });
+                }
+                result = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()) => result,
+            };
+
+            let maybe_event = match next_item {
+                // 超时：连接存活但长时间无数据，视为空闲超时
+                Err(_elapsed) => {
+                    return Err(StreamAttemptFailure {
+                        kind: StreamFailureKind::IdleTimeout,
+                        source: anyhow::anyhow!(
+                            "provider stream idle: no event received for {}s",
+                            STREAM_IDLE_TIMEOUT.as_secs()
+                        ),
+                    });
+                }
+                Ok(maybe_event) => maybe_event,
+            };
+
+            // stream.next() 返回 None 表示流自然结束但没有 done 标记
+            let event = match maybe_event {
+                None => break,
+                Some(event_result) => event_result.map_err(|error| StreamAttemptFailure {
+                    kind: StreamFailureKind::ReadEvent,
+                    source: error.into(),
+                })?,
+            };
+
             let event_name = (!event.event.trim().is_empty()).then_some(event.event.as_str());
             let deltas = adapter
                 .parse_stream_event(event_name, &event.data)
@@ -340,26 +393,46 @@ impl ProviderClient {
             &self.config.server_tools,
             options,
         )?;
-        let response = self
-            .cancel_aware_send(request.url, request.headers, request.body, cancellation)
-            .await
-            .context("failed to request provider non-stream response")?;
-        let response = select! {
-            _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
-            response = ensure_success_response(response) => response,
-        }?;
-        let body = select! {
-            _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
-            body = response.json::<Value>() => body.context("failed to decode provider non-stream JSON response"),
-        }?;
 
-        build_provider_response_from_wire_response(
-            adapter.parse_response(&body)?,
-            request_json,
-            delivery_path,
-            Some(body),
-        )
+        // 用总超时包裹整个 HTTP 往返，避免请求在服务端长时间挂起。
+        // 取消信号由内部 select! 处理，两者独立竞争。
+        let fetch = async {
+            let response = self
+                .cancel_aware_send(request.url, request.headers, request.body, cancellation)
+                .await
+                .context("failed to request provider non-stream response")?;
+            let response = select! {
+                _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
+                response = ensure_success_response(response) => response,
+            }?;
+            let body = select! {
+                _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
+                body = response.json::<Value>() => body.context("failed to decode provider non-stream JSON response"),
+            }?;
+            build_provider_response_from_wire_response(
+                adapter.parse_response(&body)?,
+                request_json,
+                delivery_path,
+                Some(body),
+            )
+        };
+
+        tokio::time::timeout(NON_STREAM_TOTAL_TIMEOUT, fetch)
+            .await
+            .unwrap_or_else(|_elapsed| {
+                Err(anyhow::anyhow!(
+                    "non-stream provider request timed out after {}s",
+                    NON_STREAM_TOTAL_TIMEOUT.as_secs()
+                ))
+            })
     }
+}
+
+/// 判断错误是否为 429 限速（非流式重试时跳过）。
+pub(super) fn is_rate_limit_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<ProviderHttpError>()
+        .is_some_and(|e| e.status == StatusCode::TOO_MANY_REQUESTS)
 }
 
 impl ProviderClient {

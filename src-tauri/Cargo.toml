@@ -1,11 +1,11 @@
 [package]
-name = "ma-ui"
+name = "march-ui"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
 
 [lib]
-name = "ma_ui_lib"
+name = "march_ui_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
@@ -14,7 +14,7 @@ tauri-build = { version = "2.0.0", features = [] }
 [dependencies]
 anyhow = "1.0"
 dotenvy = "0.15"
-ma = { package = "ma-core", path = "../crates/ma-core" }
+march = { package = "march-core", path = "../crates/march-core" }
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
 url = "2.5"

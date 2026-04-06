@@ -29,6 +29,12 @@
             :disabled="busy"
             @click.stop="$emit('select', task.id)"
           >
+            <span
+              v-if="task.activityStatus"
+              class="task-item-status-dot"
+              :class="task.activityStatus === 'working' ? 'task-item-status-dot-working' : 'task-item-status-dot-review'"
+              :title="task.activityStatus === 'working' ? '任务仍在工作' : '任务已完成，等待审阅'"
+            ></span>
             <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[1.4]">{{ task.name }}</span>
             <span class="task-item-meta" :class="!busy ? 'group-hover:opacity-0' : ''">{{ task.updatedAt }}</span>
           </button>
