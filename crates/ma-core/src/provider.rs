@@ -177,7 +177,15 @@ impl ProviderClient {
                 Ok(response)
             }
             Err(stream_failure) => {
-                remember_stream_failure(&provider.config);
+                if stream_failure.should_skip_fallback() {
+                    let summary = stream_failure.summary();
+                    return Err(stream_failure.source.context(summary));
+                }
+
+                if stream_failure.should_remember_non_streaming() {
+                    remember_stream_failure(&provider.config);
+                }
+
                 let fallback_options = RequestOptions::for_chat(
                     provider.config.model.clone(),
                     false,

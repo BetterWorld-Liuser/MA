@@ -609,12 +609,24 @@
   @apply shrink-0 text-[8px] uppercase tracking-[0.14em] text-text-dim;
 }
 
+@utility composer-popover-item-main {
+  @apply flex min-w-0 flex-1 flex-col gap-0.5;
+}
+
+@utility composer-popover-item-line {
+  @apply flex min-w-0 items-center gap-3;
+}
+
 @utility composer-popover-item-path {
   @apply truncate font-mono text-[10px] text-text;
 }
 
+@utility composer-popover-item-path-strong {
+  @apply min-w-[7.5rem] shrink-0;
+}
+
 @utility composer-popover-item-meta {
-  @apply truncate text-[10px] text-text-muted;
+  @apply min-w-0 truncate text-[10px] text-text-muted;
 }
 
 @utility composer-popover-empty {

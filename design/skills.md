@@ -74,7 +74,7 @@ disable = ["git"]   # 屏蔽该项目下的 git skill
 config.toml 里的 [[skills.triggers]] 自定义规则
 ```
 
-这里的“自动触发”指的是：在 Skills 索引中标记该 skill 与当前工作目录匹配，帮助 AI 在 session 起点更快决定是否应 `open_file` 读取它；**不会自动把 `SKILL.md` 放进 `open_files`**。
+这里的“自动触发”指的是：在 Skills 索引中标记该 skill 与当前工作目录匹配，帮助 AI 在 session 起点更快决定是否应 `open_file` 读取它；**不会因为 auto trigger 而自动把 `SKILL.md` 放进 `open_files`**。
 
 规则支持**多对多**：
 
@@ -120,6 +120,26 @@ Skills **不把内容塞进 `[injections]`**，而是在 session 启动时生成
 ```
 
 AI 决定何时需要某个 skill，主动 `open_file` 读取，watcher 从此追踪该文件，内容永远反映磁盘真实状态。这与普通源码文件的使用方式完全一致。
+
+### 用户显性调用
+
+除了 AI 自主 `open_file`，用户也可以在聊天输入框中通过 `/` 显性选择 skill：
+
+```text
+/rust
+/deploy
+```
+
+- 输入 `/` 时弹出 skill 面板，行为类似 `@文件` 的搜索面板，但候选项只包含当前 task 可用的 skills
+- 用户选中某个 skill 后，前端把对应 `SKILL.md` 路径加入“待注入上下文”列表
+- 真正发送这条消息时，March 会先把这些路径加入 `open_files`，再开始新一轮 agent 执行
+- 一旦进入 `open_files`，skill 就和普通文件完全一致：由 watcher 提供真实磁盘内容、参与右栏展示、参与上下文用量估算
+
+这样做的原因是：
+
+- 用户显性调用 skill，本质上是在说“把这份方法论文件放到桌面上给 AI 看”
+- 复用 `open_files` 比额外创造一条“手动 skill 注入通道”更符合 Source of Truth
+- 同一份 `SKILL.md` 后续若被用户手改或 git 更新，AI 下一轮看到的仍然是磁盘真实内容
 
 ---
 
@@ -185,7 +205,7 @@ struct Injection {
 
 ## 右侧面板展示
 
-右侧面板展示当前可用的 skill 列表，已被 AI open 的标注打开状态，默认只读：
+右侧面板展示当前可用的 skill 列表，已进入 `open_files` 的标注打开状态：
 
 ```
   [Skills]
@@ -194,5 +214,5 @@ struct Injection {
   api-style
 ```
 
-操作权在 AI，用户若想影响 skill 使用，通过聊天消息告知即可。详见 → [ui-chat.md](ui-chat.md)
+右栏本身仍保持轻量展示，不直接承担“打开 skill”的交互；用户若想显性调用 skill，应在聊天输入框里使用 `/` 选择。详见 → [ui-chat.md](ui-chat.md)
 `available` 一侧提供刷新按钮，手动重新扫描技能目录并更新当前 task 的可用 skill 视图；刷新后，该 task 后续轮次构建上下文时使用的 skills injection 会同步采用新的扫描结果。

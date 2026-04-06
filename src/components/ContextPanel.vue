@@ -25,7 +25,12 @@
       />
 
       <ContextHintsSection v-if="hints.length" :hints="hints" />
-      <ContextSkillsSection :skills="skills" :busy="busy" @refresh="$emit('refresh-skills')" />
+      <ContextSkillsSection
+        :skills="skills"
+        :busy="busy"
+        @refresh="$emit('refresh-skills')"
+        @open-skill="$emit('open-skill', $event)"
+      />
 
       <section class="space-y-3">
         <div class="flex items-center justify-between gap-3">
@@ -317,6 +322,7 @@ defineEmits<{
   'toggle-file-lock': [path: string, locked: boolean];
   'close-file': [path: string];
   'refresh-skills': [];
+  'open-skill': [path: string];
 }>();
 
 const debugTabs = ['Overview', 'Context', 'Request', 'Response', 'Tools'] as const;

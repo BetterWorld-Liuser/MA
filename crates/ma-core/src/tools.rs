@@ -116,6 +116,8 @@ fn run_command_tool(
                 working_directory.display()
             ),
             "Only choose a shell from the available-shell list above.".to_string(),
+            "Each run_command tool call may execute exactly one command. The arguments must be a single JSON object with exactly two fields: shell and command.".to_string(),
+            "If you need to run two commands, emit two separate run_command tool calls instead of concatenating commands or JSON objects.".to_string(),
             "Use run_command when you need external environment capabilities such as git, compilers, test runners, shell pipelines, or existing CLI tools.".to_string(),
             "Do not use run_command just to read a file that is already present in the open-files context layer; use that watcher-backed snapshot directly.".to_string(),
         ],
@@ -503,6 +505,8 @@ mod tests {
         assert!(prompt.contains("## run_command"));
 
         assert!(prompt.contains("Available shells in this session: powershell (pwsh), cmd."));
+        assert!(prompt.contains("Each run_command tool call may execute exactly one command."));
+        assert!(prompt.contains("emit two separate run_command tool calls"));
         assert!(prompt.contains("## open_file"));
         assert!(prompt.contains("Prefer open_file over run_command"));
         assert!(prompt.contains("Do not use run_command just to read a file"));

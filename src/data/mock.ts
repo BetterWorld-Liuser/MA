@@ -207,12 +207,49 @@ export type BackendWorkspaceSnapshot = {
       turns_remaining?: number | null;
     }>;
     runtime?: {
+      working_directory: string;
+      available_shells: Array<{
+        kind: string;
+        program: string;
+      }>;
+      open_files: Array<
+        | {
+            Available: {
+              path: string;
+              content: string;
+              last_modified_at: number;
+              modified_by: 'Agent' | 'User' | 'External' | 'Unknown';
+            };
+          }
+        | {
+            Deleted: {
+              path: string;
+              last_seen_at: number;
+              modified_by: 'Agent' | 'User' | 'External' | 'Unknown';
+            };
+          }
+        | {
+            Moved: {
+              path: string;
+              new_path: string;
+              last_seen_at: number;
+              modified_by: 'Agent' | 'User' | 'External' | 'Unknown';
+            };
+          }
+      >;
       skills: Array<{
         name: string;
         path: string;
         description: string;
         opened: boolean;
       }>;
+      system_status: {
+        locked_files: string[];
+        context_pressure?: {
+          used_percent: number;
+          message: string;
+        } | null;
+      };
       context_usage: {
         used_percent: number;
         used_tokens: number;
@@ -258,6 +295,7 @@ export type BackendAgentProgressEvent =
       agent_display_name: string;
       phase: 'building_context' | 'waiting_model' | 'running_tool' | 'streaming';
       label: string;
+      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
       kind: 'tool_started';
@@ -266,6 +304,7 @@ export type BackendAgentProgressEvent =
       tool_call_id: string;
       tool_name: string;
       summary: string;
+      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
       kind: 'tool_finished';
@@ -275,6 +314,7 @@ export type BackendAgentProgressEvent =
       status: 'success' | 'error';
       summary: string;
       preview?: string | null;
+      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
       kind: 'assistant_text_preview';
@@ -283,6 +323,7 @@ export type BackendAgentProgressEvent =
       agent: string;
       agent_display_name: string;
       message: string;
+      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
       kind: 'final_assistant_message';
@@ -329,6 +370,16 @@ export type MentionTargetView =
       kind: 'file' | 'directory';
       path: string;
     };
+
+export type SearchSkillView = {
+  kind: 'skill';
+  name: string;
+  path: string;
+  description: string;
+  opened: boolean;
+  autoTriggered: boolean;
+  triggerReason?: string | null;
+};
 
 export type WorkspaceImageView = {
   path: string;

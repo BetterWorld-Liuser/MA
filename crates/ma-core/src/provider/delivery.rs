@@ -4,6 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{Context, Result, bail};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
+use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -33,6 +34,24 @@ pub(super) struct StreamAttemptFailure {
     pub source: anyhow::Error,
 }
 
+#[derive(Debug)]
+struct ProviderHttpError {
+    status: StatusCode,
+    body: String,
+}
+
+impl std::fmt::Display for ProviderHttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "provider request failed with {}: {}",
+            self.status, self.body
+        )
+    }
+}
+
+impl std::error::Error for ProviderHttpError {}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum StreamFailureKind {
     Start,
@@ -51,6 +70,17 @@ impl StreamAttemptFailure {
             }
             StreamFailureKind::UnexpectedEnd => "provider stream ended unexpectedly".to_string(),
         }
+    }
+
+    pub fn should_skip_fallback(&self) -> bool {
+        self
+            .source
+            .downcast_ref::<ProviderHttpError>()
+            .is_some_and(|error| error.status == StatusCode::TOO_MANY_REQUESTS)
+    }
+
+    pub fn should_remember_non_streaming(&self) -> bool {
+        !self.should_skip_fallback()
     }
 }
 
@@ -331,7 +361,7 @@ async fn ensure_success_response(response: reqwest::Response) -> Result<reqwest:
         .text()
         .await
         .unwrap_or_else(|_| "(failed to read error body)".to_string());
-    bail!("provider request failed with {}: {}", status, body);
+    bail!(ProviderHttpError { status, body });
 }
 
 fn build_provider_response_from_wire_response(

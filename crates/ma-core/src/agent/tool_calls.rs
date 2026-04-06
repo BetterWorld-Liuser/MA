@@ -28,8 +28,7 @@ impl AgentSession {
 
         match tool_call.name.as_str() {
             "run_command" => {
-                let args: RunCommandArgs =
-                    serde_json::from_value(args).context("invalid run_command args")?;
+                let args = parse_run_command_args(args, &tool_call.arguments_json)?;
                 let execution = self.run_command(CommandRequest {
                     command: args.command,
                     shell: parse_shell(&args.shell)?,
@@ -418,6 +417,44 @@ fn simple_tool(result_text: String, name: &str, summary: String) -> ToolOutcome 
     }
 }
 
+fn parse_run_command_args(args: Value, original_arguments_json: &str) -> Result<RunCommandArgs> {
+    match args {
+        Value::Object(_) => serde_json::from_value(args).context(
+            "invalid run_command args: expected exactly one object like {\"shell\":\"powershell\",\"command\":\"dir\"}",
+        ),
+        Value::String(encoded) => {
+            let trimmed = encoded.trim();
+            if looks_like_multiple_json_objects(trimmed) {
+                bail!(
+                    "invalid run_command args: received multiple concatenated JSON objects; each run_command tool call may execute exactly one command, so split them into separate tool calls. Raw args: {}",
+                    original_arguments_json
+                );
+            } else if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                let nested: Value = serde_json::from_str(trimmed).context(
+                    "invalid run_command args: received a stringified JSON object; emit the object directly instead of wrapping it in a string",
+                )?;
+                serde_json::from_value(nested).context(
+                    "invalid run_command args: expected exactly one object like {\"shell\":\"powershell\",\"command\":\"dir\"}",
+                )
+            } else {
+                bail!(
+                    "invalid run_command args: expected a JSON object with fields shell and command, but received a plain string. Raw args: {}",
+                    original_arguments_json
+                );
+            }
+        }
+        _ => bail!(
+            "invalid run_command args: expected a JSON object with fields shell and command. Raw args: {}",
+            original_arguments_json
+        ),
+    }
+}
+
+fn looks_like_multiple_json_objects(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.contains("}{") || trimmed.contains("}\n{") || trimmed.contains("}\r\n{")
+}
+
 #[derive(Debug, Deserialize)]
 struct RunCommandArgs {
     shell: String,
@@ -496,4 +533,58 @@ struct UpdateAgentArgs {
 #[derive(Debug, Deserialize)]
 struct DeleteAgentArgs {
     name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{looks_like_multiple_json_objects, parse_run_command_args};
+
+    #[test]
+    fn parse_run_command_args_accepts_direct_object() {
+        let args = parse_run_command_args(
+            json!({
+                "shell": "powershell",
+                "command": "Get-ChildItem",
+            }),
+            r#"{"shell":"powershell","command":"Get-ChildItem"}"#,
+        )
+        .expect("direct object should parse");
+
+        assert_eq!(args.shell, "powershell");
+        assert_eq!(args.command, "Get-ChildItem");
+    }
+
+    #[test]
+    fn parse_run_command_args_accepts_stringified_single_object() {
+        let args = parse_run_command_args(
+            json!(r#"{"shell":"powershell","command":"Get-ChildItem"}"#),
+            r#""{\"shell\":\"powershell\",\"command\":\"Get-ChildItem\"}""#,
+        )
+        .expect("stringified single object should parse");
+
+        assert_eq!(args.shell, "powershell");
+        assert_eq!(args.command, "Get-ChildItem");
+    }
+
+    #[test]
+    fn parse_run_command_args_reports_concatenated_objects_clearly() {
+        let error = parse_run_command_args(
+            json!(r#"{"shell":"powershell","command":"Get-Content a"}{"shell":"powershell","command":"Get-Content b"}"#),
+            r#""{\"shell\":\"powershell\",\"command\":\"Get-Content a\"}{\"shell\":\"powershell\",\"command\":\"Get-Content b\"}""#,
+        )
+        .expect_err("concatenated objects should fail");
+
+        let message = error.to_string();
+        assert!(message.contains("multiple concatenated JSON objects"));
+        assert!(message.contains("split them into separate tool calls"));
+    }
+
+    #[test]
+    fn multiple_json_object_detector_catches_common_shapes() {
+        assert!(looks_like_multiple_json_objects(r#"{"a":1}{"b":2}"#));
+        assert!(looks_like_multiple_json_objects("{\"a\":1}\n{\"b\":2}"));
+        assert!(!looks_like_multiple_json_objects(r#"{"a":1}"#));
+    }
 }

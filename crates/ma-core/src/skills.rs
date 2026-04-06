@@ -99,7 +99,12 @@ impl SkillLoader {
             }
         }
 
-        content.push_str("\n需要某个 skill 的详细内容时，用 open_file 打开对应路径。");
+        content.push_str(concat!(
+            "\nSkill 使用规则：\n",
+            "- 上面的 description 只是摘要，skill 的完整能力和操作指令在 SKILL.md 文件内。\n",
+            "- 当用户的请求与某个 skill 的领域相关或可能相关时，先用 open_file 打开该 skill 的 SKILL.md 阅读完整指令，再按指令行动。不要仅凭索引摘要就判断能力边界。\n",
+            "- 带 [auto] 标记的 skill 与当前工作目录高度相关，优先考虑打开。",
+        ));
 
         Injection {
             id: "skills".to_string(),

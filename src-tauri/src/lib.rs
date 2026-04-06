@@ -13,11 +13,12 @@ use ma::ui::{
     UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
     UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest,
     UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
-    UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
-    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiTaskModelSelectorView,
-    UiTestProviderConnectionRequest, UiTestProviderConnectionResult, UiToggleOpenFileLockRequest,
-    UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
+    UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest,
+    UiSetTaskModelRequest, UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest,
+    UiSkillSearchView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
+    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertAgentRequest,
+    UiUpsertNoteRequest, UiUpsertProviderModelRequest,
     UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
     fetch_probe_models, fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
@@ -445,6 +446,15 @@ fn search_mentions(
 }
 
 #[tauri::command]
+fn search_skills(
+    state: tauri::State<'_, AppState>,
+    input: UiSearchSkillsRequest,
+) -> Result<Vec<UiSkillSearchView>, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend.search_skills(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn load_workspace_image(
     state: tauri::State<'_, AppState>,
     input: UiLoadWorkspaceImageRequest,
@@ -520,6 +530,7 @@ pub fn run() {
             test_provider_connection,
             search_workspace_entries,
             search_mentions,
+            search_skills,
             load_workspace_image,
             open_external_url
         ])

@@ -26,11 +26,12 @@ use super::{
     UiCreateTaskRequest, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteNoteRequest,
     UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
     UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
-    UiRestoreMarchPromptRequest, UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest,
-    UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
-    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiTaskSnapshot,
-    UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
-    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest,
+    UiSetTaskModelRequest, UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest,
+    UiSkillSearchView, UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest,
+    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
+    UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
 impl UiAppBackend {
@@ -784,6 +785,29 @@ impl UiAppBackend {
         super::workspace::search_mentions(&working_directory, &request.query, limit)
     }
 
+    pub fn search_skills(
+        &self,
+        request: UiSearchSkillsRequest,
+    ) -> Result<Vec<UiSkillSearchView>> {
+        let Some(task_id) = request.task_id else {
+            return Ok(Vec::new());
+        };
+
+        let limit = request.limit.unwrap_or(12).clamp(1, 50);
+        let session = self.load_session(task_id)?;
+        let opened_paths = session
+            .runtime_open_file_snapshots()
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        Ok(super::workspace::search_skills(
+            session.skills(),
+            &opened_paths,
+            &request.query,
+            limit,
+        ))
+    }
+
     pub fn load_workspace_image(
         &self,
         request: UiLoadWorkspaceImageRequest,
@@ -837,6 +861,7 @@ impl UiAppBackend {
                 label,
             } => {
                 let agent_display_name = session.display_name_for_agent(&agent);
+                let runtime = session.ui_runtime_snapshot(context_budget_tokens);
                 on_progress(UiAgentProgressEvent::Status {
                     task_id,
                     turn_id: turn_id.to_string(),
@@ -844,40 +869,51 @@ impl UiAppBackend {
                     agent_display_name,
                     phase: phase.into(),
                     label,
+                    runtime,
                 })
             }
             AgentProgressEvent::ToolStarted {
                 tool_call_id,
                 tool_name,
                 summary,
-            } => on_progress(UiAgentProgressEvent::ToolStarted {
-                task_id,
-                turn_id: turn_id.to_string(),
-                tool_call_id,
-                tool_name,
-                summary,
-            }),
+            } => {
+                let runtime = session.ui_runtime_snapshot(context_budget_tokens);
+                on_progress(UiAgentProgressEvent::ToolStarted {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    tool_call_id,
+                    tool_name,
+                    summary,
+                    runtime,
+                })
+            }
             AgentProgressEvent::ToolFinished {
                 tool_call_id,
                 status,
                 summary,
                 preview,
-            } => on_progress(UiAgentProgressEvent::ToolFinished {
-                task_id,
-                turn_id: turn_id.to_string(),
-                tool_call_id,
-                status: status.into(),
-                summary,
-                preview,
-            }),
+            } => {
+                let runtime = session.ui_runtime_snapshot(context_budget_tokens);
+                on_progress(UiAgentProgressEvent::ToolFinished {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    tool_call_id,
+                    status: status.into(),
+                    summary,
+                    preview,
+                    runtime,
+                })
+            }
             AgentProgressEvent::AssistantTextPreview { agent, message } => {
                 let agent_display_name = session.display_name_for_agent(&agent);
+                let runtime = session.ui_runtime_snapshot(context_budget_tokens);
                 on_progress(UiAgentProgressEvent::AssistantTextPreview {
                     task_id,
                     turn_id: turn_id.to_string(),
                     agent,
                     agent_display_name,
                     message,
+                    runtime,
                 })
             }
             AgentProgressEvent::FinalAssistantMessage(_) => {

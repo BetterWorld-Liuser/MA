@@ -343,7 +343,7 @@ export function useWorkspaceApp() {
     });
   }
 
-  async function sendMessage(payload: { content: string; directories: string[]; files: string[]; images: ChatImageAttachment[] }) {
+  async function sendMessage(payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ChatImageAttachment[] }) {
     if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
       return;
     }
@@ -374,11 +374,12 @@ export function useWorkspaceApp() {
     sendingTaskId.value = taskId;
 
     try {
-      if (payload.files.length) {
+      const openFilePaths = Array.from(new Set([...payload.files, ...payload.skills]));
+      if (openFilePaths.length) {
         snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
           input: {
             taskId,
-            paths: payload.files,
+            paths: openFilePaths,
           },
         });
       }
@@ -458,7 +459,7 @@ export function useWorkspaceApp() {
     }
   }
 
-  function augmentComposerMessage(payload: { content: string; directories: string[]; files: string[]; images: ChatImageAttachment[] }) {
+  function augmentComposerMessage(payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ChatImageAttachment[] }) {
     const base = payload.content.trim();
     const sections = [base];
     if (payload.directories.length) {

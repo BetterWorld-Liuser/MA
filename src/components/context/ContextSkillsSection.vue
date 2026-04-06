@@ -20,26 +20,29 @@
       </div>
     </div>
 
-    <div v-if="skills.length" class="space-y-0.5">
-      <div
+    <div v-if="skills.length" class="space-y-1">
+      <button
         v-for="skill in skills"
         :key="skill.path"
-        class="compact-row cursor-default outline-none"
-        tabindex="0"
+        class="compact-row w-full cursor-pointer rounded-xl px-2.5 py-1.75 text-left outline-none transition hover:bg-bg-hover focus-visible:bg-bg-hover"
+        type="button"
+        :disabled="busy"
         @mouseenter="handleTriggerEnter(skill, $event)"
         @focusin="handleTriggerEnter(skill, $event)"
         @mouseleave="hideTooltip"
         @focusout="hideTooltip"
+        @click="handleTriggerEnter(skill, $event)"
+        @dblclick="$emit('open-skill', skill.path)"
       >
-        <div class="min-w-0 flex flex-1 items-center gap-2">
-          <p class="truncate font-mono text-[12px]" :class="skill.opened ? 'text-text' : 'text-text-muted'">
+        <div class="flex min-w-0 items-center gap-2">
+          <p class="min-w-0 flex-1 truncate text-[12px] font-semibold" :class="skill.opened ? 'text-text' : 'text-text-muted'">
             {{ skill.name }}
           </p>
           <span v-if="skill.opened" class="shrink-0 rounded-full bg-accent-dim px-1.5 py-0.5 text-[8px] text-accent">
             已打开
           </span>
         </div>
-      </div>
+      </button>
     </div>
 
     <div v-else class="compact-empty">No skills discovered for this workspace</div>
@@ -74,6 +77,8 @@
           <p class="mb-1 text-[8px] uppercase tracking-[0.16em] text-text-dim">Path</p>
           <p class="break-all font-mono text-[10px] leading-4 text-text">{{ activeSkill.path }}</p>
         </div>
+
+        <p class="text-[10px] text-text-dim">双击右侧技能项可直接加入 Open Files。</p>
       </div>
     </div>
   </Teleport>
@@ -96,6 +101,7 @@ withDefaults(defineProps<{
 
 defineEmits<{
   refresh: [];
+  'open-skill': [path: string];
 }>();
 
 const activeSkill = ref<SkillItem | null>(null);

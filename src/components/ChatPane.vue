@@ -28,7 +28,7 @@
           @dragleave="handleDragLeave"
           @drop="handleDrop"
         >
-          <div v-if="mentions.length" class="chat-composer-chips" aria-label="Referenced paths">
+          <div v-if="mentions.length" class="chat-composer-chips" aria-label="Referenced context">
             <button
               v-for="chip in mentions"
               :key="`${chip.kind}:${chip.path}`"
@@ -38,8 +38,16 @@
               :disabled="disabled"
               @click="removeMention(chip.path, chip.kind)"
             >
-              <span class="mention-chip-kind">{{ chip.kind === 'directory' ? 'DIR' : 'FILE' }}</span>
-              <span class="mention-chip-label">{{ chip.path }}</span>
+              <span class="mention-chip-kind">
+                {{
+                  chip.kind === 'directory'
+                    ? 'DIR'
+                    : chip.kind === 'skill'
+                      ? 'SKILL'
+                      : 'FILE'
+                }}
+              </span>
+              <span class="mention-chip-label">{{ chip.kind === 'skill' ? chip.label : chip.path }}</span>
               <span class="mention-chip-remove" aria-hidden="true">×</span>
             </button>
           </div>
@@ -49,7 +57,7 @@
             ref="composerRef"
             v-model="draft"
             class="chat-composer-input"
-            placeholder="帮我重构认证逻辑，必要时 @ 角色、文件或目录。"
+            placeholder="帮我重构认证逻辑，必要时 @ 角色/文件/目录，或 / 选择技能。"
             :disabled="disabled"
             rows="1"
             @input="handleDraftInput"
@@ -170,7 +178,7 @@
           <div v-else-if="searchResults.length" class="composer-popover-list">
             <button
               v-for="(entry, index) in searchResults"
-              :key="entry.kind === 'agent' ? `agent:${entry.name}` : `${entry.kind}:${entry.path}`"
+              :key="entry.kind === 'agent' ? `agent:${entry.name}` : entry.kind === 'skill' ? `skill:${entry.path}` : `${entry.kind}:${entry.path}`"
               class="composer-popover-item"
               :class="index === highlightedResultIndex ? 'composer-popover-item-active' : ''"
               type="button"
@@ -181,15 +189,30 @@
                 {{
                   entry.kind === 'agent'
                     ? '角色'
+                    : entry.kind === 'skill'
+                      ? '技能'
                     : entry.kind === 'directory'
                       ? '目录'
                       : '文件'
                 }}
               </span>
               <template v-if="entry.kind === 'agent'">
-                <span class="composer-popover-item-path">@{{ entry.name }}</span>
-                <span class="composer-popover-item-meta">{{ entry.displayName }}</span>
-                <span class="composer-popover-item-meta">{{ entry.description }}</span>
+                <div class="composer-popover-item-main">
+                  <div class="composer-popover-item-line">
+                    <span class="composer-popover-item-path composer-popover-item-path-strong">@{{ entry.name }}</span>
+                    <span class="composer-popover-item-meta">{{ entry.displayName }}</span>
+                  </div>
+                  <span class="composer-popover-item-meta">{{ entry.description }}</span>
+                </div>
+              </template>
+              <template v-else-if="entry.kind === 'skill'">
+                <div class="composer-popover-item-main">
+                  <div class="composer-popover-item-line">
+                    <span class="composer-popover-item-path composer-popover-item-path-strong">{{ entry.name }}</span>
+                    <span v-if="entry.description" class="composer-popover-item-meta">{{ entry.description }}</span>
+                    <span v-else class="composer-popover-item-meta">可直接加入 Open Files 的技能说明文件</span>
+                  </div>
+                </div>
               </template>
               <template v-else>
                 <span class="composer-popover-item-path">{{ entry.path }}</span>
@@ -202,6 +225,7 @@
         <div v-if="plusMenuOpen" class="composer-menu">
           <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('file')">选择文件…</button>
           <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('directory')">选择目录…</button>
+          <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('skill')">选择技能…</button>
           <button
             v-if="supportsVision"
             class="composer-menu-item"
@@ -433,7 +457,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [payload: { content: string; directories: string[]; files: string[]; images: ComposerImageAttachment[] }];
+  send: [payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ComposerImageAttachment[] }];
   setModel: [selection: { providerId?: number | null; model: string }];
   setModelSettings: [settings: {
     temperature?: number | null;
@@ -1042,10 +1066,12 @@ function submit() {
 
   const directories = mentions.value.filter((item) => item.kind === 'directory').map((item) => item.path);
   const files = mentions.value.filter((item) => item.kind === 'file').map((item) => item.path);
+  const skills = mentions.value.filter((item) => item.kind === 'skill').map((item) => item.path);
   emit('send', {
     content,
     directories,
     files,
+    skills,
     images: imageAttachments.value,
   });
   resetComposer();

@@ -40,6 +40,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'status':
+        mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -52,6 +53,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'tool_started':
+        mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -70,6 +72,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'tool_finished':
+        mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -89,6 +92,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'assistant_text_preview':
+        mergeActiveTaskRuntime(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -153,6 +157,23 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         errorMessage.value = '';
         return;
     }
+  }
+
+  function mergeActiveTaskRuntime(
+    taskId: number,
+    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+  ) {
+    if (snapshot.value?.active_task?.task.id !== taskId) {
+      return;
+    }
+
+    snapshot.value = {
+      ...snapshot.value,
+      active_task: {
+        ...snapshot.value.active_task,
+        runtime,
+      },
+    };
   }
 
   function ensureLiveTurn(taskId: number, turnId: string) {

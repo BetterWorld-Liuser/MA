@@ -3,20 +3,25 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   ChatImageAttachment,
   MentionTargetView,
+  SearchSkillView,
   WorkspaceEntryView,
   WorkspaceImageView,
 } from '@/data/mock';
 
-export type MentionKind = 'file' | 'directory';
+export type MentionKind = 'file' | 'directory' | 'skill';
 
 export type MentionItem = {
   path: string;
   kind: MentionKind;
+  label: string;
+  description?: string;
 };
 
 export type ComposerImageAttachment = ChatImageAttachment;
 
-type SearchMode = 'smart' | 'file' | 'directory';
+type ComposerSearchResult = MentionTargetView | SearchSkillView;
+
+type SearchMode = 'smart' | 'file' | 'directory' | 'skill';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
 
@@ -41,12 +46,12 @@ export function useChatComposer(options: {
   const imageInputRef = ref<HTMLInputElement | null>(null);
   const composerMaxHeight = 160;
   const activeSearchQuery = ref('');
-  const searchResults = ref<MentionTargetView[]>([]);
+  const searchResults = ref<ComposerSearchResult[]>([]);
   const searchLoading = ref(false);
   const highlightedResultIndex = ref(0);
   const searchPanelOpen = ref(false);
   const searchMode = ref<SearchMode>('smart');
-  const mentionQueryRange = ref<{ start: number; end: number } | null>(null);
+  const searchQueryRange = ref<{ start: number; end: number } | null>(null);
   const plusMenuOpen = ref(false);
   const lastSearchQuery = ref('');
   const lastSearchMode = ref<SearchMode | null>(null);
@@ -63,6 +68,9 @@ export function useChatComposer(options: {
     }
     if (searchMode.value === 'directory') {
       return '选择目录';
+    }
+    if (searchMode.value === 'skill') {
+      return '选择技能';
     }
     return '@ 引用';
   });
@@ -113,24 +121,39 @@ export function useChatComposer(options: {
 
   async function updateMentionQueryFromCursor() {
     const textarea = composerRef.value;
-    if (!textarea || searchMode.value !== 'smart') {
+    if (!textarea) {
+      return;
+    }
+
+    if (searchMode.value === 'file' || searchMode.value === 'directory') {
       return;
     }
 
     const cursor = textarea.selectionStart ?? draft.value.length;
     const prefix = draft.value.slice(0, cursor);
-    const match = prefix.match(/(^|\s)@([^\s@]*)$/);
-    if (!match || typeof match.index !== 'number') {
-      closeSearchPanel();
-      activeSearchQuery.value = '';
+
+    const mentionMatch = prefix.match(/(^|\s)@([^\s@]*)$/);
+    if (mentionMatch && typeof mentionMatch.index === 'number') {
+      const query = mentionMatch[2] ?? '';
+      const atIndex = mentionMatch.index + mentionMatch[1].length;
+      searchQueryRange.value = { start: atIndex, end: cursor };
+      activeSearchQuery.value = query;
+      await loadSearchResults(query, 'smart');
       return;
     }
 
-    const query = match[2] ?? '';
-    const atIndex = match.index + match[1].length;
-    mentionQueryRange.value = { start: atIndex, end: cursor };
-    activeSearchQuery.value = query;
-    await loadSearchResults(query, 'smart');
+    const slashMatch = prefix.match(/(^|\s)\/([^\s/]*)$/);
+    if (slashMatch && typeof slashMatch.index === 'number') {
+      const query = slashMatch[2] ?? '';
+      const slashIndex = slashMatch.index + slashMatch[1].length;
+      searchQueryRange.value = { start: slashIndex, end: cursor };
+      activeSearchQuery.value = query;
+      await loadSearchResults(query, 'skill');
+      return;
+    }
+
+    closeSearchPanel();
+    activeSearchQuery.value = '';
   }
 
   async function loadSearchResults(query: string, mode: SearchMode) {
@@ -160,6 +183,14 @@ export function useChatComposer(options: {
             limit: 12,
           },
         });
+      } else if (mode === 'skill') {
+        searchResults.value = await invoke<SearchSkillView[]>('search_skills', {
+          input: {
+            taskId: taskId.value,
+            query,
+            limit: 12,
+          },
+        });
       } else {
         const entries = await invoke<WorkspaceEntryView[]>('search_workspace_entries', {
           input: {
@@ -179,13 +210,33 @@ export function useChatComposer(options: {
     }
   }
 
-  function openSearchFromMenu(mode: 'file' | 'directory') {
+  function openSearchFromMenu(mode: 'file' | 'directory' | 'skill') {
     activeSearchQuery.value = '';
-    mentionQueryRange.value = null;
+    searchQueryRange.value = null;
     void loadSearchResults('', mode);
   }
 
-  async function selectWorkspaceEntry(entry: MentionTargetView) {
+  async function selectWorkspaceEntry(entry: ComposerSearchResult) {
+    if (entry.kind === 'skill') {
+      if (mentions.value.some((item) => item.path === entry.path && item.kind === 'skill')) {
+        closeSearchPanel();
+        return;
+      }
+
+      mentions.value = [
+        ...mentions.value,
+        {
+          path: entry.path,
+          kind: 'skill',
+          label: entry.name,
+          description: entry.description,
+        },
+      ];
+      removeSearchQueryFromDraft();
+      closeSearchPanel();
+      return;
+    }
+
     if (entry.kind === 'agent') {
       insertAgentMention(entry.name);
       closeSearchPanel();
@@ -195,7 +246,7 @@ export function useChatComposer(options: {
     if (entry.kind === 'file' && isImagePath(entry.path)) {
       if (!supportsVision.value) {
         showComposerNotice('当前模型不支持图片输入');
-        removeMentionQueryFromDraft();
+        removeSearchQueryFromDraft();
         closeSearchPanel();
         return;
       }
@@ -217,7 +268,7 @@ export function useChatComposer(options: {
         mediaType: image.mediaType,
         sourcePath: image.path,
       });
-      removeMentionQueryFromDraft();
+      removeSearchQueryFromDraft();
       closeSearchPanel();
       return;
     }
@@ -232,9 +283,10 @@ export function useChatComposer(options: {
       {
         path: entry.path,
         kind: entry.kind,
+        label: entry.path,
       },
     ];
-    removeMentionQueryFromDraft();
+    removeSearchQueryFromDraft();
     closeSearchPanel();
   }
 
@@ -310,9 +362,10 @@ export function useChatComposer(options: {
 
   function closeSearchPanel() {
     searchPanelOpen.value = false;
-    mentionQueryRange.value = null;
+    searchQueryRange.value = null;
     lastSearchQuery.value = '';
     lastSearchMode.value = null;
+    searchMode.value = 'smart';
   }
 
   function closeAllMenus() {
@@ -395,33 +448,33 @@ export function useChatComposer(options: {
     imageAttachments.value = [...imageAttachments.value, attachment];
   }
 
-  function removeMentionQueryFromDraft() {
-    if (!mentionQueryRange.value) {
+  function removeSearchQueryFromDraft() {
+    if (!searchQueryRange.value) {
       return;
     }
 
-    const { start, end } = mentionQueryRange.value;
+    const { start, end } = searchQueryRange.value;
     draft.value = `${draft.value.slice(0, start)}${draft.value.slice(end)}`.replace(/\s{2,}/g, ' ').trimStart();
     composerRef.value?.focus();
     composerRef.value?.setSelectionRange(start, start);
-    mentionQueryRange.value = null;
+    searchQueryRange.value = null;
   }
 
   function insertAgentMention(name: string) {
     const mention = `@${name}`;
-    if (!mentionQueryRange.value) {
+    if (!searchQueryRange.value) {
       draft.value = appendToken(draft.value, mention);
       return;
     }
 
-    const { start, end } = mentionQueryRange.value;
+    const { start, end } = searchQueryRange.value;
     const prefix = draft.value.slice(0, start);
     const suffix = draft.value.slice(end).replace(/^\s*/, '');
     draft.value = `${prefix}${mention} ${suffix}`.trimEnd();
     const cursor = prefix.length + mention.length + 1;
     composerRef.value?.focus();
     composerRef.value?.setSelectionRange(cursor, cursor);
-    mentionQueryRange.value = null;
+    searchQueryRange.value = null;
   }
 
   async function fileToImageAttachment(file: File): Promise<ComposerImageAttachment> {

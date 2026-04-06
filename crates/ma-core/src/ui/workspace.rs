@@ -1,11 +1,15 @@
-use std::path::{Component, Path};
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
 use crate::agents::load_agent_profiles;
+use crate::skills::SkillEntry;
 
-use super::{UiMentionTargetView, UiWorkspaceEntryKind, UiWorkspaceEntryView};
+use super::{
+    UiMentionTargetView, UiSkillSearchView, UiWorkspaceEntryKind, UiWorkspaceEntryView,
+};
 
 pub(super) fn search_workspace_entries(
     working_directory: &Path,
@@ -133,6 +137,46 @@ pub(super) fn search_mentions(
     });
     ranked.truncate(limit);
     Ok(ranked.into_iter().map(|(_, entry)| entry).collect())
+}
+
+pub(super) fn search_skills(
+    skills: &[SkillEntry],
+    opened_paths: &HashSet<PathBuf>,
+    query: &str,
+    limit: usize,
+) -> Vec<UiSkillSearchView> {
+    let query = query.trim().to_lowercase();
+
+    let mut ranked = skills
+        .iter()
+        .filter_map(|skill| {
+            rank_skill_entry(skill, &query).map(|score| {
+                (
+                    score,
+                    UiSkillSearchView {
+                        kind: "skill".to_string(),
+                        name: skill.name.clone(),
+                        path: skill.path.clone(),
+                        description: skill.description.clone(),
+                        opened: opened_paths.contains(&skill.path),
+                        auto_triggered: skill.auto_triggered,
+                        trigger_reason: skill.trigger_reason.clone(),
+                    },
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| right.1.opened.cmp(&left.1.opened))
+            .then_with(|| right.1.auto_triggered.cmp(&left.1.auto_triggered))
+            .then_with(|| left.1.name.cmp(&right.1.name))
+            .then_with(|| left.1.path.cmp(&right.1.path))
+    });
+    ranked.truncate(limit);
+    ranked.into_iter().map(|(_, skill)| skill).collect()
 }
 
 fn visible_files_for_directory(working_directory: &Path) -> Result<Vec<String>> {
@@ -337,6 +381,40 @@ fn mention_sort_key(entry: &UiMentionTargetView) -> (u8, String) {
         UiMentionTargetView::File { path } => (1, path.clone()),
         UiMentionTargetView::Directory { path } => (2, path.clone()),
     }
+}
+
+fn rank_skill_entry(skill: &SkillEntry, query: &str) -> Option<(u8, usize, usize)> {
+    if query.is_empty() {
+        return Some((0, 0, skill.name.len()));
+    }
+
+    let name_lower = skill.name.to_lowercase();
+    let description_lower = skill.description.to_lowercase();
+    let path_lower = skill.path.to_string_lossy().to_lowercase();
+
+    if name_lower == query {
+        return Some((0, 0, skill.name.len()));
+    }
+    if name_lower.starts_with(query) {
+        return Some((0, 1, skill.name.len()));
+    }
+    if name_lower.contains(query) {
+        return Some((0, 2, skill.name.len()));
+    }
+    if description_lower.starts_with(query) {
+        return Some((0, 3, skill.description.len()));
+    }
+    if description_lower.contains(query) {
+        return Some((0, 4, skill.description.len()));
+    }
+    if path_lower.contains(query) {
+        return Some((0, 5, path_lower.len()));
+    }
+
+    subsequence_score(&name_lower, query)
+        .map(|score| (1, 0, score))
+        .or_else(|| subsequence_score(&description_lower, query).map(|score| (1, 1, score)))
+        .or_else(|| subsequence_score(&path_lower, query).map(|score| (1, 2, score)))
 }
 
 fn subsequence_score(haystack: &str, needle: &str) -> Option<usize> {

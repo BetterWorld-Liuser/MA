@@ -901,12 +901,8 @@ mod tests {
             )
         );
         assert!(
-            base.contains("A repository-dependent request answered without tool use is incomplete")
+            base.contains("Your turn ends ONLY when you output a text response without any tool calls")
         );
-        assert!(
-            base.contains("When all work is complete, output your final response as plain text")
-        );
-
         // Agent collaboration rules
         assert!(base.contains("You may mention another existing agent with `@agent_name`"));
         assert!(base.contains("March will automatically continue the next round as that agent"));

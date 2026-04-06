@@ -99,6 +99,14 @@ pub struct UiSearchWorkspaceEntriesRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiSearchSkillsRequest {
+    pub task_id: Option<i64>,
+    pub query: String,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiUpsertNoteRequest {
     pub task_id: Option<i64>,
     pub note_id: String,
@@ -457,6 +465,7 @@ pub enum UiAgentProgressEvent {
         agent_display_name: String,
         phase: UiAgentStatusPhase,
         label: String,
+        runtime: UiRuntimeSnapshot,
     },
     ToolStarted {
         task_id: i64,
@@ -464,6 +473,7 @@ pub enum UiAgentProgressEvent {
         tool_call_id: String,
         tool_name: String,
         summary: String,
+        runtime: UiRuntimeSnapshot,
     },
     ToolFinished {
         task_id: i64,
@@ -472,6 +482,7 @@ pub enum UiAgentProgressEvent {
         status: UiAgentToolStatus,
         summary: String,
         preview: Option<String>,
+        runtime: UiRuntimeSnapshot,
     },
     AssistantTextPreview {
         task_id: i64,
@@ -479,6 +490,7 @@ pub enum UiAgentProgressEvent {
         agent: String,
         agent_display_name: String,
         message: String,
+        runtime: UiRuntimeSnapshot,
     },
     FinalAssistantMessage {
         task_id: i64,
@@ -541,6 +553,18 @@ pub struct UiSkillView {
     pub path: PathBuf,
     pub description: String,
     pub opened: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiSkillSearchView {
+    pub kind: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub description: String,
+    pub opened: bool,
+    pub auto_triggered: bool,
+    pub trigger_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

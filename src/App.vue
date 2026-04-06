@@ -67,6 +67,7 @@
           @toggle-file-lock="toggleOpenFileLock"
           @close-file="closeOpenFile"
           @refresh-skills="refreshSkills"
+          @open-skill="openFilesFromComposer([$event])"
         />
       </main>
     </div>
