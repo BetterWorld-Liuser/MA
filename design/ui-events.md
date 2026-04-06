@@ -247,6 +247,43 @@ type AssistantStreamDeltaEvent = UiRunEventBase & {
 
 ---
 
+### `assistant_message_checkpoint`
+
+表示 AI 产生了一个完整的阶段性输出，当前消息应当沉淀到历史，同时为后续内容创建新的消息槽位。
+
+```ts
+type AssistantMessageCheckpointEvent = UiRunEventBase & {
+  type: 'assistant_message_checkpoint'
+  message_id: string
+  content: string
+  checkpoint_type: 'intermediate' | 'final'
+}
+```
+
+字段说明：
+
+- `message_id`：该条阶段性消息的唯一 id
+- `content`：完整的当前消息内容
+- `checkpoint_type`：
+  - `intermediate`：中间输出，后续还会有更多内容
+  - `final`：本轮最终输出，等同于 `turn_finished` 的前置事件
+
+前端行为：
+
+- 触发消息沉淀动画：
+  1. 当前 `liveTurn` 内容以淡出动画（~200ms）沉淀到 `chat` 历史末尾
+  2. 清空 `liveTurn` 或填充新的内容，以淡入动画（~200ms）呈现
+- 中间消息（`intermediate`）可以带有视觉区分样式，如略低的 opacity 或特殊边框
+- 最终消息（`final`）沉淀后，本轮状态收敛到 `done`
+
+使用场景：
+
+- AI 先输出思考过程，然后输出正式回复
+- AI 修正之前的输出，需要把旧版本固化到历史
+- 长回复分段呈现，每段作为独立消息便于阅读
+
+---
+
 ### `turn_finished`
 
 表示本轮正常结束。

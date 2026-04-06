@@ -164,6 +164,25 @@ Only choose from the shells listed above.
 - `write_note("build_output", "cargo build 输出：error[E0502] ...")`
 - `remove_note("build_output")`  ← 问题解决后清除
 
+### 5. LSP 工具集：语义层查询
+
+补充文件系统 Source of Truth 无法直接提供的语义信息。结果作为 tool_result 在轮内可见，轮结束后丢弃。
+
+```
+lsp_hover(path, line, character)         → 类型签名、文档注释
+lsp_goto_definition(path, line, char)    → 定义所在文件路径 + 行列号
+lsp_find_references(path, line, char)    → 所有引用位置列表
+lsp_code_action(path, line, character)   → 当前位置可用的自动修复建议列表
+lsp_rename(path, line, character, new_name)  → 重命名符号，批量落盘
+lsp_diagnostics(path)                    → 主动获取指定文件的完整诊断列表
+```
+
+`lsp_rename` 是其中唯一产生文件写入的工具：LSP 返回所有需要修改的位置后，改动统一通过文件工具落盘，触发 watcher 归因为 `ModifiedBy::Agent`，保持 Source of Truth 一致性。
+
+Diagnostics 会自动附在 `open_files` 层对应文件的内容后渲染，AI 通常不需要主动调用 `lsp_diagnostics`——该工具主要用于单文件诊断超过截断阈值（20条）时获取完整列表。
+
+详见 → [LSP 集成](lsp.md)
+
 ---
 
 ## 文件修改：按行号操作
