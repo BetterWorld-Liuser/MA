@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
+use tokio::select;
 
 use super::title::debug_structured_response;
 use super::wire::{WireResponse, WireStreamDelta, adapter_for};
@@ -14,6 +15,7 @@ use super::{
     ProviderClient, ProviderProgressEvent, ProviderResponse, ProviderToolCall,
     ProviderToolCallDelta, RequestMessage, RequestOptions, RuntimeProviderConfig,
 };
+use crate::agent::{TurnCancellation, is_turn_cancelled_error};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderDeliveryMode {
@@ -73,8 +75,11 @@ impl StreamAttemptFailure {
     }
 
     pub fn should_skip_fallback(&self) -> bool {
-        self
-            .source
+        if is_turn_cancelled_error(&self.source) {
+            return true;
+        }
+
+        self.source
             .downcast_ref::<ProviderHttpError>()
             .is_some_and(|error| error.status == StatusCode::TOO_MANY_REQUESTS)
     }
@@ -199,6 +204,7 @@ impl ProviderClient {
         conversation: &[RequestMessage],
         options: &RequestOptions,
         request_json: &str,
+        cancellation: &TurnCancellation,
         on_event: &mut F,
     ) -> std::result::Result<ProviderResponse, StreamAttemptFailure>
     where
@@ -219,28 +225,33 @@ impl ProviderClient {
             })?;
 
         let response = self
-            .http
-            .post(&request.url)
-            .headers(request.headers)
-            .json(&request.body)
-            .send()
+            .cancel_aware_send(request.url, request.headers, request.body, cancellation)
             .await
             .map_err(|error| StreamAttemptFailure {
                 kind: StreamFailureKind::Start,
-                source: error.into(),
+                source: error,
             })?;
-        let response =
-            ensure_success_response(response)
-                .await
-                .map_err(|error| StreamAttemptFailure {
-                    kind: StreamFailureKind::Start,
-                    source: error,
-                })?;
+        let response = select! {
+            _ = cancellation.cancelled() => Err(StreamAttemptFailure {
+                kind: StreamFailureKind::Start,
+                source: anyhow::anyhow!("turn cancelled"),
+            }),
+            response = ensure_success_response(response) => response.map_err(|error| StreamAttemptFailure {
+                kind: StreamFailureKind::Start,
+                source: error,
+            }),
+        }?;
 
         let mut stream = response.bytes_stream().eventsource();
         let mut collector = StreamCollector::default();
 
-        while let Some(event) = stream.next().await {
+        while let Some(event) = select! {
+            _ = cancellation.cancelled() => Err(StreamAttemptFailure {
+                kind: StreamFailureKind::ReadEvent,
+                source: anyhow::anyhow!("turn cancelled"),
+            }),
+            event = stream.next() => Ok(event),
+        }? {
             let event = event.map_err(|error| StreamAttemptFailure {
                 kind: StreamFailureKind::ReadEvent,
                 source: error.into(),
@@ -319,6 +330,7 @@ impl ProviderClient {
         options: &RequestOptions,
         request_json: String,
         delivery_path: DeliveryPath,
+        cancellation: &TurnCancellation,
     ) -> Result<ProviderResponse> {
         let adapter = adapter_for(&self.config);
         let request = adapter.build_request(
@@ -329,18 +341,17 @@ impl ProviderClient {
             options,
         )?;
         let response = self
-            .http
-            .post(&request.url)
-            .headers(request.headers)
-            .json(&request.body)
-            .send()
+            .cancel_aware_send(request.url, request.headers, request.body, cancellation)
             .await
             .context("failed to request provider non-stream response")?;
-        let body = ensure_success_response(response)
-            .await?
-            .json::<Value>()
-            .await
-            .context("failed to decode provider non-stream JSON response")?;
+        let response = select! {
+            _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
+            response = ensure_success_response(response) => response,
+        }?;
+        let body = select! {
+            _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
+            body = response.json::<Value>() => body.context("failed to decode provider non-stream JSON response"),
+        }?;
 
         build_provider_response_from_wire_response(
             adapter.parse_response(&body)?,
@@ -348,6 +359,26 @@ impl ProviderClient {
             delivery_path,
             Some(body),
         )
+    }
+}
+
+impl ProviderClient {
+    async fn cancel_aware_send(
+        &self,
+        url: String,
+        headers: reqwest::header::HeaderMap,
+        body: Value,
+        cancellation: &TurnCancellation,
+    ) -> Result<reqwest::Response> {
+        select! {
+            _ = cancellation.cancelled() => Err(anyhow::anyhow!("turn cancelled")),
+            response = self
+                .http
+                .post(url)
+                .headers(headers)
+                .json(&body)
+                .send() => response.map_err(Into::into),
+        }
     }
 }
 

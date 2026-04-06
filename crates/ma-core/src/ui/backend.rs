@@ -6,7 +6,8 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 
 use crate::agent::{
-    AgentConfig, AgentProgressEvent, AgentSession, DebugRound, is_turn_cancelled_error,
+    AgentConfig, AgentProgressEvent, AgentSession, DebugRound, TurnCancellation,
+    is_turn_cancelled_error,
 };
 use crate::agents::SHARED_SCOPE;
 use crate::agents::{MARCH_AGENT_NAME, load_agent_profiles};
@@ -27,11 +28,10 @@ use super::{
     UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
     UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest,
-    UiSetTaskModelRequest, UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest,
-    UiSkillSearchView, UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest,
-    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
-    UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
+    UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
+    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
 impl UiAppBackend {
@@ -203,8 +203,12 @@ impl UiAppBackend {
         &mut self,
         request: UiSendMessageRequest,
     ) -> Result<UiWorkspaceSnapshot> {
-        self.handle_send_message_with_progress_and_cancel(request, |_| Ok(()), || false)
-            .await
+        self.handle_send_message_with_progress_and_cancel(
+            request,
+            |_| Ok(()),
+            TurnCancellation::never(),
+        )
+        .await
     }
 
     pub async fn handle_send_message_with_progress<F>(
@@ -215,19 +219,22 @@ impl UiAppBackend {
     where
         F: FnMut(UiAgentProgressEvent) -> Result<()>,
     {
-        self.handle_send_message_with_progress_and_cancel(request, on_progress, || false)
-            .await
+        self.handle_send_message_with_progress_and_cancel(
+            request,
+            on_progress,
+            TurnCancellation::never(),
+        )
+        .await
     }
 
-    pub async fn handle_send_message_with_progress_and_cancel<F, C>(
+    pub async fn handle_send_message_with_progress_and_cancel<F>(
         &mut self,
         request: UiSendMessageRequest,
         mut on_progress: F,
-        is_cancelled: C,
+        cancellation: &TurnCancellation,
     ) -> Result<UiWorkspaceSnapshot>
     where
         F: FnMut(UiAgentProgressEvent) -> Result<()>,
-        C: Fn() -> bool,
     {
         let task_id = self.resolve_or_create_task_id(request.task_id)?;
         let content_blocks = request
@@ -284,7 +291,7 @@ impl UiAppBackend {
             .handle_user_message_with_events_and_cancel(
                 &provider,
                 content_blocks,
-                &is_cancelled,
+                cancellation,
                 |session, event| {
                     Self::forward_progress_event(
                         task_id,
@@ -313,7 +320,7 @@ impl UiAppBackend {
                     provider_config_for_session(&persisted_before.task, &session)?;
                 let provider = OpenAiCompatibleClient::new(provider_config);
                 let continuation = session
-                    .continue_with_events_and_cancel(&provider, &is_cancelled, |session, event| {
+                    .continue_with_events_and_cancel(&provider, cancellation, |session, event| {
                         Self::forward_progress_event(
                             task_id,
                             &turn_id,
@@ -785,10 +792,7 @@ impl UiAppBackend {
         super::workspace::search_mentions(&working_directory, &request.query, limit)
     }
 
-    pub fn search_skills(
-        &self,
-        request: UiSearchSkillsRequest,
-    ) -> Result<Vec<UiSkillSearchView>> {
+    pub fn search_skills(&self, request: UiSearchSkillsRequest) -> Result<Vec<UiSkillSearchView>> {
         let Some(task_id) = request.task_id else {
             return Ok(Vec::new());
         };
@@ -913,6 +917,21 @@ impl UiAppBackend {
                     agent,
                     agent_display_name,
                     message,
+                    runtime,
+                })
+            }
+            AgentProgressEvent::AssistantMessageCheckpoint(checkpoint) => {
+                let agent = session.active_agent_name().to_string();
+                let agent_display_name = session.display_name_for_agent(&agent);
+                let runtime = session.ui_runtime_snapshot(context_budget_tokens);
+                on_progress(UiAgentProgressEvent::AssistantMessageCheckpoint {
+                    task_id,
+                    turn_id: turn_id.to_string(),
+                    agent,
+                    agent_display_name,
+                    message_id: checkpoint.message_id,
+                    content: checkpoint.message,
+                    checkpoint_type: checkpoint.checkpoint_type.into(),
                     runtime,
                 })
             }

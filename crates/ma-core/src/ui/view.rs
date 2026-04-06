@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use indexmap::IndexMap;
 
-use crate::agent::{AgentSession, AgentStatusPhase, AgentToolStatus, DebugRound, DebugToolCall};
+use crate::agent::{
+    AgentSession, AgentStatusPhase, AgentToolStatus, AssistantMessageCheckpointType, DebugRound,
+    DebugToolCall,
+};
 use crate::agents::{AgentProfile, AgentProfileSource, MARCH_AGENT_NAME};
 use crate::context::{
     ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus,
@@ -17,9 +20,9 @@ use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
 
 use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
 use super::{
-    UiAgentProfileView, UiAgentStatusPhase, UiAgentToolStatus, UiContextPressureView,
-    UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView, UiDebugToolCallView,
-    UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
+    UiAgentProfileView, UiAgentStatusPhase, UiAgentToolStatus, UiAssistantMessageCheckpointType,
+    UiContextPressureView, UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView,
+    UiDebugToolCallView, UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
     UiModelCapabilitiesView, UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView,
     UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot, UiServerToolView,
     UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary, UiToolSummaryView,
@@ -501,6 +504,15 @@ impl From<AgentToolStatus> for UiAgentToolStatus {
         match value {
             AgentToolStatus::Success => Self::Success,
             AgentToolStatus::Error => Self::Error,
+        }
+    }
+}
+
+impl From<AssistantMessageCheckpointType> for UiAssistantMessageCheckpointType {
+    fn from(value: AssistantMessageCheckpointType) -> Self {
+        match value {
+            AssistantMessageCheckpointType::Intermediate => Self::Intermediate,
+            AssistantMessageCheckpointType::Final => Self::Final,
         }
     }
 }

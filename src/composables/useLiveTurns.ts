@@ -14,14 +14,23 @@ type ArchivedFailedTurn = {
   message: ChatMessage;
 };
 
+type ArchivedIntermediateTurn = {
+  id: string;
+  turnId: string;
+  createdAt: number;
+  message: ChatMessage;
+};
+
 export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspacePath }: UseLiveTurnsOptions) {
   const liveTurns = ref<Record<number, LiveTurn>>({});
   const archivedFailedTurns = ref<Record<number, ArchivedFailedTurn[]>>({});
+  const archivedIntermediateTurns = ref<Record<number, ArchivedIntermediateTurn[]>>({});
 
   watch(
     workspacePath,
     () => {
       archivedFailedTurns.value = loadArchivedFailedTurns(workspacePath.value);
+      archivedIntermediateTurns.value = loadArchivedIntermediateTurns(workspacePath.value);
     },
     { immediate: true },
   );
@@ -106,6 +115,29 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
           errorMessage: '',
         });
         return;
+      case 'assistant_message_checkpoint':
+        mergeActiveTaskRuntime(event.task_id, event.runtime);
+        ensureLiveTurn(event.task_id, event.turn_id);
+        if (!liveTurns.value[event.task_id]) {
+          return;
+        }
+        if (event.checkpoint_type === 'intermediate') {
+          archiveIntermediateTurn(event.task_id, {
+            ...liveTurns.value[event.task_id],
+            author: formatAgentAuthor(event.agent_display_name || event.agent),
+            content: event.content,
+          }, event.message_id);
+          upsertLiveTurn(event.task_id, {
+            ...liveTurns.value[event.task_id],
+            author: formatAgentAuthor(event.agent_display_name || event.agent),
+            state: 'running',
+            statusLabel: '正在继续处理',
+            content: '',
+            errorMessage: '',
+            transitionKey: (liveTurns.value[event.task_id].transitionKey ?? 0) + 1,
+          });
+        }
+        return;
       case 'final_assistant_message':
         if (snapshot.value?.active_task?.task.id === event.task_id) {
           snapshot.value = {
@@ -189,6 +221,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
       content: '',
       errorMessage: '',
       tools: [],
+      transitionKey: 0,
     });
   }
 
@@ -205,6 +238,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
       ? `${turn.content.trim()}\n\n[本轮执行失败]\n${errorDetail}`
       : `本轮执行失败\n\n${errorDetail}`;
     const message: ChatMessage = {
+      id: `failed:${turn.turnId}:${Date.now()}`,
       role: 'assistant',
       author: turn.author,
       time: formatArchivedTurnTime(Date.now()),
@@ -214,6 +248,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         label: tool.label,
         summary: tool.summary || tool.preview || tool.label,
       })),
+      variant: 'failed',
     };
 
     const nextTaskEntries = [
@@ -230,6 +265,45 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
       [taskId]: nextTaskEntries,
     };
     persistArchivedFailedTurns(workspacePath.value, archivedFailedTurns.value);
+  }
+
+  function archiveIntermediateTurn(taskId: number, turn: LiveTurn, messageId?: string) {
+    const content = turn.content.trim();
+    if (!content) {
+      return;
+    }
+
+    const createdAt = Date.now();
+    const id = messageId || `intermediate:${turn.turnId}:${createdAt}`;
+    const message: ChatMessage = {
+      id,
+      role: 'assistant',
+      author: turn.author,
+      time: formatArchivedTurnTime(createdAt),
+      timestamp: createdAt,
+      content,
+      tools: turn.tools.map((tool) => ({
+        label: tool.label,
+        summary: tool.summary || tool.preview || tool.label,
+      })),
+      variant: 'intermediate',
+    };
+
+    const nextTaskEntries = [
+      ...(archivedIntermediateTurns.value[taskId] ?? []).filter((entry) => entry.id !== id),
+      {
+        id,
+        turnId: turn.turnId,
+        createdAt,
+        message,
+      },
+    ];
+
+    archivedIntermediateTurns.value = {
+      ...archivedIntermediateTurns.value,
+      [taskId]: nextTaskEntries,
+    };
+    persistArchivedIntermediateTurns(workspacePath.value, archivedIntermediateTurns.value);
   }
 
   function clearLiveTurn(taskId: number) {
@@ -253,19 +327,37 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
     persistArchivedFailedTurns(workspacePath.value, archivedFailedTurns.value);
   }
 
+  function clearArchivedIntermediateTurns(taskId: number) {
+    if (!(taskId in archivedIntermediateTurns.value)) {
+      return;
+    }
+
+    const nextTurns = { ...archivedIntermediateTurns.value };
+    delete nextTurns[taskId];
+    archivedIntermediateTurns.value = nextTurns;
+    persistArchivedIntermediateTurns(workspacePath.value, archivedIntermediateTurns.value);
+  }
+
   return {
     liveTurns,
     archivedFailedTurns,
+    archivedIntermediateTurns,
     applyAgentProgress,
     upsertLiveTurn,
     archiveFailedTurn,
+    archiveIntermediateTurn,
     clearLiveTurn,
     clearArchivedFailedTurns,
+    clearArchivedIntermediateTurns,
   };
 }
 
 function storageKey(workspacePath?: string) {
   return workspacePath ? `ma:archived-failed-turns:${workspacePath}` : '';
+}
+
+function intermediateStorageKey(workspacePath?: string) {
+  return workspacePath ? `ma:archived-intermediate-turns:${workspacePath}` : '';
 }
 
 function loadArchivedFailedTurns(workspacePath?: string) {
@@ -290,6 +382,39 @@ function persistArchivedFailedTurns(
   records: Record<number, ArchivedFailedTurn[]>,
 ) {
   const key = storageKey(workspacePath);
+  if (!key || typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(records));
+  } catch {
+    // Ignore local cache persistence failures; this layer is user-view only.
+  }
+}
+
+function loadArchivedIntermediateTurns(workspacePath?: string) {
+  const key = intermediateStorageKey(workspacePath);
+  if (!key || typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return {};
+    }
+    return JSON.parse(raw) as Record<number, ArchivedIntermediateTurn[]>;
+  } catch {
+    return {};
+  }
+}
+
+function persistArchivedIntermediateTurns(
+  workspacePath: string | undefined,
+  records: Record<number, ArchivedIntermediateTurn[]>,
+) {
+  const key = intermediateStorageKey(workspacePath);
   if (!key || typeof window === 'undefined') {
     return;
   }

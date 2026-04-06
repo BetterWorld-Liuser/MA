@@ -7,9 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::agents::load_agent_profiles;
 use crate::skills::SkillEntry;
 
-use super::{
-    UiMentionTargetView, UiSkillSearchView, UiWorkspaceEntryKind, UiWorkspaceEntryView,
-};
+use super::{UiMentionTargetView, UiSkillSearchView, UiWorkspaceEntryKind, UiWorkspaceEntryView};
 
 pub(super) fn search_workspace_entries(
     working_directory: &Path,

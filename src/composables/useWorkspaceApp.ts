@@ -45,11 +45,13 @@ export function useWorkspaceApp() {
   const {
     liveTurns,
     archivedFailedTurns,
+    archivedIntermediateTurns,
     applyAgentProgress,
     upsertLiveTurn,
     archiveFailedTurn,
     clearLiveTurn,
     clearArchivedFailedTurns,
+    clearArchivedIntermediateTurns,
   } = useLiveTurns({
     snapshot,
     sendingTaskId,
@@ -121,10 +123,13 @@ export function useWorkspaceApp() {
 
     if (snapshot.value) {
       const baseWorkspace = toWorkspaceView(snapshot.value);
+      const intermediateMessages = activeTaskId
+        ? (archivedIntermediateTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
+        : [];
       const archivedMessages = activeTaskId
         ? (archivedFailedTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
         : [];
-      const mergedChat = [...baseWorkspace.chat, ...archivedMessages].sort(
+      const mergedChat = [...baseWorkspace.chat, ...intermediateMessages, ...archivedMessages].sort(
         (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
       );
       return {
@@ -334,6 +339,7 @@ export function useWorkspaceApp() {
         }
         clearLiveTurn(Number(taskId));
         clearArchivedFailedTurns(Number(taskId));
+        clearArchivedIntermediateTurns(Number(taskId));
         delete localComposerMessages.value[Number(taskId)];
         if (sendingTaskId.value === Number(taskId)) {
           sendingTaskId.value = null;

@@ -328,6 +328,12 @@
   @apply flex items-center gap-1.25 px-0.5;
 }
 
+@utility message-meta-badge {
+  @apply inline-flex items-center rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-[0.12em] text-text-dim;
+  border-color: var(--ma-line-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
 @utility message-bubble {
   @apply rounded-[16px] px-3 py-1.25 text-[12px] leading-[1.5];
 }
@@ -338,6 +344,14 @@
 
 @utility message-bubble-assistant {
   @apply bg-bg-secondary;
+}
+
+@utility message-bubble-intermediate {
+  border: 1px solid var(--ma-line-soft);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0.008)),
+    var(--ma-panel-surface);
+  opacity: 0.84;
 }
 
 @utility message-tools {
@@ -1355,6 +1369,36 @@
 
   .message-bubble-assistant .markstream-vue a:hover {
     color: var(--color-accent-hover) !important;
+  }
+
+  .chat-history-enter-active,
+  .chat-history-leave-active {
+    transition:
+      opacity 180ms ease,
+      transform 180ms ease;
+  }
+
+  .chat-history-enter-from,
+  .chat-history-leave-to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  .chat-history-move {
+    transition: transform 180ms ease;
+  }
+
+  .live-turn-swap-enter-active,
+  .live-turn-swap-leave-active {
+    transition:
+      opacity 200ms ease,
+      transform 200ms ease;
+  }
+
+  .live-turn-swap-enter-from,
+  .live-turn-swap-leave-to {
+    opacity: 0;
+    transform: translateY(6px);
   }
 
   html,

@@ -5,77 +5,88 @@
       <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
     </div>
 
-    <article
-      v-for="(message, index) in chat"
-      :key="messageKey(message, index)"
-      class="chat-row"
-      :class="message.role === 'assistant' ? 'chat-row-assistant' : 'chat-row-user'"
-    >
-      <span class="message-avatar shrink-0">{{ message.author.slice(0, 1) }}</span>
+    <TransitionGroup name="chat-history" tag="div">
+      <article
+        v-for="(message, index) in chat"
+        :key="messageKey(message, index)"
+        class="chat-row"
+        :class="message.role === 'assistant' ? 'chat-row-assistant' : 'chat-row-user'"
+      >
+        <span class="message-avatar shrink-0">{{ message.author.slice(0, 1) }}</span>
 
-      <div class="message-stack" :class="message.role === 'assistant' ? 'items-start' : 'items-end'">
-        <div class="message-meta" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-          <span class="text-[11px] font-semibold text-text">{{ message.author }}</span>
-          <time class="font-mono text-[9px] text-text-dim">{{ message.time }}</time>
-        </div>
-
-        <div
-          class="message-bubble"
-          :class="message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user'"
-          @click.capture="message.role === 'assistant' ? handleMarkdownLinkClick($event) : undefined"
-        >
-          <div v-if="message.images?.length" class="message-image-grid">
-            <button
-              v-for="image in message.images"
-              :key="image.id"
-              class="message-image-card"
-              type="button"
-              @click="previewImage = image"
+        <div class="message-stack" :class="message.role === 'assistant' ? 'items-start' : 'items-end'">
+          <div class="message-meta" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
+            <span class="text-[11px] font-semibold text-text">{{ message.author }}</span>
+            <time class="font-mono text-[9px] text-text-dim">{{ message.time }}</time>
+            <span
+              v-if="message.variant === 'intermediate'"
+              class="message-meta-badge"
             >
-              <img class="message-image-thumb" :src="image.previewUrl" :alt="image.name" />
-              <span class="message-image-caption">{{ image.name }}</span>
-            </button>
+              过程
+            </span>
           </div>
 
-          <MarkdownRender
-            v-if="message.role === 'assistant'"
-            custom-id="ma-chat-message"
-            :content="renderAssistantContent(message.content)"
-            :final="true"
-            :max-live-nodes="0"
-            :render-batch-size="16"
-            :render-batch-delay="8"
-          />
-          <p v-else class="whitespace-pre-wrap text-[12px] leading-[1.5] text-text">{{ message.content }}</p>
-
-          <details v-if="message.tools?.length" class="message-tools">
-            <summary class="message-tools-summary">
-              <span>{{ formatToolSummaryLabel(message.tools.length) }}</span>
-              <span class="message-tools-summary-action">查看</span>
-            </summary>
-            <ul class="message-tools-list">
-              <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
-                <span class="message-tools-item-label">{{ tool.label }}</span>
-                <span class="message-tools-item-separator">·</span>
-                <span class="message-tools-item-summary">{{ tool.summary }}</span>
-              </li>
-            </ul>
-          </details>
-        </div>
-
-        <div class="message-actions" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-          <button
-            class="message-copy-button"
-            type="button"
-            :aria-label="getCopyButtonLabel(message.content)"
-            :title="getCopyButtonLabel(message.content)"
-            @click="copyMessage(message.content)"
+          <div
+            class="message-bubble"
+            :class="[
+              message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user',
+              message.variant === 'intermediate' ? 'message-bubble-intermediate' : '',
+            ]"
+            @click.capture="message.role === 'assistant' ? handleMarkdownLinkClick($event) : undefined"
           >
-            <Icon :icon="copiedContent === normalizeCopyContent(message.content) ? checkIcon : copyIcon" class="message-copy-icon" />
-          </button>
+            <div v-if="message.images?.length" class="message-image-grid">
+              <button
+                v-for="image in message.images"
+                :key="image.id"
+                class="message-image-card"
+                type="button"
+                @click="previewImage = image"
+              >
+                <img class="message-image-thumb" :src="image.previewUrl" :alt="image.name" />
+                <span class="message-image-caption">{{ image.name }}</span>
+              </button>
+            </div>
+
+            <MarkdownRender
+              v-if="message.role === 'assistant'"
+              custom-id="ma-chat-message"
+              :content="renderAssistantContent(message.content)"
+              :final="true"
+              :max-live-nodes="0"
+              :render-batch-size="16"
+              :render-batch-delay="8"
+            />
+            <p v-else class="whitespace-pre-wrap text-[12px] leading-[1.5] text-text">{{ message.content }}</p>
+
+            <details v-if="message.tools?.length" class="message-tools">
+              <summary class="message-tools-summary">
+                <span>{{ formatToolSummaryLabel(message.tools.length) }}</span>
+                <span class="message-tools-summary-action">查看</span>
+              </summary>
+              <ul class="message-tools-list">
+                <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
+                  <span class="message-tools-item-label">{{ tool.label }}</span>
+                  <span class="message-tools-item-separator">·</span>
+                  <span class="message-tools-item-summary">{{ tool.summary }}</span>
+                </li>
+              </ul>
+            </details>
+          </div>
+
+          <div class="message-actions" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
+            <button
+              class="message-copy-button"
+              type="button"
+              :aria-label="getCopyButtonLabel(message.content)"
+              :title="getCopyButtonLabel(message.content)"
+              @click="copyMessage(message.content)"
+            >
+              <Icon :icon="copiedContent === normalizeCopyContent(message.content) ? checkIcon : copyIcon" class="message-copy-icon" />
+            </button>
+          </div>
         </div>
-      </div>
-    </article>
+      </article>
+    </TransitionGroup>
 
     <article v-if="liveTurn" class="chat-row chat-row-assistant">
       <span class="message-avatar shrink-0">{{ liveTurn.author.slice(0, 1) }}</span>
@@ -86,46 +97,49 @@
           <time class="font-mono text-[9px] text-text-dim">...</time>
         </div>
 
-        <div
-          class="message-bubble message-bubble-assistant opacity-90"
-          :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''"
-          @click.capture="handleMarkdownLinkClick"
-        >
-          <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
-            <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
-              <span></span>
-              <span></span>
-              <span></span>
-            </span>
-            <span class="live-status-label" :class="liveTurn.state === 'error' ? 'text-error' : ''">{{ liveTurn.statusLabel }}</span>
-          </div>
-          <MarkdownRender
-            v-if="liveTurn.content"
-            custom-id="ma-chat-streaming"
-            :content="renderAssistantContent(liveTurn.content)"
-            :final="liveTurn.state !== 'streaming'"
-            :max-live-nodes="0"
-            :render-batch-size="16"
-            :render-batch-delay="8"
-          />
-          <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
-            {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : `${liveTurn.author} 正在处理这一轮请求。` }}
-          </p>
-
-          <p
-            v-if="liveTurn.state === 'error' && liveTurn.content && liveTurn.errorMessage"
-            class="mt-2 whitespace-pre-wrap text-[11px] text-error"
+        <Transition name="live-turn-swap" mode="out-in">
+          <div
+            :key="liveTurnContentKey"
+            class="message-bubble message-bubble-assistant opacity-90"
+            :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''"
+            @click.capture="handleMarkdownLinkClick"
           >
-            {{ liveTurn.errorMessage }}
-          </p>
+            <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
+              <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </span>
+              <span class="live-status-label" :class="liveTurn.state === 'error' ? 'text-error' : ''">{{ liveTurn.statusLabel }}</span>
+            </div>
+            <MarkdownRender
+              v-if="liveTurn.content"
+              custom-id="ma-chat-streaming"
+              :content="renderAssistantContent(liveTurn.content)"
+              :final="liveTurn.state !== 'streaming'"
+              :max-live-nodes="0"
+              :render-batch-size="16"
+              :render-batch-delay="8"
+            />
+            <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
+              {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : `${liveTurn.author} 正在处理这一轮请求。` }}
+            </p>
 
-          <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">
-            <div v-for="tool in liveTurn.tools" :key="tool.id" class="live-tool-item">
-              <span class="live-tool-state" :class="`live-tool-state-${tool.state}`"></span>
-              <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
+            <p
+              v-if="liveTurn.state === 'error' && liveTurn.content && liveTurn.errorMessage"
+              class="mt-2 whitespace-pre-wrap text-[11px] text-error"
+            >
+              {{ liveTurn.errorMessage }}
+            </p>
+
+            <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">
+              <div v-for="tool in liveTurn.tools" :key="tool.id" class="live-tool-item">
+                <span class="live-tool-state" :class="`live-tool-state-${tool.state}`"></span>
+                <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
+              </div>
             </div>
           </div>
-        </div>
+        </Transition>
 
         <div class="message-actions justify-start">
           <button
@@ -181,6 +195,17 @@ const CODE_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]+`/g;
 const BARE_URL_PATTERN = /https?:\/\/[^\s<]+/g;
 
 const chatLength = computed(() => props.chat.length);
+const liveTurnContentKey = computed(() => {
+  if (!props.liveTurn) {
+    return 'live-turn-empty';
+  }
+
+  return [
+    props.liveTurn.turnId,
+    props.liveTurn.transitionKey ?? 0,
+    props.liveTurn.state === 'error' ? 'error' : 'active',
+  ].join('::');
+});
 
 watch(
   chatLength,
@@ -361,6 +386,10 @@ async function handleMarkdownLinkClick(event: MouseEvent) {
 }
 
 function messageKey(message: ChatMessage, index: number) {
+  if (message.id) {
+    return message.id;
+  }
+
   return [
     message.role,
     message.author,

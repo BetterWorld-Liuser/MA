@@ -7,7 +7,8 @@ use super::prompting::{append_assistant_tool_call_message, render_prompt};
 use super::tool_calls::{format_tool_error, preview_tool_result, summarize_tool_call};
 use super::{
     AgentProgressEvent, AgentRunResult, AgentSession, AgentStatusPhase, AgentToolStatus,
-    DebugRound, DebugToolCall, FinalAssistantMessage, TURN_CANCELLED_ERROR_MESSAGE, ToolOutcome,
+    AssistantMessageCheckpoint, AssistantMessageCheckpointType, DebugRound, DebugToolCall,
+    FinalAssistantMessage, TURN_CANCELLED_ERROR_MESSAGE, ToolOutcome, TurnCancellation,
 };
 
 impl AgentSession {
@@ -16,8 +17,13 @@ impl AgentSession {
         client: &OpenAiCompatibleClient,
         content: Vec<ContentBlock>,
     ) -> Result<AgentRunResult> {
-        self.handle_user_message_with_events_and_cancel(client, content, || false, |_, _| Ok(()))
-            .await
+        self.handle_user_message_with_events_and_cancel(
+            client,
+            content,
+            TurnCancellation::never(),
+            |_, _| Ok(()),
+        )
+        .await
     }
 
     pub async fn handle_user_message_with_events<F>(
@@ -29,49 +35,51 @@ impl AgentSession {
     where
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
     {
-        self.handle_user_message_with_events_and_cancel(client, content, || false, on_event)
-            .await
+        self.handle_user_message_with_events_and_cancel(
+            client,
+            content,
+            TurnCancellation::never(),
+            on_event,
+        )
+        .await
     }
 
-    pub async fn handle_user_message_with_events_and_cancel<F, C>(
+    pub async fn handle_user_message_with_events_and_cancel<F>(
         &mut self,
         client: &OpenAiCompatibleClient,
         content: Vec<ContentBlock>,
-        is_cancelled: C,
+        cancellation: &TurnCancellation,
         on_event: F,
     ) -> Result<AgentRunResult>
     where
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
-        C: Fn() -> bool,
     {
-        self.run_agent_loop(client, Some(content), is_cancelled, on_event)
+        self.run_agent_loop(client, Some(content), cancellation, on_event)
             .await
     }
 
-    pub async fn continue_with_events_and_cancel<F, C>(
+    pub async fn continue_with_events_and_cancel<F>(
         &mut self,
         client: &OpenAiCompatibleClient,
-        is_cancelled: C,
+        cancellation: &TurnCancellation,
         on_event: F,
     ) -> Result<AgentRunResult>
     where
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
-        C: Fn() -> bool,
     {
-        self.run_agent_loop(client, None, is_cancelled, on_event)
+        self.run_agent_loop(client, None, cancellation, on_event)
             .await
     }
 
-    async fn run_agent_loop<F, C>(
+    async fn run_agent_loop<F>(
         &mut self,
         client: &OpenAiCompatibleClient,
         content: Option<Vec<ContentBlock>>,
-        is_cancelled: C,
+        cancellation: &TurnCancellation,
         mut on_event: F,
     ) -> Result<AgentRunResult>
     where
         F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
-        C: Fn() -> bool,
     {
         if let Some(content) = content {
             self.add_user_turn(content);
@@ -84,7 +92,7 @@ impl AgentSession {
         let mut iteration = 0usize;
 
         loop {
-            ensure_turn_not_cancelled(&is_cancelled)?;
+            ensure_turn_not_cancelled(cancellation)?;
             iteration += 1;
             on_event(
                 self,
@@ -108,32 +116,37 @@ impl AgentSession {
                 },
             )?;
             let response = client
-                .complete_context_with_events(&context, conversation, |event| {
-                    ensure_turn_not_cancelled(&is_cancelled)?;
-                    if let ProviderProgressEvent::ContentDelta(ref delta) = event {
-                        if !delta.is_empty() {
-                            content_preview.push_str(delta);
-                            on_event(
-                                self,
-                                AgentProgressEvent::Status {
-                                    agent: self.active_agent_name().to_string(),
-                                    phase: AgentStatusPhase::Streaming,
-                                    label: "正在生成回复".to_string(),
-                                },
-                            )?;
-                            on_event(
-                                self,
-                                AgentProgressEvent::AssistantTextPreview {
-                                    agent: self.active_agent_name().to_string(),
-                                    message: content_preview.clone(),
-                                },
-                            )?;
+                .complete_context_with_events_and_cancel(
+                    &context,
+                    conversation,
+                    cancellation,
+                    |event| {
+                        ensure_turn_not_cancelled(cancellation)?;
+                        if let ProviderProgressEvent::ContentDelta(ref delta) = event {
+                            if !delta.is_empty() {
+                                content_preview.push_str(delta);
+                                on_event(
+                                    self,
+                                    AgentProgressEvent::Status {
+                                        agent: self.active_agent_name().to_string(),
+                                        phase: AgentStatusPhase::Streaming,
+                                        label: "正在生成回复".to_string(),
+                                    },
+                                )?;
+                                on_event(
+                                    self,
+                                    AgentProgressEvent::AssistantTextPreview {
+                                        agent: self.active_agent_name().to_string(),
+                                        message: content_preview.clone(),
+                                    },
+                                )?;
+                            }
                         }
-                    }
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await?;
-            ensure_turn_not_cancelled(&is_cancelled)?;
+            ensure_turn_not_cancelled(cancellation)?;
             let assistant_text = response
                 .content
                 .as_deref()
@@ -161,13 +174,23 @@ impl AgentSession {
                     Some(text) if !text.trim().is_empty() => text,
                     _ => bail!("provider returned no tool calls and no text; cannot end turn"),
                 };
+                let final_message_id = format!("assistant-final-{iteration}");
                 let final_message = FinalAssistantMessage {
+                    message_id: final_message_id.clone(),
                     message: final_message,
                 };
                 self.add_assistant_turn(
                     vec![ContentBlock::text(final_message.message.clone())],
                     summaries.clone(),
                 );
+                on_event(
+                    self,
+                    AgentProgressEvent::AssistantMessageCheckpoint(AssistantMessageCheckpoint {
+                        message_id: final_message_id,
+                        message: final_message.message.clone(),
+                        checkpoint_type: AssistantMessageCheckpointType::Final,
+                    }),
+                )?;
                 on_event(
                     self,
                     AgentProgressEvent::FinalAssistantMessage(final_message.clone()),
@@ -189,6 +212,17 @@ impl AgentSession {
                 });
             }
 
+            if let Some(ref assistant_text) = assistant_text {
+                on_event(
+                    self,
+                    AgentProgressEvent::AssistantMessageCheckpoint(AssistantMessageCheckpoint {
+                        message_id: format!("assistant-intermediate-{iteration}"),
+                        message: assistant_text.clone(),
+                        checkpoint_type: AssistantMessageCheckpointType::Intermediate,
+                    }),
+                )?;
+            }
+
             append_assistant_tool_call_message(
                 &mut transient_messages,
                 assistant_text,
@@ -196,7 +230,7 @@ impl AgentSession {
             );
 
             for tool_call in response.tool_calls {
-                ensure_turn_not_cancelled(&is_cancelled)?;
+                ensure_turn_not_cancelled(cancellation)?;
                 let tool_summary =
                     summarize_tool_call(tool_call.name.as_str(), &tool_call.arguments_json);
                 on_event(
@@ -215,7 +249,7 @@ impl AgentSession {
                         summary: tool_summary.clone(),
                     },
                 )?;
-                let outcome = match self.execute_tool_call(&tool_call) {
+                let outcome = match self.execute_tool_call(&tool_call, cancellation).await {
                     Ok(outcome) => {
                         on_event(
                             self,
@@ -249,7 +283,7 @@ impl AgentSession {
                         }
                     }
                 };
-                ensure_turn_not_cancelled(&is_cancelled)?;
+                ensure_turn_not_cancelled(cancellation)?;
                 transient_messages.push(RequestMessage::tool(
                     tool_call.id,
                     outcome.result_text.clone(),
@@ -274,11 +308,8 @@ impl AgentSession {
     }
 }
 
-fn ensure_turn_not_cancelled<C>(is_cancelled: &C) -> Result<()>
-where
-    C: Fn() -> bool,
-{
-    if is_cancelled() {
+fn ensure_turn_not_cancelled(cancellation: &TurnCancellation) -> Result<()> {
+    if cancellation.is_cancelled() {
         return Err(anyhow!(TURN_CANCELLED_ERROR_MESSAGE));
     }
     Ok(())

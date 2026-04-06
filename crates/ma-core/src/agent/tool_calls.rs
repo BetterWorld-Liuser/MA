@@ -12,12 +12,13 @@ use crate::settings::SettingsStorage;
 use super::editing::{delete_line_range, edit_lines, insert_line_block, replace_line_range};
 use super::prompting::format_tool_output;
 use super::shells::{AvailableShell, parse_shell};
-use super::{AgentSession, CommandRequest, CommandShell, ToolOutcome};
+use super::{AgentSession, CommandRequest, CommandShell, ToolOutcome, TurnCancellation};
 
 impl AgentSession {
-    pub(super) fn execute_tool_call(
+    pub(super) async fn execute_tool_call(
         &mut self,
         tool_call: &ProviderToolCall,
+        cancellation: &TurnCancellation,
     ) -> Result<ToolOutcome> {
         let args: Value = serde_json::from_str(&tool_call.arguments_json).with_context(|| {
             format!(
@@ -29,10 +30,15 @@ impl AgentSession {
         match tool_call.name.as_str() {
             "run_command" => {
                 let args = parse_run_command_args(args, &tool_call.arguments_json)?;
-                let execution = self.run_command(CommandRequest {
-                    command: args.command,
-                    shell: parse_shell(&args.shell)?,
-                })?;
+                let execution = self
+                    .run_command(
+                        CommandRequest {
+                            command: args.command,
+                            shell: parse_shell(&args.shell)?,
+                        },
+                        cancellation,
+                    )
+                    .await?;
                 Ok(ToolOutcome {
                     result_text: format_tool_output(&execution),
                     summary: Some(ToolSummary {

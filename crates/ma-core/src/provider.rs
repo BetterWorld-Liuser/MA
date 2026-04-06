@@ -1,3 +1,4 @@
+use crate::agent::TurnCancellation;
 use crate::context::AgentContext;
 use crate::settings::{ProviderType, ServerToolConfig};
 use anyhow::{Context, Result};
@@ -112,14 +113,38 @@ impl ProviderClient {
         context: &AgentContext,
         conversation: Vec<RequestMessage>,
     ) -> Result<ProviderResponse> {
-        self.complete_context_with_events(context, conversation, |_| Ok(()))
-            .await
+        self.complete_context_with_events_and_cancel(
+            context,
+            conversation,
+            TurnCancellation::never(),
+            |_| Ok(()),
+        )
+        .await
     }
 
     pub async fn complete_context_with_events<F>(
         &self,
         context: &AgentContext,
         conversation: Vec<RequestMessage>,
+        mut on_event: F,
+    ) -> Result<ProviderResponse>
+    where
+        F: FnMut(ProviderProgressEvent) -> Result<()>,
+    {
+        self.complete_context_with_events_and_cancel(
+            context,
+            conversation,
+            TurnCancellation::never(),
+            move |event| on_event(event),
+        )
+        .await
+    }
+
+    pub async fn complete_context_with_events_and_cancel<F>(
+        &self,
+        context: &AgentContext,
+        conversation: Vec<RequestMessage>,
+        cancellation: &TurnCancellation,
         mut on_event: F,
     ) -> Result<ProviderResponse>
     where
@@ -164,12 +189,19 @@ impl ProviderClient {
                     &options,
                     request_json,
                     DeliveryPath::NonStreamingCached,
+                    cancellation,
                 )
                 .await;
         }
 
         match provider
-            .complete_via_stream(&conversation, &stream_options, &request_json, &mut on_event)
+            .complete_via_stream(
+                &conversation,
+                &stream_options,
+                &request_json,
+                cancellation,
+                &mut on_event,
+            )
             .await
         {
             Ok(response) => {
@@ -203,6 +235,7 @@ impl ProviderClient {
                         DeliveryPath::NonStreamingFallback {
                             stream_failure: stream_failure.summary(),
                         },
+                        cancellation,
                     )
                     .await
                 {
@@ -416,6 +449,7 @@ impl ProviderClient {
                 &options,
                 request_json,
                 DeliveryPath::NonStreamingCached,
+                TurnCancellation::never(),
             )
             .await
     }

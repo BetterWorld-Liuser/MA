@@ -5,6 +5,10 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use encoding_rs::GBK;
+use tokio::io::AsyncReadExt;
+use tokio::process::{Child, Command as TokioCommand};
+
+use crate::agent::TurnCancellation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandShell {
@@ -93,34 +97,97 @@ pub fn workspace_entries(working_directory: &Path) -> Vec<String> {
     entries.into_iter().map(|(_, name)| name).collect()
 }
 
-pub fn shell_command(
+pub async fn shell_command_with_cancel(
     shell: CommandShell,
     program: &str,
     command: &str,
     working_directory: &Path,
+    cancellation: &TurnCancellation,
 ) -> Result<std::process::Output> {
-    match shell {
-        CommandShell::Sh => Command::new(program)
-            .args(["-lc", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn sh"),
-        CommandShell::Bash => Command::new(program)
-            .args(["-lc", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn bash"),
-        CommandShell::PowerShell => Command::new(program)
-            .args(["-NoProfile", "-Command", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn powershell"),
-        CommandShell::Cmd => Command::new(program)
-            .args(["/C", command])
-            .current_dir(working_directory)
-            .output()
-            .context("failed to spawn cmd"),
-    }
+    let mut process = match shell {
+        CommandShell::Sh => {
+            let mut process = TokioCommand::new(program);
+            process.args(["-lc", command]);
+            process
+        }
+        CommandShell::Bash => {
+            let mut process = TokioCommand::new(program);
+            process.args(["-lc", command]);
+            process
+        }
+        CommandShell::PowerShell => {
+            let mut process = TokioCommand::new(program);
+            process.args(["-NoProfile", "-Command", command]);
+            process
+        }
+        CommandShell::Cmd => {
+            let mut process = TokioCommand::new(program);
+            process.args(["/C", command]);
+            process
+        }
+    };
+
+    process
+        .current_dir(working_directory)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let child = process
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", shell.label()))?;
+
+    collect_child_output(child, cancellation).await
+}
+
+async fn collect_child_output(
+    mut child: Child,
+    cancellation: &TurnCancellation,
+) -> Result<std::process::Output> {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        if let Some(mut stdout) = stdout {
+            stdout.read_to_end(&mut bytes).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(bytes)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        if let Some(mut stderr) = stderr {
+            stderr.read_to_end(&mut bytes).await?;
+        }
+        Ok::<Vec<u8>, std::io::Error>(bytes)
+    });
+
+    let status = tokio::select! {
+        _ = cancellation.cancelled() => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(anyhow::anyhow!("turn cancelled"));
+        }
+        status = child.wait() => status.context("failed to wait for command completion")?,
+    };
+
+    let stdout = join_output(stdout_task, "stdout").await?;
+    let stderr = join_output(stderr_task, "stderr").await?;
+
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn join_output(
+    task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+    stream_name: &str,
+) -> Result<Vec<u8>> {
+    let bytes = task
+        .await
+        .context(format!("{stream_name} reader task failed to join"))??;
+    Ok(bytes)
 }
 
 pub fn detect_available_shells() -> Result<Vec<AvailableShell>> {

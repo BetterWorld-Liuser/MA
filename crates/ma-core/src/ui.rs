@@ -492,6 +492,16 @@ pub enum UiAgentProgressEvent {
         message: String,
         runtime: UiRuntimeSnapshot,
     },
+    AssistantMessageCheckpoint {
+        task_id: i64,
+        turn_id: String,
+        agent: String,
+        agent_display_name: String,
+        message_id: String,
+        content: String,
+        checkpoint_type: UiAssistantMessageCheckpointType,
+        runtime: UiRuntimeSnapshot,
+    },
     FinalAssistantMessage {
         task_id: i64,
         turn_id: String,
@@ -530,6 +540,13 @@ pub enum UiAgentStatusPhase {
 pub enum UiAgentToolStatus {
     Success,
     Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAssistantMessageCheckpointType {
+    Intermediate,
+    Final,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

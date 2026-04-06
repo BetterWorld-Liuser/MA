@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
+use ma::agent::TurnCancellation;
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 use ma::ui::{
@@ -14,19 +12,19 @@ use ma::ui::{
     UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest,
     UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest,
-    UiSetTaskModelRequest, UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest,
-    UiSkillSearchView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
-    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertAgentRequest,
-    UiUpsertNoteRequest, UiUpsertProviderModelRequest,
-    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
-    fetch_probe_models, fetch_provider_models_for_provider, fetch_task_model_selector,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
+    UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
+    UiToggleOpenFileLockRequest, UiUpsertAgentRequest, UiUpsertNoteRequest,
+    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
+    UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_models,
+    fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
 
 struct AppState {
     workspace_path: PathBuf,
-    cancellations: Mutex<HashMap<i64, Arc<AtomicBool>>>,
+    cancellations: Mutex<HashMap<i64, Arc<TurnCancellation>>>,
 }
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -137,14 +135,14 @@ async fn send_message(
     let task_id = backend
         .resolve_or_create_task_id(input.task_id)
         .map_err(|error| error.to_string())?;
-    let cancellation_flag = {
+    let cancellation = {
         let mut cancellations = state
             .cancellations
             .lock()
             .map_err(|_| "failed to acquire cancellation registry".to_string())?;
-        let flag = Arc::new(AtomicBool::new(false));
-        cancellations.insert(task_id, flag.clone());
-        flag
+        let cancellation = Arc::new(TurnCancellation::new());
+        cancellations.insert(task_id, cancellation.clone());
+        cancellation
     };
     let request = UiSendMessageRequest {
         task_id: Some(task_id),
@@ -158,7 +156,7 @@ async fn send_message(
                     anyhow::anyhow!("failed to emit agent progress event: {}", error)
                 })
             },
-            || cancellation_flag.load(Ordering::SeqCst),
+            cancellation.as_ref(),
         )
         .await
         .map_err(|error| error.to_string())
@@ -180,8 +178,8 @@ fn cancel_turn(state: tauri::State<'_, AppState>, task_id: i64) -> Result<(), St
         .cancellations
         .lock()
         .map_err(|_| "failed to acquire cancellation registry".to_string())?;
-    if let Some(flag) = cancellations.get(&task_id) {
-        flag.store(true, Ordering::SeqCst);
+    if let Some(cancellation) = cancellations.get(&task_id) {
+        cancellation.cancel();
     }
     Ok(())
 }
@@ -451,7 +449,9 @@ fn search_skills(
     input: UiSearchSkillsRequest,
 ) -> Result<Vec<UiSkillSearchView>, String> {
     let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
-    backend.search_skills(input).map_err(|error| error.to_string())
+    backend
+        .search_skills(input)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

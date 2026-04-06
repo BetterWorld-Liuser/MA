@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use anyhow::{Result, bail};
 use indexmap::IndexMap;
+use tokio::sync::watch;
 
 use crate::agents::{AgentProfile, MARCH_AGENT_NAME, SHARED_SCOPE, load_agent_profiles};
 use crate::context::{
@@ -33,10 +35,56 @@ use prompting::{load_skills_for_workspace, render_prompt, upsert_injection};
 pub use runner::is_turn_cancelled_error;
 use shells::decode_command_output;
 pub use shells::{AvailableShell, CommandShell};
-use shells::{detect_available_shells, platform_label, shell_command, workspace_entries};
+use shells::{
+    detect_available_shells, platform_label, shell_command_with_cancel, workspace_entries,
+};
 
 const AGENTS_FILENAME: &str = "AGENTS.md";
 const TURN_CANCELLED_ERROR_MESSAGE: &str = "turn cancelled";
+
+#[derive(Debug)]
+pub struct TurnCancellation {
+    cancelled: watch::Sender<bool>,
+}
+
+impl Default for TurnCancellation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TurnCancellation {
+    pub fn new() -> Self {
+        let (cancelled, _) = watch::channel(false);
+        Self { cancelled }
+    }
+
+    pub fn never() -> &'static Self {
+        static NEVER: OnceLock<TurnCancellation> = OnceLock::new();
+        NEVER.get_or_init(TurnCancellation::new)
+    }
+
+    pub fn cancel(&self) {
+        let _ = self.cancelled.send(true);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
+
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+
+        let mut receiver = self.cancelled.subscribe();
+        while !*receiver.borrow() {
+            if receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
 
 pub struct AgentSession {
     config: AgentConfig,
@@ -116,6 +164,7 @@ pub enum AgentProgressEvent {
         agent: String,
         message: String,
     },
+    AssistantMessageCheckpoint(AssistantMessageCheckpoint),
     FinalAssistantMessage(FinalAssistantMessage),
     RoundCompleted(DebugRound),
 }
@@ -135,7 +184,21 @@ pub enum AgentToolStatus {
 }
 
 #[derive(Debug, Clone)]
+pub struct AssistantMessageCheckpoint {
+    pub message_id: String,
+    pub message: String,
+    pub checkpoint_type: AssistantMessageCheckpointType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssistantMessageCheckpointType {
+    Intermediate,
+    Final,
+}
+
+#[derive(Debug, Clone)]
 pub struct FinalAssistantMessage {
+    pub message_id: String,
     pub message: String,
 }
 
@@ -392,7 +455,11 @@ impl AgentSession {
         render_prompt(&context)
     }
 
-    pub fn run_command(&mut self, request: CommandRequest) -> Result<CommandExecution> {
+    pub async fn run_command(
+        &mut self,
+        request: CommandRequest,
+        cancellation: &TurnCancellation,
+    ) -> Result<CommandExecution> {
         let started_at = SystemTime::now();
         let selected_shell = self.resolve_shell(request.shell)?;
         let tracked_paths = self
@@ -404,12 +471,14 @@ impl AgentSession {
             .watcher
             .store()
             .begin_agent_write(tracked_paths.clone())?;
-        let output = shell_command(
+        let output = shell_command_with_cancel(
             selected_shell.kind,
             &selected_shell.program,
             &request.command,
             &self.working_directory,
-        )?;
+            cancellation,
+        )
+        .await?;
         let finished_at = SystemTime::now();
 
         for path in tracked_paths {
@@ -877,13 +946,17 @@ fn clean_unique_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::runtime::Runtime;
+    use tokio::time::{Duration, sleep, timeout};
 
     use super::shells::resolve_shell_program_with;
     use super::{
-        AGENTS_FILENAME, AgentConfig, AgentSession, CommandShell,
+        AGENTS_FILENAME, AgentConfig, AgentSession, CommandRequest, CommandShell, TurnCancellation,
         append_assistant_tool_call_message, base_instructions, decode_command_output,
-        default_march_prompt, default_system_core, normalize_open_files_for_workspace,
+        default_march_prompt, default_system_core, is_turn_cancelled_error,
+        normalize_open_files_for_workspace,
     };
     use crate::agents::{MARCH_AGENT_NAME, SHARED_SCOPE};
     use crate::context::{ConversationHistory, Hint};
@@ -900,9 +973,9 @@ mod tests {
                 "you must inspect the workspace with one or more tools before giving a substantive answer"
             )
         );
-        assert!(
-            base.contains("Your turn ends ONLY when you output a text response without any tool calls")
-        );
+        assert!(base.contains(
+            "Your turn ends ONLY when you output a text response without any tool calls"
+        ));
         // Agent collaboration rules
         assert!(base.contains("You may mention another existing agent with `@agent_name`"));
         assert!(base.contains("March will automatically continue the next round as that agent"));
@@ -1002,8 +1075,9 @@ mod tests {
             .to_string(),
         };
 
-        session
-            .execute_tool_call(&tool_call)
+        Runtime::new()
+            .expect("create tokio runtime")
+            .block_on(session.execute_tool_call(&tool_call, TurnCancellation::never()))
             .expect("write_file should succeed");
 
         let persisted = session.persisted_state();
@@ -1219,6 +1293,58 @@ mod tests {
         assert_eq!(messages[1]["tool_call_id"], "call_1");
         assert_eq!(messages[2]["role"], "assistant");
         assert_eq!(messages[2]["tool_calls"][0]["id"], "call_2");
+    }
+
+    #[test]
+    fn turn_cancellation_wakes_waiters() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let cancellation = TurnCancellation::new();
+            assert!(!cancellation.is_cancelled());
+            cancellation.cancel();
+            cancellation.cancelled().await;
+            assert!(cancellation.is_cancelled());
+        });
+    }
+
+    #[test]
+    fn run_command_returns_early_when_cancelled() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                ConversationHistory::default(),
+                [],
+                std::env::current_dir().expect("current dir"),
+            )
+            .expect("create agent session");
+
+            let cancellation = Arc::new(TurnCancellation::new());
+            let cancel_handle = Arc::clone(&cancellation);
+            tokio::spawn(async move {
+                sleep(Duration::from_millis(150)).await;
+                cancel_handle.cancel();
+            });
+
+            let (shell, command) = if cfg!(windows) {
+                (
+                    CommandShell::PowerShell,
+                    "Start-Sleep -Seconds 5".to_string(),
+                )
+            } else {
+                (CommandShell::Sh, "sleep 5".to_string())
+            };
+
+            let result = timeout(
+                Duration::from_secs(2),
+                session.run_command(CommandRequest { command, shell }, cancellation.as_ref()),
+            )
+            .await
+            .expect("cancelled command should return promptly");
+
+            let error = result.expect_err("cancelled command should fail");
+            assert!(is_turn_cancelled_error(&error));
+        });
     }
 
     fn temp_workspace_dir(prefix: &str) -> PathBuf {

@@ -34,9 +34,11 @@ export type LiveTurn = {
   content: string;
   errorMessage?: string;
   tools: LiveToolItem[];
+  transitionKey?: number;
 };
 
 export type ChatMessage = {
+  id?: string;
   role: 'user' | 'assistant';
   author: string;
   time: string;
@@ -44,6 +46,7 @@ export type ChatMessage = {
   content: string;
   images?: ChatImageAttachment[];
   tools?: ChatTool[];
+  variant?: 'default' | 'intermediate' | 'failed';
 };
 
 export type NoteItem = {
@@ -323,6 +326,17 @@ export type BackendAgentProgressEvent =
       agent: string;
       agent_display_name: string;
       message: string;
+      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
+    }
+  | {
+      kind: 'assistant_message_checkpoint';
+      task_id: number;
+      turn_id: string;
+      agent: string;
+      agent_display_name: string;
+      message_id: string;
+      content: string;
+      checkpoint_type: 'intermediate' | 'final';
       runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
