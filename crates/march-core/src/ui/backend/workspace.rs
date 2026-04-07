@@ -1,6 +1,6 @@
 use super::*;
-use crate::ui::{UiRuntimeSnapshot, UiTaskSummary, UiToggleOpenFileLockRequest};
 use crate::ui::workspace::{search_mentions, search_skills, search_workspace_entries};
+use crate::ui::{UiRuntimeSnapshot, UiTaskSummary, UiToggleOpenFileLockRequest};
 
 impl UiAppBackend {
     pub fn open(workspace_path: impl Into<PathBuf>) -> Result<Self> {
@@ -41,8 +41,8 @@ impl UiAppBackend {
         let mut options = TaskCreateOptions::new(self.workspace_path.clone());
         options.title_source = title_source;
         options.title_locked = title_locked;
-        options.selected_provider_id = defaults.default_provider_id;
-        options.selected_model = defaults.default_model;
+        options.selected_model_config_id = defaults.default_model_config_id;
+        options.selected_model = settings.default_model()?;
         let task = self.storage.create_task_with_options(name, options)?;
         let session = AgentSession::new(
             ui_agent_config(),
@@ -289,17 +289,13 @@ impl UiAppBackend {
         request: UiSetTaskModelRequest,
     ) -> Result<UiWorkspaceSnapshot> {
         let task_id = self.resolve_or_create_task_id(request.task_id)?;
-        let model = request.model.trim();
-        if model.is_empty() {
-            bail!("model cannot be empty");
-        }
-        let task = self.storage.load_task(task_id)?;
-        let provider_id = request
-            .provider_id
-            .or(task.task.selected_provider_id)
-            .or(SettingsStorage::open()?.snapshot()?.default_provider_id);
-        self.storage
-            .update_task_selection(task_id, provider_id, Some(model.to_string()))?;
+        let settings = SettingsStorage::open()?;
+        let model_config = settings.load_model_config(request.model_config_id)?;
+        self.storage.update_task_selection(
+            task_id,
+            Some(model_config.id),
+            Some(model_config.model_id),
+        )?;
         self.workspace_snapshot(Some(task_id))
     }
 
@@ -388,12 +384,7 @@ impl UiAppBackend {
     ) -> Result<Vec<UiWorkspaceEntryView>> {
         let limit = request.limit.unwrap_or(12).clamp(1, 50);
         let working_directory = self.working_directory_for_task(request.task_id)?;
-        search_workspace_entries(
-            &working_directory,
-            &request.query,
-            request.kind,
-            limit,
-        )
+        search_workspace_entries(&working_directory, &request.query, request.kind, limit)
     }
 
     pub fn search_mentions(

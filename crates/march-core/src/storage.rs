@@ -33,7 +33,7 @@ pub struct TaskRecord {
     pub title_source: TaskTitleSource,
     pub title_locked: bool,
     pub working_directory: PathBuf,
-    pub selected_provider_id: Option<i64>,
+    pub selected_model_config_id: Option<i64>,
     pub selected_model: Option<String>,
     pub model_temperature: Option<f32>,
     pub model_top_p: Option<f32>,
@@ -143,7 +143,7 @@ impl MarchStorage {
                     title_source TEXT   NOT NULL DEFAULT 'default',
                     title_locked INTEGER NOT NULL DEFAULT 0,
                     working_directory TEXT,
-                    selected_provider_id INTEGER,
+                    selected_model_config_id INTEGER,
                     selected_model TEXT,
                     model_temperature REAL,
                     model_top_p REAL,
@@ -251,14 +251,14 @@ impl MarchStorage {
 
         if !columns
             .iter()
-            .any(|column| column == "selected_provider_id")
+            .any(|column| column == "selected_model_config_id")
         {
             self.connection
                 .execute(
-                    "ALTER TABLE tasks ADD COLUMN selected_provider_id INTEGER",
+                    "ALTER TABLE tasks ADD COLUMN selected_model_config_id INTEGER",
                     [],
                 )
-                .context("failed to add tasks.selected_provider_id column")?;
+                .context("failed to add tasks.selected_model_config_id column")?;
         }
 
         if !columns.iter().any(|column| column == "selected_model") {

@@ -81,10 +81,5 @@ defineProps<{
   busy?: boolean;
 }>();
 
-defineEmits<{
-  select: [taskId: string];
-  create: [];
-  delete: [taskId: string];
-  openSettings: [];
-}>();
+defineEmits(['select', 'create', 'delete', 'open-settings']);
 </script>

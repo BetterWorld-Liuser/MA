@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::time::Duration;
 
 use crate::agent::{AgentSession, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use crate::model_capabilities::get_model_capabilities;
@@ -8,8 +9,9 @@ use crate::storage::TaskRecord;
 
 use super::util::normalize_ui_optional_string;
 use super::{
-    UiModelCapabilitiesView, UiProbeProviderModelsRequest, UiProviderModelGroupView,
-    UiProviderModelsView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
+    UiModelCapabilitiesView, UiProbeProviderModelCapabilitiesRequest,
+    UiProbeProviderModelCapabilitiesView, UiProbeProviderModelsRequest, UiProviderModelsView,
+    UiTaskModelItemView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
     UiTestProviderConnectionResult,
 };
 
@@ -78,14 +80,18 @@ pub async fn fetch_task_model_selector(
 ) -> Result<UiTaskModelSelectorView> {
     let settings = SettingsStorage::open()?;
     let snapshot = settings.snapshot()?;
-    let default_model = settings.default_model()?.unwrap_or_default();
-    let current_provider_id = task
-        .and_then(|value| value.selected_provider_id)
-        .or(snapshot.default_provider_id);
+    let default_model_config = settings.default_model_config()?;
+    let current_model_config_id = task
+        .and_then(|value| value.selected_model_config_id)
+        .or_else(|| default_model_config.as_ref().map(|model| model.id));
     let current_model = task
         .and_then(|value| value.selected_model.clone())
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| (!default_model.trim().is_empty()).then(|| default_model.clone()))
+        .or_else(|| {
+            default_model_config
+                .as_ref()
+                .map(|model| model.model_id.clone())
+        })
         .or_else(|| {
             resolve_active_provider_config(task)
                 .ok()
@@ -94,65 +100,33 @@ pub async fn fetch_task_model_selector(
         })
         .unwrap_or_default();
 
-    let mut providers = Vec::new();
-    for provider in snapshot.providers {
-        let suggested_models = suggested_models_for_provider_type(provider.provider_type);
-        let provider_current_model = if Some(provider.id) == current_provider_id {
-            current_model.clone()
-        } else if !default_model.trim().is_empty() {
-            default_model.clone()
-        } else if let Some(first_suggested) = suggested_models.first() {
-            first_suggested.clone()
-        } else {
-            default_probe_model(provider.provider_type).to_string()
-        };
-        let provider_cache_key =
-            provider_cache_key(&provider.provider_type, provider.base_url.as_deref());
-        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
-            provider_type: provider.provider_type,
-            base_url: provider.base_url.clone(),
-            api_key: provider.api_key.clone(),
-            model: provider_current_model.clone(),
-            server_tools: resolve_server_tools(&settings, provider.id, &provider_current_model)?,
-            temperature: None,
-            top_p: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            max_output_tokens: None,
-        });
-        let mut available_models = client.list_models().await.unwrap_or_default();
-        let persisted_models = settings
-            .list_provider_models_for_provider(provider.id)?
-            .into_iter()
-            .map(|model| model.model_id)
-            .collect::<Vec<_>>();
-        available_models.extend(persisted_models);
-        ensure_model_in_list(&mut available_models, &provider_current_model);
-
-        providers.push(UiProviderModelGroupView {
-            provider_id: Some(provider.id),
-            provider_name: provider.name,
-            provider_type: provider.provider_type.as_db_value().to_string(),
-            provider_cache_key,
-            available_models,
-            suggested_models,
-        });
-    }
-
-    if providers.is_empty() {
-        let fallback = fetch_provider_models_for_task(task).await?;
-        providers.push(UiProviderModelGroupView {
-            provider_id: None,
-            provider_name: "当前环境".to_string(),
-            provider_type: "env".to_string(),
-            provider_cache_key: fallback.provider_cache_key,
-            available_models: fallback.available_models,
-            suggested_models: fallback.suggested_models,
-        });
-    }
+    let provider_map = snapshot
+        .providers
+        .into_iter()
+        .map(|provider| (provider.id, provider))
+        .collect::<std::collections::HashMap<_, _>>();
+    let models = snapshot
+        .model_configs
+        .into_iter()
+        .filter_map(|model| {
+            let provider = provider_map.get(&model.provider_id)?;
+            Some(UiTaskModelItemView {
+                model_config_id: model.id,
+                provider_id: provider.id,
+                provider_name: provider.name.clone(),
+                provider_type: provider.provider_type.as_db_value().to_string(),
+                display_name: model
+                    .display_name
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| model.model_id.clone()),
+                model_id: model.model_id,
+            })
+        })
+        .collect();
 
     Ok(UiTaskModelSelectorView {
-        current_provider_id,
+        current_model_config_id,
         current_model,
         current_temperature: task.and_then(|value| value.model_temperature),
         current_top_p: task.and_then(|value| value.model_top_p),
@@ -160,13 +134,14 @@ pub async fn fetch_task_model_selector(
         current_frequency_penalty: task.and_then(|value| value.model_frequency_penalty),
         current_max_output_tokens: task.and_then(|value| value.model_max_output_tokens),
         current_model_capabilities: resolve_current_model_capabilities(task)?,
-        providers,
+        models,
     })
 }
 
 pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiProviderModelsView> {
     let settings = SettingsStorage::open()?;
     let provider = settings.load_provider(provider_id)?;
+    let persisted_models = settings.list_provider_models_for_provider(provider_id)?;
     let current_model = settings.default_model()?.unwrap_or_default();
     let suggested_models = suggested_models_for_provider_type(provider.provider_type);
     let provider_cache_key =
@@ -184,12 +159,7 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
         max_output_tokens: None,
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
-    available_models.extend(
-        settings
-            .list_provider_models_for_provider(provider_id)?
-            .into_iter()
-            .map(|model| model.model_id),
-    );
+    available_models.extend(persisted_models.into_iter().map(|model| model.model_id));
     ensure_model_in_list(&mut available_models, &current_model);
 
     Ok(UiProviderModelsView {
@@ -207,6 +177,7 @@ pub async fn fetch_probe_models(
         .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
     let settings = SettingsStorage::open()?;
     let api_key = resolve_api_key(&settings, request.id, &request.api_key)?;
+    let base_url = normalize_ui_optional_string(provider_type, request.base_url);
     let suggested_models = suggested_models_for_provider_type(provider_type);
     let current_model = request
         .probe_model
@@ -217,7 +188,6 @@ pub async fn fetch_probe_models(
         .or_else(|| suggested_models.first().cloned())
         .or(settings.default_model()?)
         .unwrap_or_else(|| default_probe_model(provider_type).to_string());
-    let base_url = normalize_ui_optional_string(request.base_url);
     let provider_cache_key = provider_cache_key(&provider_type, base_url.as_deref());
     let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
         provider_type,
@@ -242,53 +212,133 @@ pub async fn fetch_probe_models(
     })
 }
 
+pub async fn fetch_probe_model_capabilities(
+    request: UiProbeProviderModelCapabilitiesRequest,
+) -> Result<UiProbeProviderModelCapabilitiesView> {
+    let settings = SettingsStorage::open()?;
+    let provider = settings.load_provider(request.provider_id)?;
+    let model_id = request.model_id.trim().to_string();
+    if model_id.is_empty() {
+        anyhow::bail!("probe model_id cannot be empty");
+    }
+
+    let mut capabilities = resolve_model_capabilities(provider.provider_type, &model_id, None);
+    let mut warnings = Vec::new();
+    let source = if should_probe_provider(provider.provider_type) {
+        let client = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+            provider_type: provider.provider_type,
+            base_url: provider.base_url.clone(),
+            api_key: provider.api_key.clone(),
+            model: model_id.clone(),
+            server_tools: Vec::new(),
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_output_tokens: None,
+        });
+
+        match client.resolve_model_context_window(&model_id).await {
+            Ok(Some(context_window)) => capabilities.context_window = context_window,
+            Ok(None) => {}
+            Err(error) => {
+                warnings.push(format!("未能读取上下文窗口，已回退到内置/保守值：{error}"))
+            }
+        }
+
+        match client.probe_tool_use_support(&model_id).await {
+            Ok(supports) => capabilities.supports_tool_use = supports,
+            Err(error) => warnings.push(format!("工具调用探测失败，保留当前默认值：{error}")),
+        }
+
+        match client.probe_vision_support(&model_id).await {
+            Ok(supports) => capabilities.supports_vision = supports,
+            Err(error) => warnings.push(format!("图片能力探测失败，保留当前默认值：{error}")),
+        }
+
+        warnings.push("音频与 PDF 自动探测尚未接入当前请求层，本次先按保守值关闭。".to_string());
+        "probed"
+    } else {
+        warnings.push(
+            "官方 provider 目前直接使用 March 内置模型能力表，无需额外网络探测。".to_string(),
+        );
+        "builtin"
+    };
+
+    capabilities.server_tools = Vec::new();
+
+    Ok(UiProbeProviderModelCapabilitiesView {
+        context_window: capabilities.context_window,
+        max_output_tokens: capabilities.max_output_tokens,
+        supports_tool_use: capabilities.supports_tool_use,
+        supports_vision: capabilities.supports_vision,
+        supports_audio: capabilities.supports_audio,
+        supports_pdf: capabilities.supports_pdf,
+        warnings,
+        source: source.to_string(),
+    })
+}
+
 pub async fn test_provider_connection(
     request: UiTestProviderConnectionRequest,
 ) -> Result<UiTestProviderConnectionResult> {
-    let provider_type = ProviderType::from_db_value(&request.provider_type)
-        .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
-    let settings = SettingsStorage::open()?;
-    let suggested_model = suggested_models_for_provider_type(provider_type)
-        .into_iter()
-        .next();
-    let api_key = resolve_api_key(&settings, request.id, &request.api_key)?;
-    let model = request
-        .probe_model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| suggested_model.clone())
-        .or(settings.default_model()?)
-        .unwrap_or_else(|| default_probe_model(provider_type).to_string());
-    let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
-        provider_type,
-        base_url: normalize_ui_optional_string(request.base_url),
-        api_key,
-        model: model.clone(),
-        server_tools: Vec::new(),
-        temperature: None,
-        top_p: None,
-        presence_penalty: None,
-        frequency_penalty: None,
-        max_output_tokens: None,
-    });
-    let message = provider.test_connection().await?;
-    Ok(UiTestProviderConnectionResult {
-        success: true,
-        message,
-        suggested_model: Some(model),
+    const PROVIDER_CONNECTION_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+    tokio::time::timeout(PROVIDER_CONNECTION_TEST_TIMEOUT, async move {
+        let provider_type =
+            ProviderType::from_db_value(&request.provider_type).ok_or_else(|| {
+                anyhow::anyhow!("unsupported provider type {}", request.provider_type)
+            })?;
+        let settings = SettingsStorage::open()?;
+        let suggested_model = suggested_models_for_provider_type(provider_type)
+            .into_iter()
+            .next();
+        let api_key = resolve_api_key(&settings, request.id, &request.api_key)?;
+        let base_url = normalize_ui_optional_string(provider_type, request.base_url);
+        let model = request
+            .probe_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| suggested_model.clone())
+            .or(settings.default_model()?)
+            .unwrap_or_else(|| default_probe_model(provider_type).to_string());
+        let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig {
+            provider_type,
+            base_url,
+            api_key,
+            model: model.clone(),
+            server_tools: Vec::new(),
+            temperature: None,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_output_tokens: None,
+        });
+        let message = provider.test_connection().await?;
+        Ok(UiTestProviderConnectionResult {
+            success: true,
+            message,
+            suggested_model: Some(model),
+        })
     })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("测试连通性超时（10s），请检查端点、网络或 probe model 是否可用")
+    })?
 }
 
 fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCompatibleConfig> {
     let settings = SettingsStorage::open()?;
     if let Some(task) = task {
-        if let Some(provider_id) = task.selected_provider_id {
-            if let Ok(provider) = settings.load_provider(provider_id) {
+        if let Some(model_config_id) = task.selected_model_config_id {
+            if let Ok(model_config) = settings.load_model_config(model_config_id) {
+                let provider = settings.load_provider(model_config.provider_id)?;
                 let model = task
                     .selected_model
                     .clone()
+                    .or_else(|| Some(model_config.model_id.clone()))
                     .or(settings.default_model()?)
                     .filter(|value| !value.trim().is_empty())
                     .ok_or_else(|| anyhow::anyhow!("missing task model in settings"))?;
@@ -297,7 +347,7 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
                     base_url: provider.base_url,
                     api_key: provider.api_key,
                     model: model.clone(),
-                    server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+                    server_tools: model_config.server_tools,
                     temperature: task.model_temperature,
                     top_p: task.model_top_p,
                     presence_penalty: task.model_presence_penalty,
@@ -308,9 +358,11 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
         }
     }
 
-    if let Some(provider) = settings.default_provider()? {
+    if let Some(model_config) = settings.default_model_config()? {
+        let provider = settings.load_provider(model_config.provider_id)?;
         let model = task
             .and_then(|value| value.selected_model.clone())
+            .or_else(|| Some(model_config.model_id.clone()))
             .or(settings.default_model()?)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
@@ -319,7 +371,7 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
             base_url: provider.base_url,
             api_key: provider.api_key,
             model: model.clone(),
-            server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+            server_tools: model_config.server_tools,
             temperature: task.and_then(|value| value.model_temperature),
             top_p: task.and_then(|value| value.model_top_p),
             presence_penalty: task.and_then(|value| value.model_presence_penalty),
@@ -387,13 +439,11 @@ fn resolve_current_model_capabilities(
 ) -> Result<UiModelCapabilitiesView> {
     let config = resolve_active_provider_config(task)?;
     let settings = SettingsStorage::open()?;
-    let selected_provider_id = task
-        .and_then(|value| value.selected_provider_id)
-        .or(settings.snapshot()?.default_provider_id);
-    let persisted = selected_provider_id
-        .map(|provider_id| settings.load_provider_model_by_model_id(provider_id, &config.model))
+    let persisted = task
+        .and_then(|value| value.selected_model_config_id)
+        .map(|model_config_id| settings.load_model_config(model_config_id))
         .transpose()?
-        .flatten();
+        .or(settings.default_model_config()?);
 
     Ok(resolve_model_capabilities(
         config.provider_type,
@@ -456,6 +506,13 @@ fn resolve_model_capabilities(
         supports_pdf: false,
         server_tools: Vec::new(),
     }
+}
+
+fn should_probe_provider(provider_type: ProviderType) -> bool {
+    !matches!(
+        provider_type,
+        ProviderType::OpenAi | ProviderType::Anthropic | ProviderType::Gemini
+    )
 }
 
 fn guess_context_window_from_model_name(model_id: &str) -> Option<usize> {

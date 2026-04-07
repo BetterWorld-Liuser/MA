@@ -3,13 +3,62 @@
     <section class="settings-panel">
       <div class="settings-panel-header">
         <div>
-          <h3 class="settings-section-title">Providers</h3>
-          <p class="settings-section-copy">全局配置，保存在用户目录下。</p>
+          <h3 class="settings-section-title">模型</h3>
+          <p class="settings-section-copy">这里展示已经可用的运行模型。模型是日常选择入口，连接通道只负责提供来源。</p>
         </div>
-        <Button variant="outline" size="sm" @click="emit('startCreate')">新增 Provider</Button>
+        <Button v-if="activeEditorProvider" variant="outline" size="sm" type="button" @click="emit('startCreateProviderModel')">
+          接入到当前通道
+        </Button>
       </div>
 
-      <div v-if="settings?.providers.length" class="space-y-3">
+      <div v-if="allModels.length" class="space-y-3">
+        <article
+          v-for="model in allModels"
+          :key="model.id"
+          class="settings-provider-card"
+          :class="activeProviderModelId === model.id ? 'settings-provider-card-active' : ''"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <h4 class="truncate text-[14px] font-medium text-text">{{ model.displayName || model.modelId }}</h4>
+                <span
+                  v-if="model.id === settings?.defaultModelConfigId"
+                  class="settings-default-badge"
+                >
+                  默认
+                </span>
+              </div>
+              <p class="mt-1 text-[11px] uppercase tracking-[0.12em] text-text-dim">
+                {{ model.providerName }} · {{ providerTypeLabel(model.providerType) }}
+              </p>
+              <p class="mt-2 text-[12px] text-text-muted">{{ formatCapabilitiesSummary(model.capabilities) }}</p>
+            </div>
+            <div class="flex shrink-0 items-center gap-1">
+              <Button variant="ghost" size="sm" type="button" @click="startEditModel(model)">定位到通道</Button>
+              <Button variant="ghost" size="sm" type="button" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProviderModel', model.id)">
+                删除
+              </Button>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div v-else class="settings-empty">
+        还没有激活任何模型。先在右侧新增连接通道，再为它添加或扫描模型。
+      </div>
+    </section>
+
+    <section class="settings-panel">
+      <div class="settings-panel-header">
+        <div>
+          <h3 class="settings-section-title">连接通道</h3>
+          <p class="settings-section-copy">连接通道只保存凭据和端点；模型能力与默认选择都从模型实体出发。</p>
+        </div>
+        <Button variant="outline" size="sm" @click="emit('startCreate')">新增通道</Button>
+      </div>
+
+      <div v-if="settings?.providers.length" class="mb-6 space-y-3">
         <article
           v-for="provider in settings.providers"
           :key="provider.id"
@@ -20,33 +69,22 @@
             <div class="min-w-0">
               <div class="flex items-center gap-2">
                 <h4 class="truncate text-[14px] font-medium text-text">{{ provider.name }}</h4>
-                <span v-if="provider.id === settings.defaultProviderId" class="settings-default-badge">默认</span>
+                <span class="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-text-dim">
+                  {{ provider.models.length ? `${provider.models.length} 个模型` : '未接入模型' }}
+                </span>
               </div>
               <p class="mt-1 text-[11px] uppercase tracking-[0.12em] text-text-dim">{{ providerTypeLabel(provider.providerType) }}</p>
               <p v-if="provider.baseUrl" class="mt-1 truncate font-mono text-[11px] text-text-dim">{{ provider.baseUrl }}</p>
               <p class="mt-2 text-[12px] text-text-muted">Key: {{ provider.apiKeyHint }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              <Button variant="ghost" size="sm" @click="emit('startEdit', provider)">编辑</Button>
+              <Button variant="ghost" size="sm" @click="emit('startEdit', provider)">管理模型</Button>
               <Button variant="ghost" size="sm" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProvider', provider.id)">
                 删除
               </Button>
             </div>
           </div>
         </article>
-      </div>
-
-      <div v-else class="settings-empty">
-        还没有配置 provider。先新增一个 provider 类型和凭据，后面模型选择器就能接上它。
-      </div>
-    </section>
-
-    <section class="settings-panel">
-      <div class="settings-panel-header">
-        <div>
-          <h3 class="settings-section-title">{{ activeEditorId ? '编辑 Provider' : '新增 Provider' }}</h3>
-          <p class="settings-section-copy">这里只负责维护单个 provider 的接入信息，不再承载全局默认模型配置。</p>
-        </div>
       </div>
 
       <form class="space-y-4" @submit.prevent="emit('submitProvider')">
@@ -144,42 +182,20 @@
       <div v-if="activeEditorProvider" class="mt-6 border-t border-[color:var(--ma-line-soft)] pt-5">
         <div class="settings-panel-header">
           <div>
-            <h3 class="settings-section-title">模型能力</h3>
-            <p class="settings-section-copy">这里维护该 provider 下的模型能力。OpenAI-compatible 依赖这份配置决定图片入口、工具能力与上下文预算；已知 provider 也可以在这里补充或覆盖新模型。</p>
+            <h3 class="settings-section-title">通道接入</h3>
+            <p class="settings-section-copy">当前正在管理 {{ activeEditorProvider.name }}。先选择模型 ID，再手动确认能力，最后保存到左侧模型列表。</p>
           </div>
           <Button variant="outline" size="sm" type="button" @click="emit('startCreateProviderModel')">
             添加模型
           </Button>
         </div>
 
-        <div v-if="activeEditorProvider.models.length" class="space-y-3">
-          <article
-            v-for="model in activeEditorProvider.models"
-            :key="model.id"
-            class="settings-provider-card"
-            :class="activeProviderModelId === model.id ? 'settings-provider-card-active' : ''"
-          >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <h4 class="truncate text-[14px] font-medium text-text">{{ model.displayName || model.modelId }}</h4>
-                  <span class="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-text-dim">{{ model.modelId }}</span>
-                </div>
-                <p class="mt-2 text-[12px] text-text-muted">
-                  {{ formatCapabilitiesSummary(model.capabilities) }}
-                </p>
-              </div>
-              <div class="flex shrink-0 items-center gap-1">
-                <Button variant="ghost" size="sm" type="button" @click="emit('startEditProviderModel', model)">编辑</Button>
-                <Button variant="ghost" size="sm" type="button" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProviderModel', model.id)">
-                  删除
-                </Button>
-              </div>
-            </div>
-          </article>
-        </div>
-        <div v-else class="settings-empty">
-          这个 provider 还没有单独配置模型能力。
+        <div class="mb-4 rounded-2xl border border-[color:var(--ma-line-soft)] bg-bg-hover/40 px-4 py-3 text-[12px] text-text-muted">
+          {{
+            activeEditorProvider.models.length
+              ? `这个通道当前已接入 ${activeEditorProvider.models.length} 个模型。左侧“模型”列表展示全局入口；这里负责把模型接到该通道上。`
+              : '这个通道还没有接入模型。可以先扫描模型列表，再把需要的模型写入本地设置库。'
+          }}
         </div>
 
         <form class="mt-4 space-y-4" @submit.prevent="emit('submitProviderModel')">
@@ -190,7 +206,7 @@
                 <SettingsSelect
                   v-model="providerModelId"
                   :options="providerModelIdOptions"
-                  placeholder="从已探测或已配置模型中选择"
+                  placeholder="从已缓存或已配置模型中选择"
                   searchable
                   search-placeholder="搜索模型 ID…"
                 />
@@ -253,6 +269,11 @@
             </div>
           </div>
 
+          <div class="rounded-2xl border border-[color:var(--ma-line-soft)] bg-bg-hover/30 px-4 py-3">
+            <p class="text-[12px] font-medium text-text">能力确认</p>
+            <p class="mt-1 text-[11px] leading-5 text-text-dim">这里直接维护工具、多模态和 server-side tools 配置，不再额外做自动能力探测。</p>
+          </div>
+
           <div class="dialog-field">
             <label class="dialog-label">Server-side Tools</label>
             <div class="space-y-3">
@@ -265,7 +286,7 @@
                   <input
                     :checked="isServerToolEnabled(tool.capability)"
                     type="checkbox"
-                    @change="emit('serverToolToggle', tool.capability, $event)"
+                    @change="emit('serverToolToggle', tool.capability, ($event.target as HTMLInputElement | null)?.checked ?? false)"
                   />
                   <span>{{ tool.label }}</span>
                 </label>
@@ -368,7 +389,7 @@ const emit = defineEmits<{
   deleteProviderModel: [providerModelId: number];
   submitProviderModel: [];
   resetProviderModelForm: [];
-  serverToolToggle: [capability: string, event: Event];
+  serverToolToggle: [capability: string, enabled: boolean];
   setServerToolFormat: [capability: string, format: string];
 }>();
 
@@ -403,11 +424,11 @@ const providerModelDisplayName = computed({
 });
 const providerModelContextWindow = computed({
   get: () => props.providerModelContextWindow,
-  set: (value: string) => emit('update:providerModelContextWindow', value),
+  set: (value: string | number) => emit('update:providerModelContextWindow', String(value)),
 });
 const providerModelMaxOutputTokens = computed({
   get: () => props.providerModelMaxOutputTokens,
-  set: (value: string) => emit('update:providerModelMaxOutputTokens', value),
+  set: (value: string | number) => emit('update:providerModelMaxOutputTokens', String(value)),
 });
 const providerModelSupportsToolUse = computed({
   get: () => props.providerModelSupportsToolUse,
@@ -436,4 +457,24 @@ const probeModelOptions = computed(() =>
 const activeEditorProvider = computed(() =>
   props.settings?.providers.find((provider) => provider.id === props.activeEditorId) ?? null,
 );
+
+const allModels = computed(() =>
+  (props.settings?.providers ?? []).flatMap((provider) =>
+    provider.models.map((model) => ({
+      ...model,
+      providerName: provider.name,
+      providerType: provider.providerType,
+      providerId: provider.id,
+    })),
+  ),
+);
+
+function startEditModel(model: (typeof allModels.value)[number]) {
+  const provider = props.settings?.providers.find((entry) => entry.id === model.providerId);
+  if (!provider) {
+    return;
+  }
+  emit('startEdit', provider);
+  emit('startEditProviderModel', model);
+}
 </script>

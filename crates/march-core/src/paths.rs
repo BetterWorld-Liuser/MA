@@ -32,10 +32,7 @@ pub fn resolve_project_root(path: &Path) -> PathBuf {
 }
 
 /// Inner implementation that accepts an injectable predicate for testing.
-pub(crate) fn resolve_project_root_with(
-    path: &Path,
-    has_march: impl Fn(&Path) -> bool,
-) -> PathBuf {
+pub(crate) fn resolve_project_root_with(path: &Path, has_march: impl Fn(&Path) -> bool) -> PathBuf {
     let cleaned = clean_path(path.to_path_buf());
 
     for ancestor in cleaned.ancestors() {
@@ -85,10 +82,7 @@ mod tests {
         let nested = fixture.root.join("external").join("pkg").join("src");
 
         // Inject a predicate that reports no .march anywhere.
-        assert_eq!(
-            resolve_project_root_with(&nested, |_| false),
-            nested,
-        );
+        assert_eq!(resolve_project_root_with(&nested, |_| false), nested,);
     }
 
     struct TestFixture {

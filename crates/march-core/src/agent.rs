@@ -23,8 +23,8 @@ use crate::watcher::FileWatcherService;
 
 mod editing;
 mod prompting;
-mod runtime_views;
 mod runner;
+mod runtime_views;
 mod scopes;
 mod session;
 mod shells;

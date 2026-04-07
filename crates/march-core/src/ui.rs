@@ -9,8 +9,8 @@ mod view;
 mod workspace;
 
 pub use provider::{
-    fetch_probe_models, fetch_provider_models_for_provider, fetch_provider_models_for_task,
-    fetch_task_model_selector, test_provider_connection,
+    fetch_probe_model_capabilities, fetch_probe_models, fetch_provider_models_for_provider,
+    fetch_provider_models_for_task, fetch_task_model_selector, test_provider_connection,
 };
 
 const DEFAULT_TASK_NAME: &str = "默认任务";
@@ -66,8 +66,7 @@ pub struct UiOpenFilesRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiSetTaskModelRequest {
     pub task_id: Option<i64>,
-    pub provider_id: Option<i64>,
-    pub model: String,
+    pub model_config_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +169,17 @@ pub struct UiProviderModelsView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiTaskModelItemView {
+    pub model_config_id: i64,
+    pub provider_id: i64,
+    pub provider_name: String,
+    pub provider_type: String,
+    pub display_name: String,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiProviderModelGroupView {
     pub provider_id: Option<i64>,
     pub provider_name: String,
@@ -182,7 +192,7 @@ pub struct UiProviderModelGroupView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiTaskModelSelectorView {
-    pub current_provider_id: Option<i64>,
+    pub current_model_config_id: Option<i64>,
     pub current_model: String,
     pub current_temperature: Option<f32>,
     pub current_top_p: Option<f32>,
@@ -190,7 +200,7 @@ pub struct UiTaskModelSelectorView {
     pub current_frequency_penalty: Option<f32>,
     pub current_max_output_tokens: Option<u32>,
     pub current_model_capabilities: UiModelCapabilitiesView,
-    pub providers: Vec<UiProviderModelGroupView>,
+    pub models: Vec<UiTaskModelItemView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,7 +209,7 @@ pub struct UiProviderSettingsView {
     pub database_path: PathBuf,
     pub providers: Vec<UiProviderView>,
     pub agents: Vec<UiAgentProfileView>,
-    pub default_provider_id: Option<i64>,
+    pub default_model_config_id: Option<i64>,
     pub default_model: Option<String>,
 }
 
@@ -237,6 +247,7 @@ pub struct UiProviderView {
     pub name: String,
     pub provider_type: String,
     pub base_url: Option<String>,
+    pub api_key: String,
     pub api_key_hint: String,
     pub created_at: i64,
     pub models: Vec<UiProviderModelView>,
@@ -249,6 +260,7 @@ pub struct UiProviderModelView {
     pub provider_id: i64,
     pub model_id: String,
     pub display_name: Option<String>,
+    pub probed_at: Option<i64>,
     pub capabilities: UiModelCapabilitiesView,
 }
 
@@ -299,9 +311,8 @@ pub struct UiDeleteProviderModelRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UiSetDefaultProviderRequest {
-    pub provider_id: Option<i64>,
-    pub model: Option<String>,
+pub struct UiSetDefaultModelRequest {
+    pub model_config_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +357,26 @@ pub struct UiProbeProviderModelsRequest {
     pub api_key: String,
     pub base_url: String,
     pub probe_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiProbeProviderModelCapabilitiesRequest {
+    pub provider_id: i64,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiProbeProviderModelCapabilitiesView {
+    pub context_window: usize,
+    pub max_output_tokens: usize,
+    pub supports_tool_use: bool,
+    pub supports_vision: bool,
+    pub supports_audio: bool,
+    pub supports_pdf: bool,
+    pub warnings: Vec<String>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,14 +2,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::agent::DEFAULT_CONTEXT_WINDOW_TOKENS;
 use crate::model_capabilities::get_model_capabilities;
+use crate::settings::{ProviderType, normalize_provider_base_url};
 
-pub(super) fn normalize_ui_optional_string(raw: String) -> Option<String> {
-    let trimmed = raw.trim().trim_end_matches('/').to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
+pub(super) fn normalize_ui_optional_string(
+    provider_type: ProviderType,
+    raw: String,
+) -> Option<String> {
+    normalize_provider_base_url(provider_type, raw)
 }
 
 pub(super) fn mask_api_key(api_key: &str) -> String {

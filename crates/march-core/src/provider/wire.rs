@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Map, Value, json};
 
-use crate::settings::{ProviderType, ServerToolConfig, ServerToolFormat};
+use crate::settings::{ServerToolConfig, ServerToolFormat};
 
 use super::RuntimeProviderConfig;
 use super::messages::{
@@ -68,10 +68,12 @@ pub(super) trait WireAdapter: Send + Sync {
 pub(super) fn adapter_for(
     config: &RuntimeProviderConfig,
 ) -> Box<dyn WireAdapter + Send + Sync + 'static> {
-    match config.provider_type {
-        ProviderType::Anthropic => Box::new(AnthropicWire),
-        ProviderType::Gemini => Box::new(GeminiWire),
-        _ => Box::new(OpenAiWire),
+    if config.provider_type.uses_anthropic_api() {
+        Box::new(AnthropicWire)
+    } else if config.provider_type.uses_gemini_api() {
+        Box::new(GeminiWire)
+    } else {
+        Box::new(OpenAiWire)
     }
 }
 
@@ -101,7 +103,7 @@ impl WireAdapter for OpenAiWire {
         tool_defs.extend(
             server_tools
                 .iter()
-                .filter(|tool| tool.format == ServerToolFormat::OpenAi)
+                .filter(|tool| tool.format == ServerToolFormat::OpenAiChatCompletions)
                 .map(server_tool_definition),
         );
 
@@ -145,7 +147,7 @@ impl WireAdapter for OpenAiWire {
             .context("provider response missing choices[0].message")?;
 
         Ok(WireResponse {
-            content: openai_message_content(message.get("content")),
+            content: openai_message_text(message),
             tool_calls: parse_openai_tool_calls(message.get("tool_calls"))?,
         })
     }
@@ -735,13 +737,9 @@ fn serialize_openai_message(message: &RequestMessage) -> Result<Value> {
 
 fn should_use_openai_responses_api(
     config: &RuntimeProviderConfig,
-    server_tools: &[ServerToolConfig],
+    _server_tools: &[ServerToolConfig],
 ) -> bool {
-    matches!(config.provider_type, ProviderType::OpenAi)
-        || server_tools
-            .iter()
-            .any(|tool| tool.format == ServerToolFormat::OpenAi)
-        || provider_base_url(config).eq_ignore_ascii_case("https://api.openai.com/v1")
+    config.provider_type.uses_openai_responses_api()
 }
 
 fn build_openai_responses_request(
@@ -816,7 +814,7 @@ fn build_openai_responses_request(
     tool_defs.extend(
         server_tools
             .iter()
-            .filter(|tool| tool.format == ServerToolFormat::OpenAi)
+            .filter(|tool| tool.format == ServerToolFormat::OpenAiResponses)
             .map(server_tool_definition),
     );
 
@@ -1142,6 +1140,17 @@ fn serialize_gemini_parts(content: Option<&MessageContent>) -> Result<Vec<Value>
         })
         .transpose()?
         .unwrap_or_default())
+}
+
+fn openai_message_text(message: &Value) -> Option<String> {
+    openai_message_content(message.get("content")).or_else(|| {
+        message
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn openai_message_content(value: Option<&Value>) -> Option<String> {

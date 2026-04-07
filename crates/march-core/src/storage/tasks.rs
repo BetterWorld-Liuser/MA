@@ -21,7 +21,7 @@ pub struct TaskCreateOptions {
     pub title_source: TaskTitleSource,
     pub title_locked: bool,
     pub working_directory: PathBuf,
-    pub selected_provider_id: Option<i64>,
+    pub selected_model_config_id: Option<i64>,
     pub selected_model: Option<String>,
     pub model_temperature: Option<f32>,
     pub model_top_p: Option<f32>,
@@ -36,7 +36,7 @@ impl TaskCreateOptions {
             title_source: TaskTitleSource::Default,
             title_locked: false,
             working_directory,
-            selected_provider_id: None,
+            selected_model_config_id: None,
             selected_model: None,
             model_temperature: None,
             model_top_p: None,
@@ -77,7 +77,7 @@ impl MarchStorage {
             title_source,
             title_locked,
             working_directory,
-            selected_provider_id,
+            selected_model_config_id,
             selected_model,
             model_temperature,
             model_top_p,
@@ -105,7 +105,7 @@ impl MarchStorage {
                     title_source,
                     title_locked,
                     working_directory,
-                    selected_provider_id,
+                    selected_model_config_id,
                     selected_model,
                     model_temperature,
                     model_top_p,
@@ -122,7 +122,7 @@ impl MarchStorage {
                     title_source.as_db_value(),
                     if title_locked { 1 } else { 0 },
                     working_directory.to_string_lossy().to_string(),
-                    selected_provider_id,
+                    selected_model_config_id,
                     normalized_model,
                     normalized_temperature,
                     normalized_top_p,
@@ -142,7 +142,7 @@ impl MarchStorage {
             title_source,
             title_locked,
             working_directory,
-            selected_provider_id,
+            selected_model_config_id,
             selected_model: normalized_model,
             model_temperature: normalized_temperature,
             model_top_p: normalized_top_p,
@@ -227,7 +227,7 @@ impl MarchStorage {
     pub fn update_task_selection(
         &self,
         task_id: i64,
-        selected_provider_id: Option<i64>,
+        selected_model_config_id: Option<i64>,
         selected_model: Option<String>,
     ) -> Result<()> {
         let normalized = normalize_model_id(selected_model);
@@ -236,9 +236,9 @@ impl MarchStorage {
             .connection
             .execute(
                 "UPDATE tasks
-                 SET selected_provider_id = ?2, selected_model = ?3
+                 SET selected_model_config_id = ?2, selected_model = ?3
                  WHERE id = ?1",
-                params![task_id, selected_provider_id, normalized],
+                params![task_id, selected_model_config_id, normalized],
             )
             .context("failed to update task selection")?;
 
@@ -315,7 +315,7 @@ impl MarchStorage {
 
     pub fn backfill_missing_task_defaults(
         &self,
-        selected_provider_id: Option<i64>,
+        selected_model_config_id: Option<i64>,
         selected_model: Option<String>,
     ) -> Result<()> {
         let normalized_model = normalize_model_id(selected_model);
@@ -323,9 +323,9 @@ impl MarchStorage {
         self.connection
             .execute(
                 "UPDATE tasks
-                 SET selected_provider_id = COALESCE(selected_provider_id, ?1),
+                 SET selected_model_config_id = COALESCE(selected_model_config_id, ?1),
                      selected_model = COALESCE(selected_model, ?2)",
-                params![selected_provider_id, normalized_model],
+                params![selected_model_config_id, normalized_model],
             )
             .context("failed to backfill task defaults")?;
 
@@ -552,7 +552,7 @@ impl MarchStorage {
 }
 
 const TASK_RECORD_SELECT_COLUMNS: &str = "id, name, title_source, title_locked, working_directory, created_at, last_active, \
-     selected_provider_id, selected_model, model_temperature, model_top_p, \
+     selected_model_config_id, selected_model, model_temperature, model_top_p, \
      model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent";
 
 struct RawTaskRecord {
@@ -563,7 +563,7 @@ struct RawTaskRecord {
     working_directory: Option<String>,
     created_at: i64,
     last_active: i64,
-    selected_provider_id: Option<i64>,
+    selected_model_config_id: Option<i64>,
     selected_model: Option<String>,
     model_temperature: Option<f32>,
     model_top_p: Option<f32>,
@@ -583,7 +583,7 @@ impl RawTaskRecord {
             working_directory: row.get("working_directory")?,
             created_at: row.get("created_at")?,
             last_active: row.get("last_active")?,
-            selected_provider_id: row.get("selected_provider_id")?,
+            selected_model_config_id: row.get("selected_model_config_id")?,
             selected_model: row.get("selected_model")?,
             model_temperature: row.get("model_temperature")?,
             model_top_p: row.get("model_top_p")?,
@@ -601,7 +601,7 @@ impl RawTaskRecord {
             title_source: TaskTitleSource::from_db_value(&self.title_source)?,
             title_locked: self.title_locked != 0,
             working_directory: decode_working_directory(self.working_directory, workspace_root)?,
-            selected_provider_id: self.selected_provider_id,
+            selected_model_config_id: self.selected_model_config_id,
             selected_model: self.selected_model,
             model_temperature: self.model_temperature,
             model_top_p: self.model_top_p,

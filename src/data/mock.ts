@@ -413,7 +413,7 @@ export type ProviderModelsView = {
 };
 
 export type TaskModelSelectorView = {
-  currentProviderId?: number | null;
+  currentModelConfigId?: number | null;
   currentModel: string;
   currentTemperature?: number | null;
   currentTopP?: number | null;
@@ -432,13 +432,13 @@ export type TaskModelSelectorView = {
       format: string;
     }>;
   };
-  providers: Array<{
-    providerId?: number | null;
+  models: Array<{
+    modelConfigId: number;
+    providerId: number;
     providerName: string;
     providerType: string;
-    providerCacheKey: string;
-    availableModels: string[];
-    suggestedModels: string[];
+    displayName: string;
+    modelId: string;
   }>;
 };
 
@@ -448,6 +448,17 @@ export type ProviderConnectionTestResult = {
   suggestedModel?: string | null;
 };
 
+export type ProviderModelCapabilityProbeResult = {
+  contextWindow: number;
+  maxOutputTokens: number;
+  supportsToolUse: boolean;
+  supportsVision: boolean;
+  supportsAudio: boolean;
+  supportsPdf: boolean;
+  warnings: string[];
+  source: string;
+};
+
 export type ProviderSettingsView = {
   databasePath: string;
   providers: Array<{
@@ -455,6 +466,7 @@ export type ProviderSettingsView = {
     name: string;
     providerType: string;
     baseUrl?: string | null;
+    apiKey: string;
     apiKeyHint: string;
     createdAt: number;
     models: Array<{
@@ -462,6 +474,7 @@ export type ProviderSettingsView = {
       providerId: number;
       modelId: string;
       displayName?: string | null;
+      probedAt?: number | null;
       capabilities: {
         contextWindow: number;
         maxOutputTokens: number;
@@ -488,7 +501,7 @@ export type ProviderSettingsView = {
     isBuiltIn: boolean;
     source: string;
   }>;
-  defaultProviderId?: number | null;
+  defaultModelConfigId?: number | null;
   defaultModel?: string | null;
 };
 

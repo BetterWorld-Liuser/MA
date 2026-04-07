@@ -203,7 +203,9 @@ impl AgentSession {
     }
 }
 
-pub(crate) fn notes_by_scope(notes: Vec<PersistedNote>) -> IndexMap<String, IndexMap<String, NoteEntry>> {
+pub(crate) fn notes_by_scope(
+    notes: Vec<PersistedNote>,
+) -> IndexMap<String, IndexMap<String, NoteEntry>> {
     let mut by_scope = IndexMap::new();
     for note in notes {
         by_scope

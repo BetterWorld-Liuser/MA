@@ -14,7 +14,7 @@
           <p class="text-[11px] uppercase tracking-[0.18em] text-text-dim">Settings</p>
           <h2 class="mt-1 text-[22px] font-semibold tracking-[-0.02em] text-text">应用设置</h2>
           <p class="mt-2 max-w-[720px] text-[13px] leading-6 text-text-muted">
-            外观和 provider 都放在这里。主题会立即生效并保存在本地，provider 配置仍然由用户目录下的设置库统一管理。
+            外观、模型、供应商和角色都放在这里。设置页按职责拆开，默认运行直接收进模型页，避免把模型能力和入口配置拆成两套心智模型。
           </p>
         </div>
       </div>
@@ -24,7 +24,7 @@
       <aside class="settings-sidebar">
         <div class="settings-sidebar-header">
           <p class="text-[10px] uppercase tracking-[0.18em] text-text-dim">Sections</p>
-          <p class="mt-1 text-[12px] leading-5 text-text-muted">把全局外观和运行入口集中在一个固定位置。</p>
+          <p class="mt-1 text-[12px] leading-5 text-text-muted">把全局外观、模型能力、供应商接入和角色设置集中在一个固定位置。</p>
         </div>
 
         <nav class="space-y-2">
@@ -53,29 +53,15 @@
           @update-theme="emit('updateTheme', $event)"
         />
 
-        <ProviderSettingsSection
-          v-else-if="activeSection === 'providers'"
+        <ModelSettingsSection
+          v-else-if="activeSection === 'models'"
           :settings="settings"
           :busy="busy"
-          :probe-models="probeModels"
-          :probe-suggested-models="probeSuggestedModels"
-          :probe-models-loading="probeModelsLoading"
-          :provider-test-message="providerTestMessage"
-          :provider-test-success="providerTestSuccess"
+          :show-editor="modelEditorOpen"
           :active-editor-id="activeEditorId"
           :active-provider-model-id="activeProviderModelId"
-          :provider-type="providerType"
-          :provider-name="providerName"
-          :provider-base-url="providerBaseUrl"
-          :provider-api-key="providerApiKey"
-          :provider-probe-model="providerProbeModel"
-          :provider-type-options="providerTypeOptions"
-          :provider-name-placeholder="providerNamePlaceholder"
-          :base-url-placeholder="baseUrlPlaceholder"
-          :base-url-hint="baseUrlHint"
-          :api-key-placeholder="apiKeyPlaceholder"
-          :probe-model-placeholder="probeModelPlaceholder"
-          :probe-model-select-placeholder="probeModelSelectPlaceholder"
+          :provider-options="modelProviderOptions"
+          :selected-provider-id-string="modelProviderIdString"
           :provider-model-id="providerModelId"
           :provider-model-display-name="providerModelDisplayName"
           :provider-model-context-window="providerModelContextWindow"
@@ -86,12 +72,58 @@
           :provider-model-supports-pdf="providerModelSupportsPdf"
           :provider-model-server-tools="providerModelServerTools"
           :provider-model-id-options="providerModelIdOptions"
-          :provider-model-id-suggestions="providerModelIdSuggestions"
           :server-tool-definitions="serverToolDefinitions"
           :server-tool-format-options="serverToolFormatOptions"
           :is-server-tool-enabled="isServerToolEnabled"
           :provider-type-label="providerTypeLabel"
           :format-capabilities-summary="formatCapabilitiesSummary"
+          @save-default-model="submitDefaultModel"
+          @start-create-provider-model="startCreateProviderModel"
+          @start-edit="hydrateProviderContext"
+          @start-edit-provider-model="startEditProviderModel"
+          @delete-provider-model="emit('deleteProviderModel', $event)"
+          @update:selected-provider-id-string="selectModelProvider"
+          @update:provider-model-id="providerModelId = $event"
+          @update:provider-model-display-name="providerModelDisplayName = $event"
+          @update:provider-model-context-window="providerModelContextWindow = $event"
+          @update:provider-model-max-output-tokens="providerModelMaxOutputTokens = $event"
+          @update:provider-model-supports-tool-use="providerModelSupportsToolUse = $event"
+          @update:provider-model-supports-vision="providerModelSupportsVision = $event"
+          @update:provider-model-supports-audio="providerModelSupportsAudio = $event"
+          @update:provider-model-supports-pdf="providerModelSupportsPdf = $event"
+          @submit-provider-model="submitProviderModel"
+          @reset-provider-model-form="resetProviderModelForm"
+          @close-editor="closeModelEditor"
+          @server-tool-toggle="onServerToolToggle"
+          @set-server-tool-format="setServerToolFormat"
+        />
+
+        <ProviderChannelsSection
+          v-else-if="activeSection === 'providers'"
+          :settings="settings"
+          :busy="busy"
+          :probe-models="probeModels"
+          :probe-suggested-models="probeSuggestedModels"
+          :probe-models-loading="probeModelsLoading"
+          :provider-test-loading="providerTestLoading"
+          :provider-test-message="providerTestMessage"
+          :provider-test-success="providerTestSuccess"
+          :show-editor="providerEditorOpen"
+          :active-editor-id="activeEditorId"
+          :provider-type="providerType"
+          :provider-name="providerName"
+          :provider-base-url="providerBaseUrl"
+          :provider-api-key="providerApiKey"
+          :provider-probe-model="providerProbeModel"
+          :provider-type-options="providerTypeOptions"
+          :provider-name-placeholder="providerNamePlaceholder"
+          :base-url-placeholder="baseUrlPlaceholder"
+          :base-url-preview="baseUrlPreview"
+          :base-url-hint="baseUrlHint"
+          :api-key-placeholder="apiKeyPlaceholder"
+          :probe-model-placeholder="probeModelPlaceholder"
+          :probe-model-select-placeholder="probeModelSelectPlaceholder"
+          :provider-type-label="providerTypeLabel"
           @start-create="startCreate"
           @start-edit="startEdit"
           @delete-provider="emit('deleteProvider', $event)"
@@ -104,21 +136,7 @@
           @test-provider="testProvider"
           @reset-form="resetForm"
           @request-probe-models-now="requestProbeModelsNow"
-          @start-create-provider-model="startCreateProviderModel"
-          @start-edit-provider-model="startEditProviderModel"
-          @delete-provider-model="emit('deleteProviderModel', $event)"
-          @update:provider-model-id="providerModelId = $event"
-          @update:provider-model-display-name="providerModelDisplayName = $event"
-          @update:provider-model-context-window="providerModelContextWindow = $event"
-          @update:provider-model-max-output-tokens="providerModelMaxOutputTokens = $event"
-          @update:provider-model-supports-tool-use="providerModelSupportsToolUse = $event"
-          @update:provider-model-supports-vision="providerModelSupportsVision = $event"
-          @update:provider-model-supports-audio="providerModelSupportsAudio = $event"
-          @update:provider-model-supports-pdf="providerModelSupportsPdf = $event"
-          @submit-provider-model="submitProviderModel"
-          @reset-provider-model-form="resetProviderModelForm"
-          @server-tool-toggle="onServerToolToggle"
-          @set-server-tool-format="setServerToolFormat"
+          @close-editor="closeProviderEditor"
         />
 
         <AgentSettingsSection
@@ -154,123 +172,38 @@
           @reset-agent-form="resetAgentForm"
         />
 
-        <div v-else class="space-y-5">
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">默认运行配置</h3>
-                <p class="settings-section-copy">这是应用级默认值，用来决定新任务初始使用哪个 provider 与模型。</p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="!defaultProviderIdLocal || modelsLoading"
-                @click="requestModels"
-              >
-                {{ modelsLoading ? '刷新中…' : '刷新模型' }}
-              </Button>
-            </div>
-
-            <div class="space-y-4">
-              <div class="dialog-field">
-                <label class="dialog-label" for="default-provider">默认 Provider</label>
-                <SettingsSelect
-                  v-model="defaultProviderIdString"
-                  :options="providerOptions"
-                  placeholder="请选择"
-                />
-                <p class="dialog-hint">这里选的是全局默认入口，只用于之后新建任务的初始 provider / model。</p>
-              </div>
-              <div class="dialog-field">
-                <label class="dialog-label" for="default-model">默认模型</label>
-                <template v-if="availableModels.length">
-                  <SettingsSelect
-                    v-model="defaultModelLocal"
-                    :options="modelOptions"
-                    placeholder="请选择模型"
-                    searchable
-                    search-placeholder="搜索模型…"
-                  />
-                </template>
-                <template v-else>
-                  <Input id="default-model" v-model="defaultModelLocal" placeholder="gpt-5.3-codex / qwen2.5-coder" />
-                </template>
-                <div v-if="!availableModels.length && suggestedModels.length" class="mt-2 flex flex-wrap gap-2">
-                  <button
-                    v-for="model in suggestedModels"
-                    :key="model"
-                    type="button"
-                    class="rounded-full border border-[color:var(--ma-line-soft)] px-2.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
-                    @click="defaultModelLocal = model"
-                  >
-                    {{ model }}
-                  </button>
-                </div>
-              </div>
-              <div class="flex items-center justify-end">
-                <Button :disabled="busy || !defaultProviderIdLocal || !defaultModelLocal.trim()" @click="submitDefaultProvider">
-                  保存默认配置
-                </Button>
-              </div>
-            </div>
-          </section>
-
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">说明</h3>
-                <p class="settings-section-copy">默认运行配置是应用级入口，不与任何单个 Provider 绑定。</p>
-              </div>
-            </div>
-
-            <div class="grid gap-3 md:grid-cols-3">
-              <article class="settings-info-card">
-                <p class="settings-info-label">作用范围</p>
-                <p class="settings-info-value">只影响之后新建的任务；已有任务保持自己的 provider 与模型</p>
-              </article>
-              <article class="settings-info-card">
-                <p class="settings-info-label">模型来源</p>
-                <p class="settings-info-value">来自当前默认 Provider 的可读模型列表</p>
-              </article>
-              <article class="settings-info-card">
-                <p class="settings-info-label">关系边界</p>
-                <p class="settings-info-value">与 Provider 凭据编辑分离，避免混淆全局配置与接入配置</p>
-              </article>
-            </div>
-          </section>
-        </div>
       </div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import arrowLeftIcon from '@iconify-icons/lucide/arrow-left';
 import moonIcon from '@iconify-icons/lucide/moon-star';
-import slidersHorizontalIcon from '@iconify-icons/lucide/sliders-horizontal';
 import serverIcon from '@iconify-icons/lucide/server-cog';
 import sunIcon from '@iconify-icons/lucide/sun-medium';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import type { ThemeMode } from '@/composables/useAppearanceSettings';
 import type { ProviderSettingsView } from '@/data/mock';
 import AgentSettingsSection from '@/components/settings/AgentSettingsSection.vue';
 import AppearanceSettingsSection from '@/components/settings/AppearanceSettingsSection.vue';
-import ProviderSettingsSection from '@/components/settings/ProviderSettingsSection.vue';
-import SettingsSelect from './SettingsSelect.vue';
+import ModelSettingsSection from '@/components/settings/ModelSettingsSection.vue';
+import ProviderChannelsSection from '@/components/settings/ProviderChannelsSection.vue';
+import { Button } from '@/components/ui/button';
+import {
+  defaultProviderBaseUrl,
+  resolveProviderRequestPreview,
+} from '@/lib/providerBaseUrl';
 
 const props = defineProps<{
   theme: ThemeMode;
   settings: ProviderSettingsView | null;
   busy?: boolean;
-  modelsLoading?: boolean;
-  availableModels: string[];
-  suggestedModels: string[];
   probeModels: string[];
   probeSuggestedModels: string[];
   probeModelsLoading?: boolean;
+  providerTestLoading?: boolean;
   providerTestMessage?: string;
   providerTestSuccess?: boolean;
 }>();
@@ -310,30 +243,29 @@ const emit = defineEmits<{
   }];
   deleteAgent: [name: string];
   restoreMarchPrompt: [];
-  saveDefaultProvider: [input: { providerId: number; model: string }];
-  requestModels: [providerId: number];
-  requestProbeModels: [input: { id?: number; providerType: string; baseUrl: string; apiKey: string; probeModel?: string }];
+  saveDefaultModel: [input: { modelConfigId?: number | null }];
+  requestProbeModels: [input: { id?: number; providerType: string; baseUrl: string; apiKey: string; probeModel?: string; forceRefresh?: boolean }];
 }>();
 
-const activeSection = ref<'appearance' | 'providers' | 'agents' | 'defaults'>('appearance');
+const activeSection = ref<'appearance' | 'models' | 'providers' | 'agents'>('appearance');
 const activeEditorId = ref<number | null>(null);
 const providerType = ref('openai_compat');
 const providerName = ref('');
 const providerBaseUrl = ref('');
 const providerApiKey = ref('');
 const providerProbeModel = ref('');
+const providerEditorOpen = ref(false);
+const modelEditorOpen = ref(false);
 const activeProviderModelId = ref<number | null>(null);
 const providerModelId = ref('');
 const providerModelDisplayName = ref('');
-const providerModelContextWindow = ref('131072');
-const providerModelMaxOutputTokens = ref('4096');
+const providerModelContextWindow = ref('256000');
+const providerModelMaxOutputTokens = ref('128000');
 const providerModelSupportsToolUse = ref(false);
 const providerModelSupportsVision = ref(false);
 const providerModelSupportsAudio = ref(false);
 const providerModelSupportsPdf = ref(false);
 const providerModelServerTools = ref<Record<string, string>>({});
-const defaultProviderIdString = ref('');
-const defaultModelLocal = ref('');
 const activeAgentName = ref('');
 const agentName = ref('');
 const agentDisplayName = ref('');
@@ -351,9 +283,15 @@ const sectionOptions = [
     icon: sunIcon,
   },
   {
+    value: 'models' as const,
+    label: '模型',
+    description: '模型能力与确认',
+    icon: serverIcon,
+  },
+  {
     value: 'providers' as const,
-    label: 'Providers',
-    description: '模型入口与凭据',
+    label: '供应商',
+    description: '凭据、端点与协议',
     icon: serverIcon,
   },
   {
@@ -361,12 +299,6 @@ const sectionOptions = [
     label: '角色',
     description: 'March 与自定义 agent',
     icon: serverIcon,
-  },
-  {
-    value: 'defaults' as const,
-    label: '默认运行',
-    description: '默认 provider 与模型',
-    icon: slidersHorizontalIcon,
   },
 ];
 
@@ -385,23 +317,11 @@ const themeOptions = [
   },
 ];
 
-const defaultProviderIdLocal = computed(() => {
-  const parsed = Number(defaultProviderIdString.value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-});
-
 const activeEditorProvider = computed(() =>
   props.settings?.providers.find((provider) => provider.id === activeEditorId.value) ?? null,
 );
 
 const editingBuiltInMarch = computed(() => activeAgentName.value === 'march');
-
-const providerOptions = computed(() =>
-  (props.settings?.providers ?? []).map((provider) => ({
-    value: String(provider.id),
-    label: `${provider.name} · ${providerTypeLabel(provider.providerType)}`,
-  })),
-);
 
 const providerTypeOptions = [
   { value: 'openai_compat', label: 'OpenAI-compatible' },
@@ -422,14 +342,23 @@ const providerTypeOptions = [
 ];
 
 const serverToolDefinitions = [
-  { capability: 'web_search', label: 'Web Search', formats: ['anthropic', 'openai', 'gemini'] },
-  { capability: 'code_execution', label: 'Code Execution', formats: ['anthropic', 'openai', 'gemini'] },
-  { capability: 'file_search', label: 'File Search', formats: ['openai'] },
+  {
+    capability: 'web_search',
+    label: 'Web Search',
+    formats: ['anthropic', 'openai_responses', 'openai_chat_completions', 'gemini'],
+  },
+  {
+    capability: 'code_execution',
+    label: 'Code Execution',
+    formats: ['anthropic', 'openai_responses', 'openai_chat_completions', 'gemini'],
+  },
+  { capability: 'file_search', label: 'File Search', formats: ['openai_responses'] },
 ] as const;
 
 const serverToolFormatLabels: Record<string, string> = {
   anthropic: 'Anthropic',
-  openai: 'OpenAI',
+  openai_responses: 'OpenAI / Responses',
+  openai_chat_completions: 'OpenAI-compatible / Chat Completions',
   gemini: 'Gemini',
 };
 
@@ -471,19 +400,14 @@ const agentModelOptions = computed(() => {
   ];
 });
 
-const modelOptions = computed(() =>
-  props.availableModels.map((model) => ({
-    value: model,
-    label: model,
+const modelProviderOptions = computed(() =>
+  (props.settings?.providers ?? []).map((provider) => ({
+    value: String(provider.id),
+    label: `${provider.name} · ${providerTypeLabel(provider.providerType)}`,
   })),
 );
 
-const probeModelOptions = computed(() =>
-  props.probeModels.map((model) => ({
-    value: model,
-    label: model,
-  })),
-);
+const modelProviderIdString = computed(() => (activeEditorId.value ? String(activeEditorId.value) : ''));
 
 const probeModelSelectPlaceholder = computed(() => {
   if (props.probeModelsLoading) {
@@ -507,19 +431,6 @@ const providerModelIdOptions = computed(() => {
   }));
 });
 
-const providerModelIdSuggestions = computed(() =>
-  Array.from(
-    new Set([
-      ...props.probeSuggestedModels,
-      ...props.probeModels.slice(0, 8),
-      ...(activeEditorProvider.value?.models.map((model) => model.modelId) ?? []),
-    ]),
-  )
-    .map((model) => model.trim())
-    .filter(Boolean)
-    .slice(0, 10),
-);
-
 const providerNamePlaceholder = computed(() => {
   if (providerType.value === 'openai_compat') {
     return 'OpenRouter / Local vLLM';
@@ -527,27 +438,9 @@ const providerNamePlaceholder = computed(() => {
   return providerTypeLabel(providerType.value);
 });
 
-const providerBaseUrlDefaults: Record<string, string> = {
-  openai_compat: 'https://api.openai.com/v1',
-  openai: 'https://api.openai.com/v1',
-  anthropic: 'https://api.anthropic.com/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta',
-  fireworks: 'https://api.fireworks.ai/inference/v1',
-  together: 'https://api.together.xyz/v1',
-  groq: 'https://api.groq.com/openai/v1',
-  mimo: 'https://api.mimo.org/v1',
-  nebius: 'https://api.studio.nebius.com/v1',
-  xai: 'https://api.x.ai/v1',
-  deepseek: 'https://api.deepseek.com/v1',
-  zai: 'https://api.z.ai/api/paas/v4',
-  bigmodel: 'https://open.bigmodel.cn/api/paas/v4',
-  cohere: 'https://api.cohere.com/v2',
-  ollama: 'http://localhost:11434/v1',
-};
+const baseUrlPlaceholder = computed(() => defaultProviderBaseUrl(providerType.value));
 
-const baseUrlPlaceholder = computed(
-  () => providerBaseUrlDefaults[providerType.value] ?? 'https://api.example.com/v1',
-);
+const baseUrlPreview = computed(() => resolveProviderRequestPreview(providerType.value, providerBaseUrl.value));
 
 const baseUrlHint = computed(() => {
   if (providerType.value === 'openai_compat') {
@@ -571,44 +464,13 @@ const probeModelPlaceholder = computed(() => {
   return '留空则使用内置建议模型';
 });
 
-watch(
-  () => props.settings,
-  (settings) => {
-    defaultProviderIdString.value = settings?.defaultProviderId ? String(settings.defaultProviderId) : '';
-    defaultModelLocal.value = settings?.defaultModel ?? '';
-  },
-  { immediate: true },
-);
-
-watch(defaultProviderIdLocal, (providerId, previous) => {
-  if (!providerId || providerId === previous) {
-    return;
-  }
-  emit('requestModels', providerId);
-});
-
-watch(
-  [activeSection, activeEditorId, providerType, providerBaseUrl, providerApiKey, providerProbeModel],
-  () => {
-    if (activeSection.value !== 'providers') {
-      return;
-    }
-    scheduleProbeModelsRequest();
-  },
-);
-
-let probeModelRequestTimer: ReturnType<typeof window.setTimeout> | null = null;
-
-onUnmounted(() => {
-  if (probeModelRequestTimer) {
-    window.clearTimeout(probeModelRequestTimer);
-  }
-});
-
 function startCreate() {
   activeSection.value = 'providers';
+  providerEditorOpen.value = true;
   applyProviderEditorState();
-  resetProviderModelForm();
+  requestProbeModelsIfNeeded();
+  closeModelEditor();
+  clearProviderModelDraft();
 }
 
 function startCreateAgent() {
@@ -623,8 +485,43 @@ function startEditAgent(agent: ProviderSettingsView['agents'][number]) {
 
 function startEdit(provider: ProviderSettingsView['providers'][number]) {
   activeSection.value = 'providers';
+  providerEditorOpen.value = true;
   applyProviderEditorState(provider);
-  resetProviderModelForm();
+  requestProbeModelsIfNeeded();
+  closeModelEditor();
+  clearProviderModelDraft();
+}
+
+function hydrateProviderContext(provider: ProviderSettingsView['providers'][number]) {
+  applyProviderEditorState(provider);
+}
+
+function closeProviderEditor() {
+  providerEditorOpen.value = false;
+  activeEditorId.value = null;
+  providerApiKey.value = '';
+  providerProbeModel.value = '';
+}
+
+function closeModelEditor() {
+  modelEditorOpen.value = false;
+  activeProviderModelId.value = null;
+}
+
+function selectModelProvider(providerIdString: string) {
+  const providerId = Number(providerIdString);
+  if (!Number.isFinite(providerId) || providerId <= 0) {
+    return;
+  }
+  const provider = props.settings?.providers.find((item) => item.id === providerId);
+  if (!provider) {
+    return;
+  }
+  applyProviderEditorState(provider);
+  if (!activeProviderModelId.value) {
+    providerModelServerTools.value = {};
+  }
+  requestProbeModelsIfNeeded();
 }
 
 function resetForm() {
@@ -654,7 +551,7 @@ function applyProviderEditorState(provider?: ProviderSettingsView['providers'][n
   providerType.value = provider?.providerType ?? 'openai_compat';
   providerName.value = provider?.name ?? '';
   providerBaseUrl.value = provider?.baseUrl ?? '';
-  providerApiKey.value = '';
+  providerApiKey.value = provider?.apiKey ?? '';
   providerProbeModel.value = '';
 }
 
@@ -697,19 +594,20 @@ function submitAgent() {
 }
 
 function startCreateProviderModel() {
-  activeProviderModelId.value = null;
-  providerModelId.value = '';
-  providerModelDisplayName.value = '';
-  providerModelContextWindow.value = '131072';
-  providerModelMaxOutputTokens.value = '4096';
-  providerModelSupportsToolUse.value = false;
-  providerModelSupportsVision.value = false;
-  providerModelSupportsAudio.value = false;
-  providerModelSupportsPdf.value = false;
-  providerModelServerTools.value = {};
+  modelEditorOpen.value = true;
+  if (!activeEditorId.value) {
+    const firstProvider = props.settings?.providers[0];
+    if (firstProvider) {
+      applyProviderEditorState(firstProvider);
+    }
+  }
+  requestProbeModelsIfNeeded();
+  clearProviderModelDraft();
 }
 
 function startEditProviderModel(model: NonNullable<typeof activeEditorProvider.value>['models'][number]) {
+  modelEditorOpen.value = true;
+  requestProbeModelsIfNeeded();
   activeProviderModelId.value = model.id;
   providerModelId.value = model.modelId;
   providerModelDisplayName.value = model.displayName ?? '';
@@ -728,32 +626,39 @@ function resetProviderModelForm() {
   startCreateProviderModel();
 }
 
+function clearProviderModelDraft() {
+  activeProviderModelId.value = null;
+  providerModelId.value = '';
+  providerModelDisplayName.value = '';
+  providerModelContextWindow.value = '256000';
+  providerModelMaxOutputTokens.value = '128000';
+  providerModelSupportsToolUse.value = false;
+  providerModelSupportsVision.value = false;
+  providerModelSupportsAudio.value = false;
+  providerModelSupportsPdf.value = false;
+  providerModelServerTools.value = {};
+}
+
 function submitProviderModel() {
   if (!activeEditorProvider.value) {
     return;
   }
 
-  const serverTools = serverToolDefinitions
-    .map((tool) => ({
-      capability: tool.capability,
-      format: providerModelServerTools.value[tool.capability]?.trim() ?? '',
-    }))
-    .filter((tool) => tool.format);
+  const serverTools = collectConfiguredServerTools();
 
   emit('saveProviderModel', {
     id: activeProviderModelId.value ?? undefined,
     providerId: activeEditorProvider.value.id,
     modelId: providerModelId.value,
     displayName: providerModelDisplayName.value,
-    contextWindow: Math.max(1, Number(providerModelContextWindow.value) || 131072),
-    maxOutputTokens: Math.max(1, Number(providerModelMaxOutputTokens.value) || 4096),
+    contextWindow: Math.max(1, Number(providerModelContextWindow.value) || 256000),
+    maxOutputTokens: Math.max(1, Number(providerModelMaxOutputTokens.value) || 128000),
     supportsToolUse: providerModelSupportsToolUse.value || serverTools.length > 0,
     supportsVision: providerModelSupportsVision.value,
     supportsAudio: providerModelSupportsAudio.value,
     supportsPdf: providerModelSupportsPdf.value,
     serverTools,
   });
-  resetProviderModelForm();
 }
 
 function testProvider() {
@@ -767,20 +672,12 @@ function testProvider() {
   });
 }
 
-function requestModels() {
-  if (!defaultProviderIdLocal.value) {
+function submitDefaultModel(modelConfigId: number) {
+  if (!Number.isFinite(modelConfigId) || modelConfigId <= 0) {
     return;
   }
-  emit('requestModels', defaultProviderIdLocal.value);
-}
-
-function submitDefaultProvider() {
-  if (!defaultProviderIdLocal.value) {
-    return;
-  }
-  emit('saveDefaultProvider', {
-    providerId: defaultProviderIdLocal.value,
-    model: defaultModelLocal.value,
+  emit('saveDefaultModel', {
+    modelConfigId,
   });
 }
 
@@ -806,40 +703,51 @@ function formatAgentSource(source: string) {
   return '来源：用户';
 }
 
-function requestProbeModelsNow() {
-  if (probeModelRequestTimer) {
-    window.clearTimeout(probeModelRequestTimer);
-    probeModelRequestTimer = null;
-  }
+function requestProbeModelsNow(forceRefresh = false) {
   emit('requestProbeModels', {
     id: activeEditorId.value ?? undefined,
     providerType: providerType.value,
     baseUrl: providerBaseUrl.value,
     apiKey: providerApiKey.value,
     probeModel: providerProbeModel.value,
+    forceRefresh,
   });
 }
 
-function scheduleProbeModelsRequest() {
-  if (probeModelRequestTimer) {
-    window.clearTimeout(probeModelRequestTimer);
-  }
-  probeModelRequestTimer = window.setTimeout(() => {
-    requestProbeModelsNow();
-  }, 350);
+function requestProbeModelsIfNeeded() {
+  requestProbeModelsNow(false);
 }
 
 function serverToolFormatOptions(capability: string) {
   const definition = serverToolDefinitions.find((tool) => tool.capability === capability);
-  return (definition?.formats ?? []).map((format) => ({
+  const formats = (definition?.formats ?? []).filter((format) =>
+    isServerToolFormatCompatibleWithProviderType(format, providerType.value),
+  );
+  return formats.map((format) => ({
     value: format,
     label: serverToolFormatOptionLabel(capability, format),
   }));
 }
 
+function isServerToolFormatCompatibleWithProviderType(format: string, providerTypeValue: string) {
+  if (!providerTypeValue) {
+    return true;
+  }
+  if (format === 'openai_responses') {
+    return providerTypeValue === 'openai';
+  }
+  if (format === 'openai_chat_completions') {
+    return !['anthropic', 'gemini', 'openai'].includes(providerTypeValue);
+  }
+  return format === providerTypeValue;
+}
+
 function serverToolFormatOptionLabel(capability: string, format: string) {
   const providerLabel = serverToolFormatLabels[format] ?? format;
-  if (capability === 'web_search' && format === 'openai') {
+  if (capability === 'web_search' && format === 'openai_responses') {
+    return `${providerLabel} (web_search)`;
+  }
+  if (capability === 'web_search' && format === 'openai_chat_completions') {
     return `${providerLabel} (web_search_preview)`;
   }
   if (capability === 'web_search' && format === 'anthropic') {
@@ -848,7 +756,10 @@ function serverToolFormatOptionLabel(capability: string, format: string) {
   if (capability === 'web_search' && format === 'gemini') {
     return `${providerLabel} (google_search)`;
   }
-  if (capability === 'code_execution' && format === 'openai') {
+  if (capability === 'code_execution' && format === 'openai_responses') {
+    return `${providerLabel} (code_interpreter)`;
+  }
+  if (capability === 'code_execution' && format === 'openai_chat_completions') {
     return `${providerLabel} (code_interpreter)`;
   }
   if (capability === 'code_execution' && format === 'anthropic') {
@@ -857,7 +768,7 @@ function serverToolFormatOptionLabel(capability: string, format: string) {
   if (capability === 'code_execution' && format === 'gemini') {
     return `${providerLabel} (code_execution)`;
   }
-  if (capability === 'file_search' && format === 'openai') {
+  if (capability === 'file_search' && format === 'openai_responses') {
     return `${providerLabel} (file_search)`;
   }
   return providerLabel;
@@ -865,6 +776,21 @@ function serverToolFormatOptionLabel(capability: string, format: string) {
 
 function isServerToolEnabled(capability: string) {
   return Boolean(providerModelServerTools.value[capability]);
+}
+
+function collectConfiguredServerTools() {
+  const supportedCapabilities = new Set(serverToolDefinitions.map((tool) => tool.capability));
+  return Object.entries(providerModelServerTools.value)
+    .map(([capability, format]) => ({
+      capability: capability.trim(),
+      format: String(format ?? '').trim(),
+    }))
+    .filter(
+      (tool) =>
+        tool.capability
+        && supportedCapabilities.has(tool.capability)
+        && tool.format,
+    );
 }
 
 function toggleServerTool(capability: string, enabled: boolean) {
@@ -896,8 +822,8 @@ function setServerToolFormat(capability: string, format: string) {
   };
 }
 
-function onServerToolToggle(capability: string, event: Event) {
-  toggleServerTool(capability, (event.target as HTMLInputElement | null)?.checked ?? false);
+function onServerToolToggle(capability: string, enabled: boolean) {
+  toggleServerTool(capability, enabled);
 }
 
 function formatCapabilitiesSummary(capabilities: {
@@ -944,4 +870,5 @@ function formatTokenMetric(value: number) {
   }
   return String(value);
 }
+
 </script>

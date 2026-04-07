@@ -3,6 +3,7 @@ use crate::context::AgentContext;
 use crate::settings::{ProviderType, ServerToolConfig};
 use anyhow::{Context, Result};
 use reqwest::Client as HttpClient;
+use serde_json::json;
 use std::time::Duration;
 
 mod delivery;
@@ -390,42 +391,115 @@ impl ProviderClient {
         let probe_model = self.resolve_probe_model_for_connection().await?;
         let reply = self.run_probe_request(&probe_model).await?;
         Ok(format!(
-            "连接成功，模型 {} 已完成最小消息往返：{}",
-            probe_model, reply
+            "连接成功，已按 {} 通道完成最小消息往返，测试模型 {} 返回：{}",
+            self.config.provider_type.as_db_value(),
+            probe_model,
+            reply
         ))
+    }
+
+    pub async fn probe_tool_use_support(&self, model: &str) -> Result<bool> {
+        let mut provider = self.clone();
+        provider.function_tools = vec![messages::FunctionToolDefinition {
+            name: "ping".to_string(),
+            description: "Call this tool exactly once to confirm tool support.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+        }];
+
+        let messages = vec![RequestMessage::user(
+            "Call the ping tool exactly once. Do not answer with plain text.",
+        )];
+        let options = RequestOptions {
+            model: model.to_string(),
+            stream: false,
+            temperature: 0.0,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            max_output_tokens: Some(64),
+        };
+        let request_preview = wire::adapter_for(&provider.config).build_request(
+            &provider.config,
+            &messages,
+            &provider.function_tools,
+            &[],
+            &options,
+        )?;
+        let request_json = serde_json::to_string_pretty(&request_preview.body)
+            .context("failed to encode tool probe request")?;
+        let response = provider
+            .complete_non_streaming(
+                &messages,
+                &options,
+                request_json,
+                DeliveryPath::NonStreamingCached,
+                TurnCancellation::never(),
+            )
+            .await
+            .context("failed to run tool probe request")?;
+
+        Ok(response.tool_calls.iter().any(|call| call.name == "ping"))
+    }
+
+    pub async fn probe_vision_support(&self, model: &str) -> Result<bool> {
+        const PROBE_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3X8AAAAASUVORK5CYII=";
+
+        let response = self
+            .complete_simple_request_with_model(
+                model,
+                vec![RequestMessage::user(MessageContent::from_parts(vec![
+                    messages::MessageContentPart::Text(
+                        "Describe this image in one short sentence.".to_string(),
+                    ),
+                    messages::MessageContentPart::Image {
+                        media_type: "image/png".to_string(),
+                        data_base64: PROBE_PNG_BASE64.to_string(),
+                        name: Some("march-probe.png".to_string()),
+                    },
+                ]))],
+                RequestOptions {
+                    model: model.to_string(),
+                    stream: false,
+                    temperature: 0.0,
+                    top_p: None,
+                    presence_penalty: None,
+                    frequency_penalty: None,
+                    max_output_tokens: Some(64),
+                },
+            )
+            .await
+            .context("failed to run vision probe request")?;
+
+        Ok(response
+            .content
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|text| !text.is_empty()))
     }
 
     async fn resolve_probe_model_for_connection(&self) -> Result<String> {
         let configured_model = self.config.model.trim();
+        if !configured_model.is_empty() {
+            return Ok(configured_model.to_string());
+        }
 
         match self.config.provider_type {
             ProviderType::OpenAiCompat | ProviderType::Ollama => match self.list_models().await {
                 Ok(models) => {
-                    if let Some(model) = models
-                        .iter()
-                        .find(|model| model.as_str() == configured_model)
-                    {
-                        return Ok(model.clone());
-                    }
                     if let Some(model) = models.into_iter().find(|model| !model.trim().is_empty()) {
                         return Ok(model);
-                    }
-                    if !configured_model.is_empty() {
-                        return Ok(configured_model.to_string());
                     }
                     anyhow::bail!("provider 没有返回可用模型，无法完成真实对话测试")
                 }
                 Err(error) => {
-                    if !configured_model.is_empty() {
-                        Ok(configured_model.to_string())
-                    } else {
-                        Err(error.context(
-                            "failed to determine probe model for provider connection test",
-                        ))
-                    }
+                    Err(error
+                        .context("failed to determine probe model for provider connection test"))
                 }
             },
-            _ if !configured_model.is_empty() => Ok(configured_model.to_string()),
             _ => anyhow::bail!("provider probe model is empty"),
         }
     }

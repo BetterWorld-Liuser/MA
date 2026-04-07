@@ -393,7 +393,7 @@ export function useWorkspaceTaskActions({
     });
   }
 
-  async function setTaskModel(selection: { providerId?: number | null; model: string }) {
+  async function setTaskModel(selection: { modelConfigId: number }) {
     if (!activeTaskIdNumber.value || busy.value) {
       return;
     }
@@ -402,8 +402,7 @@ export function useWorkspaceTaskActions({
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_model', {
         input: {
           taskId: activeTaskIdNumber.value,
-          providerId: selection.providerId ?? null,
-          model: selection.model,
+          modelConfigId: selection.modelConfigId,
         },
       });
     });

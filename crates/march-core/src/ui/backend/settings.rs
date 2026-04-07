@@ -133,15 +133,17 @@ impl UiAppBackend {
         self.provider_settings()
     }
 
-    pub fn handle_set_default_provider(
+    pub fn handle_set_default_model(
         &mut self,
-        request: UiSetDefaultProviderRequest,
+        request: UiSetDefaultModelRequest,
     ) -> Result<UiProviderSettingsView> {
         let settings = SettingsStorage::open()?;
         let previous = settings.snapshot()?;
-        self.storage
-            .backfill_missing_task_defaults(previous.default_provider_id, previous.default_model)?;
-        settings.set_default_provider(request.provider_id, request.model)?;
+        self.storage.backfill_missing_task_defaults(
+            previous.default_model_config_id,
+            settings.default_model()?,
+        )?;
+        settings.set_default_model_config(request.model_config_id)?;
         self.provider_settings()
     }
 }

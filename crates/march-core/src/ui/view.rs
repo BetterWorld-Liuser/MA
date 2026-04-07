@@ -96,21 +96,25 @@ impl UiTaskSnapshot {
 
 impl UiProviderSettingsView {
     pub fn from_snapshot(database_path: PathBuf, snapshot: ProviderSettingsSnapshot) -> Self {
-        let provider_models = snapshot.provider_models;
+        let default_model = snapshot
+            .default_model_config_id
+            .and_then(|id| snapshot.model_configs.iter().find(|model| model.id == id))
+            .map(|model| model.model_id.clone());
+        let model_configs = snapshot.model_configs;
         Self {
             database_path: clean_path(database_path),
             providers: snapshot
                 .providers
                 .into_iter()
-                .map(|provider| UiProviderView::from_record(provider, &provider_models))
+                .map(|provider| UiProviderView::from_record(provider, &model_configs))
                 .collect(),
             agents: snapshot
                 .agent_profiles
                 .into_iter()
                 .map(UiAgentProfileView::from)
                 .collect(),
-            default_provider_id: snapshot.default_provider_id,
-            default_model: snapshot.default_model,
+            default_model_config_id: snapshot.default_model_config_id,
+            default_model,
         }
     }
 }
@@ -199,6 +203,7 @@ impl UiProviderView {
             name: provider.name,
             provider_type: provider.provider_type.as_db_value().to_string(),
             base_url: provider.base_url,
+            api_key: provider.api_key.clone(),
             api_key_hint: mask_api_key(&provider.api_key),
             created_at: system_time_to_unix(provider.created_at),
             models: provider_models
@@ -218,6 +223,7 @@ impl From<ProviderModelRecord> for UiProviderModelView {
             provider_id: model.provider_id,
             model_id: model.model_id,
             display_name: model.display_name,
+            probed_at: model.probed_at,
             capabilities: UiModelCapabilitiesView {
                 context_window: model.context_window,
                 max_output_tokens: model.max_output_tokens,

@@ -10,14 +10,15 @@ use march::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteAgentRequest,
     UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
     UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest,
+    UiProbeProviderModelCapabilitiesRequest, UiProbeProviderModelCapabilitiesView,
     UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
     UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
     UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
     UiToggleOpenFileLockRequest, UiUpsertAgentRequest, UiUpsertNoteRequest,
     UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
-    UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_models,
+    UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_model_capabilities, fetch_probe_models,
     fetch_provider_models_for_provider, fetch_task_model_selector,
     test_provider_connection as run_provider_connection_test,
 };
@@ -278,6 +279,15 @@ async fn list_probe_models(
 }
 
 #[tauri::command]
+async fn probe_provider_model_capabilities(
+    input: UiProbeProviderModelCapabilitiesRequest,
+) -> Result<UiProbeProviderModelCapabilitiesView, String> {
+    fetch_probe_model_capabilities(input)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_task_model(
     state: tauri::State<'_, AppState>,
     input: UiSetTaskModelRequest,
@@ -368,14 +378,14 @@ fn delete_provider_model(
 }
 
 #[tauri::command]
-fn set_default_provider(
+fn set_default_model(
     state: tauri::State<'_, AppState>,
-    input: UiSetDefaultProviderRequest,
+    input: UiSetDefaultModelRequest,
 ) -> Result<UiProviderSettingsView, String> {
     let mut backend =
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
     backend
-        .handle_set_default_provider(input)
+        .handle_set_default_model(input)
         .map_err(|error| error.to_string())
 }
 
@@ -515,6 +525,7 @@ pub fn run() {
             list_provider_models,
             list_provider_models_for_settings,
             list_probe_models,
+            probe_provider_model_capabilities,
             set_task_model,
             set_task_model_settings,
             set_task_working_directory,
@@ -523,7 +534,7 @@ pub fn run() {
             delete_provider,
             upsert_provider_model,
             delete_provider_model,
-            set_default_provider,
+            set_default_model,
             upsert_agent,
             delete_agent,
             restore_march_prompt,

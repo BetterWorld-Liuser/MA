@@ -81,12 +81,10 @@
         :theme="theme"
         :settings="providerSettings"
         :busy="busy"
-        :models-loading="providerModelsLoading"
-        :available-models="providerModels"
-        :suggested-models="providerSuggestedModels"
         :probe-models="providerProbeModels"
         :probe-suggested-models="providerProbeSuggestedModels"
         :probe-models-loading="providerProbeModelsLoading"
+        :provider-test-loading="providerTestLoading"
         :provider-test-message="providerTestMessage"
         :provider-test-success="providerTestSuccess"
         @close="closeSettings"
@@ -99,8 +97,7 @@
         @delete-provider-model="deleteProviderModel"
         @delete-agent="confirmDeleteAgent"
         @restore-march-prompt="restoreMarchPrompt"
-        @save-default-provider="saveDefaultProvider"
-        @request-models="loadProviderModelsForSettings"
+        @save-default-model="saveDefaultModel"
         @request-probe-models="requestProbeModels"
       />
     </div>
@@ -160,12 +157,10 @@ const {
   settingsOpen,
   theme,
   providerSettings,
-  providerModels,
-  providerSuggestedModels,
-  providerModelsLoading,
   providerProbeModels,
   providerProbeSuggestedModels,
   providerProbeModelsLoading,
+  providerTestLoading,
   providerTestMessage,
   providerTestSuccess,
   noteDialogOpen,
@@ -209,8 +204,7 @@ const {
   restoreMarchPrompt,
   requestProbeModels,
   confirmDeleteProvider,
-  saveDefaultProvider,
-  loadProviderModelsForSettings,
+  saveDefaultModel,
   handleConfirmDialogOpenChange,
   submitConfirmDialog,
   minimizeWindow,

@@ -293,6 +293,33 @@
   }
 }
 
+@utility settings-combobox-shell {
+  @apply flex h-10 items-center rounded-xl border border-border transition;
+  background: var(--ma-panel-surface);
+}
+
+@utility settings-combobox-shell-open {
+  border-color: rgba(212, 105, 42, 0.45);
+  box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+}
+
+@utility settings-combobox-shell-disabled {
+  @apply cursor-not-allowed opacity-50;
+}
+
+@utility settings-combobox-input {
+  @apply h-full border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:ring-0;
+}
+
+@utility settings-combobox-toggle {
+  @apply inline-flex h-full w-10 shrink-0 items-center justify-center rounded-r-xl text-text-dim transition disabled:cursor-not-allowed;
+
+  &:hover:not(:disabled) {
+    color: var(--color-text);
+    background: var(--ma-panel-surface-hover);
+  }
+}
+
 @utility settings-select-menu {
   @apply fixed z-[90] overflow-y-auto rounded-2xl p-1;
   border: 1px solid var(--ma-line-soft);
@@ -959,6 +986,27 @@
   border: 1px dashed var(--ma-line-soft);
 }
 
+@utility chat-stage {
+  @apply relative min-h-full;
+}
+
+@utility empty-state-overlay {
+  @apply pointer-events-none absolute inset-0 z-10 flex items-start justify-center px-2.5 py-2;
+}
+
+@utility chat-content-layer {
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+@utility chat-content-layer-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @utility debug-tab-row {
   @apply flex flex-wrap gap-1 rounded-md bg-bg-secondary p-1;
 }
@@ -1144,20 +1192,22 @@
 
 @utility theme-preview {
   @apply mt-4 overflow-hidden rounded-[18px] border;
-  border-color: var(--ma-line-soft);
-  background: var(--ma-panel-elevated);
+  border-color: var(--preview-border, var(--ma-line-soft));
+  background: var(--preview-bg, var(--ma-panel-elevated));
+  color: var(--preview-text, var(--color-text));
 }
 
 @utility theme-preview-titlebar {
   @apply flex items-center gap-2 border-b px-3 py-2 text-[11px];
-  border-color: var(--ma-line-soft);
+  border-color: var(--preview-border, var(--ma-line-soft));
+  background: var(--preview-titlebar-bg, transparent);
 }
 
 @utility theme-preview-logo {
   @apply inline-flex h-5 w-5 items-center justify-center rounded-md border text-[10px] font-semibold;
-  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
-  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-  color: var(--color-accent);
+  border-color: var(--preview-logo-border, color-mix(in srgb, var(--color-accent) 45%, transparent));
+  background: var(--preview-logo-bg, color-mix(in srgb, var(--color-accent) 14%, transparent));
+  color: var(--preview-accent, var(--color-accent));
 }
 
 @utility theme-preview-body {
@@ -1166,37 +1216,38 @@
 
 @utility theme-preview-sidebar {
   @apply flex w-[4.5rem] flex-col gap-2 border-r px-3 py-3;
-  border-color: var(--ma-line-soft);
-  background: var(--ma-panel-surface);
+  border-color: var(--preview-border, var(--ma-line-soft));
+  background: var(--preview-sidebar-bg, var(--ma-panel-surface));
 }
 
 @utility theme-preview-chip {
   @apply h-2.5 rounded-full;
-  background: color-mix(in srgb, var(--color-text) 12%, transparent);
+  background: var(--preview-chip-bg, color-mix(in srgb, var(--color-text) 12%, transparent));
 }
 
 @utility theme-preview-chip-active {
-  background: color-mix(in srgb, var(--color-accent) 80%, white 10%);
+  background: var(--preview-chip-active-bg, color-mix(in srgb, var(--color-accent) 80%, white 10%));
 }
 
 @utility theme-preview-main {
   @apply flex min-w-0 flex-1 flex-col gap-3 px-3 py-3;
+  background: var(--preview-main-bg, transparent);
 }
 
 @utility theme-preview-message {
   @apply h-11 w-[70%] rounded-2xl;
-  background: var(--ma-panel-surface);
+  background: var(--preview-message-bg, var(--ma-panel-surface));
 }
 
 @utility theme-preview-message-secondary {
   @apply w-[54%];
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  background: var(--preview-message-secondary-bg, color-mix(in srgb, var(--color-accent) 12%, transparent));
 }
 
 @utility theme-preview-input {
   @apply mt-auto h-10 rounded-2xl border;
-  border-color: var(--ma-line-soft);
-  background: var(--ma-panel-surface);
+  border-color: var(--preview-border, var(--ma-line-soft));
+  background: var(--preview-input-bg, var(--ma-panel-surface));
 }
 
 @utility settings-info-card {
@@ -1232,50 +1283,36 @@
 
   .theme-preview[data-preview-theme='dark'] {
     --preview-bg: #0d0d0d;
-    --preview-surface: rgba(255, 255, 255, 0.04);
     --preview-border: rgba(255, 255, 255, 0.08);
     --preview-accent: rgba(212, 105, 42, 0.9);
     --preview-text: #ece4dc;
+    --preview-titlebar-bg: rgba(255, 255, 255, 0.015);
+    --preview-sidebar-bg: rgba(255, 255, 255, 0.03);
+    --preview-main-bg: #080808;
+    --preview-message-bg: rgba(255, 255, 255, 0.04);
+    --preview-message-secondary-bg: rgba(212, 105, 42, 0.18);
+    --preview-input-bg: rgba(255, 255, 255, 0.02);
+    --preview-chip-bg: rgba(255, 255, 255, 0.12);
+    --preview-chip-active-bg: rgba(212, 105, 42, 0.9);
+    --preview-logo-border: rgba(212, 105, 42, 0.44);
+    --preview-logo-bg: rgba(212, 105, 42, 0.14);
   }
 
   .theme-preview[data-preview-theme='light'] {
     --preview-bg: #fbf8f3;
-    --preview-surface: rgba(36, 29, 22, 0.05);
     --preview-border: rgba(36, 29, 22, 0.1);
     --preview-accent: rgba(212, 105, 42, 0.82);
     --preview-text: #241d16;
-  }
-
-  .theme-preview {
-    background: var(--preview-bg);
-    color: var(--preview-text);
-  }
-
-  .theme-preview-titlebar,
-  .theme-preview-sidebar,
-  .theme-preview-input {
-    border-color: var(--preview-border);
-  }
-
-  .theme-preview-sidebar,
-  .theme-preview-message,
-  .theme-preview-input {
-    background: var(--preview-surface);
-  }
-
-  .theme-preview-chip {
-    background: color-mix(in srgb, var(--preview-text) 12%, transparent);
-  }
-
-  .theme-preview-chip-active,
-  .theme-preview-message-secondary {
-    background: color-mix(in srgb, var(--preview-accent) 18%, transparent);
-  }
-
-  .theme-preview-logo {
-    border-color: color-mix(in srgb, var(--preview-accent) 44%, transparent);
-    background: color-mix(in srgb, var(--preview-accent) 14%, transparent);
-    color: var(--preview-accent);
+    --preview-titlebar-bg: rgba(255, 255, 255, 0.62);
+    --preview-sidebar-bg: rgba(36, 29, 22, 0.045);
+    --preview-main-bg: #fffdf9;
+    --preview-message-bg: rgba(36, 29, 22, 0.05);
+    --preview-message-secondary-bg: rgba(212, 105, 42, 0.18);
+    --preview-input-bg: rgba(255, 255, 255, 0.82);
+    --preview-chip-bg: rgba(36, 29, 22, 0.14);
+    --preview-chip-active-bg: rgba(212, 105, 42, 0.82);
+    --preview-logo-border: rgba(212, 105, 42, 0.38);
+    --preview-logo-bg: rgba(212, 105, 42, 0.12);
   }
 
   /*
@@ -1419,6 +1456,19 @@
   .live-turn-swap-leave-to {
     opacity: 0;
     transform: translateY(6px);
+  }
+
+  .chat-empty-fade-enter-active,
+  .chat-empty-fade-leave-active {
+    transition:
+      opacity 200ms ease,
+      transform 200ms ease;
+  }
+
+  .chat-empty-fade-enter-from,
+  .chat-empty-fade-leave-to {
+    opacity: 0;
+    transform: translateY(-6px);
   }
 
   html,

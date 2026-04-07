@@ -3,16 +3,17 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openPathDialog } from '@tauri-apps/plugin-dialog';
 import type { TaskModelSelectorView } from '@/data/mock';
 
-type CachedProviderGroup = {
-  providerId?: number | null;
+type FlatModelItem = {
+  modelConfigId: number;
+  providerId: number;
   providerName: string;
   providerType: string;
-  providerCacheKey: string;
-  availableModels: string[];
+  displayName: string;
+  modelId: string;
 };
 
 type CachedTaskModelSelector = {
-  currentProviderId?: number | null;
+  currentModelConfigId?: number | null;
   currentModel: string;
   currentTemperature?: number | null;
   currentTopP?: number | null;
@@ -20,7 +21,7 @@ type CachedTaskModelSelector = {
   currentFrequencyPenalty?: number | null;
   currentMaxOutputTokens?: number | null;
   currentModelDefaultMaxOutputTokens?: number | null;
-  providers: CachedProviderGroup[];
+  models: FlatModelItem[];
 };
 
 type UseTaskModelSelectorOptions = {
@@ -37,7 +38,7 @@ type UseTaskModelSelectorOptions = {
   workspacePath: Ref<string | undefined>;
   plusMenuOpen: Ref<boolean>;
   closeComposerMenus: () => void;
-  emitSetModel: (selection: { providerId?: number | null; model: string }) => void;
+  emitSetModel: (selection: { modelConfigId: number }) => void;
   emitSetModelSettings: (settings: {
     temperature?: number | null;
     topP?: number | null;
@@ -48,7 +49,7 @@ type UseTaskModelSelectorOptions = {
   emitSetWorkingDirectory: (path?: string | null) => void;
 };
 
-// 模型列表读取仍然可能依赖 provider 网络请求。
+// 模型列表来自本地 settings 里的 ModelConfig。
 // 这里保留一个前端进程内缓存，让菜单可以先秒开最近一次成功结果，再异步刷新。
 const taskModelSelectorCache = new Map<number, CachedTaskModelSelector>();
 
@@ -77,11 +78,11 @@ export function useTaskModelSelector({
   const modelSettingsAnchorRef = ref<HTMLElement | null>(null);
   const modelSettingsPanelRef = ref<HTMLElement | null>(null);
   const modelSettingsOpen = ref(false);
-  const providerGroups = ref<CachedProviderGroup[]>([]);
+  const modelItems = ref<FlatModelItem[]>([]);
   const modelSearchQuery = ref('');
   const modelsLoading = ref(false);
   const modelsRefreshing = ref(false);
-  const resolvedCurrentProviderId = ref<number | null>(null);
+  const resolvedCurrentModelConfigId = ref<number | null>(null);
   const resolvedCurrentModel = ref('');
   const resolvedCurrentTemperature = ref<number | null>(null);
   const resolvedCurrentTopP = ref<number | null>(null);
@@ -102,7 +103,11 @@ export function useTaskModelSelector({
 
   const supportsVision = computed(() => resolvedModelSupportsVision.value);
   const effectiveSelectedModel = computed(() => selectedModel.value?.trim() || resolvedCurrentModel.value.trim());
-  const modelButtonLabel = computed(() => effectiveSelectedModel.value || '选择模型');
+  const selectedModelDisplayName = computed(() => {
+    const active = modelItems.value.find((item) => item.modelConfigId === resolvedCurrentModelConfigId.value);
+    return active?.displayName || '';
+  });
+  const modelButtonLabel = computed(() => selectedModelDisplayName.value || effectiveSelectedModel.value || '选择模型');
   const maxOutputTokensPlaceholder = computed(() =>
     resolvedModelDefaultMaxOutputTokens.value
       ? `留空则使用默认值 ${resolvedModelDefaultMaxOutputTokens.value}`
@@ -122,29 +127,24 @@ export function useTaskModelSelector({
       ? `AI 工作目录：${normalizedWorkingDirectory.value}`
       : '设置 AI 工作目录',
   );
-  const filteredProviderGroups = computed(() => {
+  const filteredModelItems = computed(() => {
     const query = modelSearchQuery.value.trim().toLowerCase();
-    return providerGroups.value
-      .map((group) => ({
-        ...group,
-        filteredModels: !query
-          ? group.availableModels
-          : group.availableModels.filter((model) => model.toLowerCase().includes(query)),
-      }))
-      .filter((group) => group.filteredModels.length > 0);
+    return modelItems.value.filter((item) => !query
+      || item.modelId.toLowerCase().includes(query)
+      || item.displayName.toLowerCase().includes(query)
+      || item.providerName.toLowerCase().includes(query)
+      || item.providerType.toLowerCase().includes(query));
   });
 
   watch(taskId, (nextTaskId) => {
     closeAllMenus();
     restoreModelStateFromCache(nextTaskId);
-    seedModelListFromCurrentSelection();
     resetModelSettingsDraft();
     void refreshModels();
   });
 
   watch(selectedModel, (model) => {
     resolvedCurrentModel.value = model?.trim() ?? '';
-    seedModelListFromCurrentSelection();
   }, { immediate: true });
 
   watch(selectedTemperature, (value) => {
@@ -188,7 +188,7 @@ export function useTaskModelSelector({
     }
   });
 
-  watch([modelMenuOpen, filteredProviderGroups, modelSearchQuery], async ([open]) => {
+  watch([modelMenuOpen, filteredModelItems, modelSearchQuery], async ([open]) => {
     if (!open) {
       return;
     }
@@ -209,7 +209,6 @@ export function useTaskModelSelector({
     window.addEventListener('resize', syncFloatingMenus);
     window.addEventListener('scroll', syncFloatingMenus, true);
     restoreModelStateFromCache(taskId.value);
-    seedModelListFromCurrentSelection();
     resetModelSettingsDraft();
     void refreshModels();
   });
@@ -264,19 +263,18 @@ export function useTaskModelSelector({
     emitSetWorkingDirectory(null);
   }
 
-  function selectModel(providerId: number | null | undefined, model: string) {
-    resolvedCurrentProviderId.value = providerId ?? null;
+  function selectModel(modelConfigId: number, model: string) {
+    resolvedCurrentModelConfigId.value = modelConfigId;
     resolvedCurrentModel.value = model;
-    const activeGroup = providerGroups.value.find((group) => group.providerId === (providerId ?? null));
-    if (activeGroup && !activeGroup.availableModels.includes(model)) {
-      activeGroup.availableModels = [model, ...activeGroup.availableModels];
-    }
-    emitSetModel({ providerId, model });
+    emitSetModel({ modelConfigId });
     closeModelMenu();
   }
 
-  function isModelActive(providerId: number | null | undefined, model: string) {
-    return (providerId ?? null) === resolvedCurrentProviderId.value && model === effectiveSelectedModel.value;
+  function isModelActive(modelConfigId: number, model: string) {
+    if (resolvedCurrentModelConfigId.value != null) {
+      return resolvedCurrentModelConfigId.value === modelConfigId;
+    }
+    return model === effectiveSelectedModel.value;
   }
 
   function applyModelSettings() {
@@ -390,7 +388,7 @@ export function useTaskModelSelector({
     modelSettingsAnchorRef,
     modelSettingsPanelRef,
     modelSettingsOpen,
-    providerGroups,
+    modelItems,
     modelSearchQuery,
     modelsLoading,
     modelsRefreshing,
@@ -403,7 +401,7 @@ export function useTaskModelSelector({
     isCustomWorkingDirectory,
     workingDirectoryLabel,
     workingDirectoryTooltip,
-    filteredProviderGroups,
+    filteredModelItems,
     temperatureDraft,
     topPDraft,
     presencePenaltyDraft,
@@ -424,19 +422,21 @@ export function useTaskModelSelector({
 
   function primeModelMenu() {
     restoreModelStateFromCache(taskId.value);
-    seedModelListFromCurrentSelection();
     void refreshModels();
   }
 
   function restoreModelStateFromCache(currentTaskId?: number | null) {
     if (!currentTaskId) {
-      resolvedCurrentProviderId.value = null;
+      resolvedCurrentModelConfigId.value = null;
       resolvedCurrentModel.value = '';
       resolvedModelSupportsVision.value = false;
-      providerGroups.value = [];
+      modelItems.value = [];
+      resolvedCurrentTemperature.value = null;
       resolvedCurrentTopP.value = null;
       resolvedCurrentPresencePenalty.value = null;
       resolvedCurrentFrequencyPenalty.value = null;
+      resolvedCurrentMaxOutputTokens.value = null;
+      resolvedModelDefaultMaxOutputTokens.value = null;
       return;
     }
 
@@ -445,12 +445,9 @@ export function useTaskModelSelector({
       return;
     }
 
-    resolvedCurrentProviderId.value = cached.currentProviderId ?? null;
+    resolvedCurrentModelConfigId.value = cached.currentModelConfigId ?? null;
     resolvedCurrentModel.value = cached.currentModel;
-    providerGroups.value = cached.providers.map((group) => ({
-      ...group,
-      availableModels: [...group.availableModels],
-    }));
+    modelItems.value = cached.models.map((model) => ({ ...model }));
     resolvedCurrentTemperature.value = cached.currentTemperature ?? null;
     resolvedCurrentTopP.value = cached.currentTopP ?? null;
     resolvedCurrentPresencePenalty.value = cached.currentPresencePenalty ?? null;
@@ -459,33 +456,13 @@ export function useTaskModelSelector({
     resolvedModelDefaultMaxOutputTokens.value = cached.currentModelDefaultMaxOutputTokens ?? null;
   }
 
-  function seedModelListFromCurrentSelection() {
-    const selected = selectedModel.value?.trim();
-    if (!selected) {
-      return;
-    }
-
-    resolvedCurrentModel.value = selected;
-    if (resolvedCurrentProviderId.value !== null) {
-      const activeGroup = providerGroups.value.find((group) => group.providerId === resolvedCurrentProviderId.value);
-      if (activeGroup && !activeGroup.availableModels.includes(selected)) {
-        activeGroup.availableModels = [selected, ...activeGroup.availableModels];
-      }
-      return;
-    }
-
-    if (providerGroups.value.length === 1 && !providerGroups.value[0].availableModels.includes(selected)) {
-      providerGroups.value[0].availableModels = [selected, ...providerGroups.value[0].availableModels];
-    }
-  }
-
   async function refreshModels() {
     if (!taskId.value) {
       return;
     }
 
     const requestId = ++activeModelRequestId;
-    const hasWarmData = providerGroups.value.some((group) => group.availableModels.length > 0);
+    const hasWarmData = modelItems.value.length > 0;
     modelsLoading.value = !hasWarmData;
     modelsRefreshing.value = hasWarmData;
     try {
@@ -495,7 +472,7 @@ export function useTaskModelSelector({
       if (requestId !== activeModelRequestId) {
         return;
       }
-      applyProviderModels(response, taskId.value);
+      applyModels(response, taskId.value);
     } finally {
       if (requestId === activeModelRequestId) {
         modelsLoading.value = false;
@@ -504,26 +481,9 @@ export function useTaskModelSelector({
     }
   }
 
-  function applyProviderModels(response: TaskModelSelectorView, currentTaskId: number) {
-    const normalizedProviders = response.providers.map((group) => ({
-      providerId: group.providerId ?? null,
-      providerName: group.providerName,
-      providerType: group.providerType,
-      providerCacheKey: group.providerCacheKey,
-      availableModels: Array.from(
-        new Set(
-          [
-            ...(response.currentProviderId === group.providerId ? [response.currentModel] : []),
-            ...group.availableModels,
-          ]
-            .map((model) => model.trim())
-            .filter(Boolean),
-        ),
-      ),
-    }));
-
+  function applyModels(response: TaskModelSelectorView, currentTaskId: number) {
     const cacheEntry: CachedTaskModelSelector = {
-      currentProviderId: response.currentProviderId ?? null,
+      currentModelConfigId: response.currentModelConfigId ?? null,
       currentModel: response.currentModel,
       currentTemperature: response.currentTemperature ?? null,
       currentTopP: response.currentTopP ?? null,
@@ -531,11 +491,18 @@ export function useTaskModelSelector({
       currentFrequencyPenalty: response.currentFrequencyPenalty ?? null,
       currentMaxOutputTokens: response.currentMaxOutputTokens ?? null,
       currentModelDefaultMaxOutputTokens: response.currentModelCapabilities.maxOutputTokens ?? null,
-      providers: normalizedProviders,
+      models: response.models.map((model) => ({
+        modelConfigId: model.modelConfigId,
+        providerId: model.providerId,
+        providerName: model.providerName,
+        providerType: model.providerType,
+        displayName: model.displayName,
+        modelId: model.modelId,
+      })),
     };
 
     taskModelSelectorCache.set(currentTaskId, cacheEntry);
-    resolvedCurrentProviderId.value = cacheEntry.currentProviderId ?? null;
+    resolvedCurrentModelConfigId.value = cacheEntry.currentModelConfigId ?? null;
     resolvedCurrentModel.value = cacheEntry.currentModel;
     resolvedCurrentTemperature.value = cacheEntry.currentTemperature ?? null;
     resolvedCurrentTopP.value = cacheEntry.currentTopP ?? null;
@@ -544,10 +511,7 @@ export function useTaskModelSelector({
     resolvedCurrentMaxOutputTokens.value = cacheEntry.currentMaxOutputTokens ?? null;
     resolvedModelDefaultMaxOutputTokens.value = cacheEntry.currentModelDefaultMaxOutputTokens ?? null;
     resolvedModelSupportsVision.value = response.currentModelCapabilities.supportsVision;
-    providerGroups.value = cacheEntry.providers.map((group) => ({
-      ...group,
-      availableModels: [...group.availableModels],
-    }));
+    modelItems.value = cacheEntry.models.map((model) => ({ ...model }));
     resetModelSettingsDraft();
   }
 

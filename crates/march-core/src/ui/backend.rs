@@ -30,7 +30,7 @@ use super::{
     UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
     UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultProviderRequest, UiSetTaskModelRequest,
+    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
     UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
     UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
     UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,

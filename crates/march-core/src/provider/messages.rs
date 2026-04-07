@@ -209,13 +209,23 @@ pub fn function_tools_for_context(context: &AgentContext) -> Vec<FunctionToolDef
 
 pub fn server_tool_definition(tool: &ServerToolConfig) -> Value {
     match (tool.capability, tool.format) {
-        (ServerToolCapability::WebSearch, ServerToolFormat::OpenAi) => {
-            json!({ "type": "web_search_preview" })
+        (ServerToolCapability::WebSearch, ServerToolFormat::OpenAiResponses) => {
+            // OpenAI Responses API expects the built-in web tool as "web_search".
+            json!({ "type": "web_search" })
         }
-        (ServerToolCapability::CodeExecution, ServerToolFormat::OpenAi) => {
+        (ServerToolCapability::CodeExecution, ServerToolFormat::OpenAiResponses) => {
             json!({ "type": "code_interpreter" })
         }
-        (ServerToolCapability::FileSearch, ServerToolFormat::OpenAi) => {
+        (ServerToolCapability::FileSearch, ServerToolFormat::OpenAiResponses) => {
+            json!({ "type": "file_search" })
+        }
+        (ServerToolCapability::WebSearch, ServerToolFormat::OpenAiChatCompletions) => {
+            json!({ "type": "web_search_preview" })
+        }
+        (ServerToolCapability::CodeExecution, ServerToolFormat::OpenAiChatCompletions) => {
+            json!({ "type": "code_interpreter" })
+        }
+        (ServerToolCapability::FileSearch, ServerToolFormat::OpenAiChatCompletions) => {
             json!({ "type": "file_search" })
         }
         (ServerToolCapability::WebSearch, ServerToolFormat::Anthropic) => {

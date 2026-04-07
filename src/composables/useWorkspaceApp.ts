@@ -135,12 +135,10 @@ export function useWorkspaceApp() {
   const {
     settingsOpen,
     providerSettings,
-    providerModels,
-    providerSuggestedModels,
-    providerModelsLoading,
     providerProbeModels,
     providerProbeSuggestedModels,
     providerProbeModelsLoading,
+    providerTestLoading,
     providerTestMessage,
     providerTestSuccess,
     refreshProviderSettings,
@@ -154,14 +152,11 @@ export function useWorkspaceApp() {
     saveAgent,
     deleteAgent,
     restoreMarchPrompt,
-    saveDefaultProvider,
-    loadProviderModelsForSettings,
+    saveDefaultModel,
     loadProbeModels,
+    invalidateProbeModelsCache,
   } = useProviderSettings({
     runWorkspaceAction,
-    setErrorMessage: (message) => {
-      errorMessage.value = message;
-    },
     humanizeError,
   });
 
@@ -203,9 +198,12 @@ export function useWorkspaceApp() {
     baseUrl: string;
     apiKey: string;
     probeModel?: string;
+    forceRefresh?: boolean;
   }) {
     try {
-      await loadProbeModels(input);
+      await loadProbeModels(input, {
+        forceRefresh: input.forceRefresh,
+      });
       errorMessage.value = '';
     } catch (error) {
       errorMessage.value = humanizeError(error);
@@ -253,12 +251,10 @@ export function useWorkspaceApp() {
     settingsOpen,
     theme,
     providerSettings,
-    providerModels,
-    providerSuggestedModels,
-    providerModelsLoading,
     providerProbeModels,
     providerProbeSuggestedModels,
     providerProbeModelsLoading,
+    providerTestLoading,
     providerTestMessage,
     providerTestSuccess,
     noteDialogOpen,
@@ -302,8 +298,8 @@ export function useWorkspaceApp() {
     restoreMarchPrompt,
     requestProbeModels,
     confirmDeleteProvider,
-    saveDefaultProvider,
-    loadProviderModelsForSettings,
+    saveDefaultModel,
+    invalidateProbeModelsCache,
     handleConfirmDialogOpenChange,
     submitConfirmDialog,
     minimizeWindow,

@@ -1,38 +1,34 @@
 import { ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { ProviderConnectionTestResult, ProviderModelsView, ProviderSettingsView } from '@/data/mock';
+import type {
+  ProviderConnectionTestResult,
+  ProviderSettingsView,
+  ProviderModelsView,
+} from '@/data/mock';
+import { normalizeProviderBaseUrl } from '@/lib/providerBaseUrl';
 
 type UseProviderSettingsOptions = {
   runWorkspaceAction: (action: () => Promise<void>) => Promise<boolean>;
-  setErrorMessage: (message: string) => void;
   humanizeError: (error: unknown) => string;
 };
 
 export function useProviderSettings({
   runWorkspaceAction,
-  setErrorMessage,
   humanizeError,
 }: UseProviderSettingsOptions) {
+  const probeModelCache = new Map<string, ProviderModelsView>();
   const settingsOpen = ref(false);
   const providerSettings = ref<ProviderSettingsView | null>(null);
-  const providerModels = ref<string[]>([]);
-  const providerSuggestedModels = ref<string[]>([]);
-  const providerModelsLoading = ref(false);
   const providerProbeModels = ref<string[]>([]);
   const providerProbeSuggestedModels = ref<string[]>([]);
   const providerProbeModelsLoading = ref(false);
+  const providerTestLoading = ref(false);
   const providerTestMessage = ref('');
   const providerTestSuccess = ref(false);
 
   async function refreshProviderSettings() {
     try {
       providerSettings.value = await invoke<ProviderSettingsView>('load_provider_settings');
-      if (providerSettings.value?.defaultProviderId) {
-        await loadProviderModelsForSettings(providerSettings.value.defaultProviderId);
-      } else {
-        providerModels.value = [];
-        providerSuggestedModels.value = [];
-      }
     } catch (error) {
       console.warn('Failed to load provider settings.', error);
     }
@@ -40,6 +36,8 @@ export function useProviderSettings({
 
   async function openSettings() {
     settingsOpen.value = true;
+    // Open the shell first so a slow or stalled backend refresh does not make
+    // the settings entry look unclickable.
     await refreshProviderSettings();
   }
 
@@ -47,16 +45,43 @@ export function useProviderSettings({
     settingsOpen.value = false;
   }
 
+  function buildProbeModelsCacheKey(input: {
+    id?: number;
+    providerType: string;
+    baseUrl: string;
+    apiKey: string;
+  }) {
+    return JSON.stringify({
+      id: input.id ?? null,
+      providerType: input.providerType.trim(),
+      baseUrl: normalizeProviderBaseUrl(input.providerType, input.baseUrl),
+      apiKey: input.apiKey.trim(),
+    });
+  }
+
+  function normalizeProviderInput<T extends { providerType: string; baseUrl: string }>(input: T): T {
+    return {
+      ...input,
+      baseUrl: normalizeProviderBaseUrl(input.providerType, input.baseUrl),
+    };
+  }
+
+  function applyProbeModelResponse(response: ProviderModelsView) {
+    providerProbeModels.value = response.available_models;
+    providerProbeSuggestedModels.value = response.suggested_models;
+  }
+
+  function invalidateProbeModelsCache() {
+    probeModelCache.clear();
+  }
+
   async function saveProvider(input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string }) {
     await runWorkspaceAction(async () => {
       providerSettings.value = await invoke<ProviderSettingsView>('upsert_provider', {
-        input,
+        input: normalizeProviderInput(input),
       });
     });
-
-    if (providerSettings.value?.defaultProviderId) {
-      await loadProviderModelsForSettings(providerSettings.value.defaultProviderId);
-    }
+    invalidateProbeModelsCache();
   }
 
   async function deleteProvider(providerId: number) {
@@ -65,42 +90,17 @@ export function useProviderSettings({
         input: { providerId },
       });
     });
-
-    if (providerSettings.value?.defaultProviderId) {
-      await loadProviderModelsForSettings(providerSettings.value.defaultProviderId);
-      return;
-    }
-    providerModels.value = [];
-    providerSuggestedModels.value = [];
+    invalidateProbeModelsCache();
   }
 
-  async function saveDefaultProvider(input: { providerId: number; model: string }) {
+  async function saveDefaultModel(input: { modelConfigId?: number | null }) {
     await runWorkspaceAction(async () => {
-      providerSettings.value = await invoke<ProviderSettingsView>('set_default_provider', {
+      providerSettings.value = await invoke<ProviderSettingsView>('set_default_model', {
         input: {
-          providerId: input.providerId,
-          model: input.model,
+          modelConfigId: input.modelConfigId ?? null,
         },
       });
     });
-    await loadProviderModelsForSettings(input.providerId);
-  }
-
-  async function loadProviderModelsForSettings(providerId: number) {
-    providerModelsLoading.value = true;
-    try {
-      const response = await invoke<ProviderModelsView>('list_provider_models_for_settings', {
-        providerId,
-      });
-      providerModels.value = response.available_models;
-      providerSuggestedModels.value = response.suggested_models;
-    } catch (error) {
-      providerModels.value = [];
-      providerSuggestedModels.value = [];
-      setErrorMessage(humanizeError(error));
-    } finally {
-      providerModelsLoading.value = false;
-    }
   }
 
   async function loadProbeModels(input: {
@@ -109,14 +109,26 @@ export function useProviderSettings({
     baseUrl: string;
     apiKey: string;
     probeModel?: string;
+  }, options?: {
+    forceRefresh?: boolean;
   }) {
+    const normalizedInput = normalizeProviderInput(input);
+    const cacheKey = buildProbeModelsCacheKey(normalizedInput);
+    if (!options?.forceRefresh) {
+      const cachedResponse = probeModelCache.get(cacheKey);
+      if (cachedResponse) {
+        applyProbeModelResponse(cachedResponse);
+        return cachedResponse;
+      }
+    }
+
     providerProbeModelsLoading.value = true;
     try {
       const response = await invoke<ProviderModelsView>('list_probe_models', {
-        input,
+        input: normalizedInput,
       });
-      providerProbeModels.value = response.available_models;
-      providerProbeSuggestedModels.value = response.suggested_models;
+      probeModelCache.set(cacheKey, response);
+      applyProbeModelResponse(response);
       return response;
     } catch (error) {
       providerProbeModels.value = [];
@@ -135,29 +147,35 @@ export function useProviderSettings({
     apiKey: string;
     probeModel?: string;
   }) {
+    providerTestLoading.value = true;
     providerTestMessage.value = '';
     providerTestSuccess.value = false;
+    const normalizedInput = normalizeProviderInput(input);
     const resultHolder: { value?: ProviderConnectionTestResult } = {};
     let failureMessage = '';
-    await runWorkspaceAction(async () => {
-      try {
-        resultHolder.value = await invoke<ProviderConnectionTestResult>('test_provider_connection', {
-          input,
-        });
-      } catch (error) {
-        failureMessage = humanizeError(error);
-        throw error;
+    try {
+      await runWorkspaceAction(async () => {
+        try {
+          resultHolder.value = await invoke<ProviderConnectionTestResult>('test_provider_connection', {
+            input: normalizedInput,
+          });
+        } catch (error) {
+          failureMessage = humanizeError(error);
+          throw error;
+        }
+      });
+      const result = resultHolder.value;
+      if (result) {
+        providerTestSuccess.value = result.success;
+        providerTestMessage.value = result.message;
+      } else {
+        providerTestSuccess.value = false;
+        providerTestMessage.value = failureMessage || '测试连通性失败，请查看顶部错误信息。';
       }
-    });
-    const result = resultHolder.value;
-    if (result) {
-      providerTestSuccess.value = result.success;
-      providerTestMessage.value = result.message;
-    } else {
-      providerTestSuccess.value = false;
-      providerTestMessage.value = failureMessage || '测试连通性失败，请查看顶部错误信息。';
+      return result;
+    } finally {
+      providerTestLoading.value = false;
     }
-    return result;
   }
 
   async function saveProviderModel(input: {
@@ -177,6 +195,8 @@ export function useProviderSettings({
     }>;
   }) {
     await runWorkspaceAction(async () => {
+      // Use the command response directly so "save" is a single write+refresh hop.
+      // A second load call makes this path uniquely fragile compared with other settings saves.
       providerSettings.value = await invoke<ProviderSettingsView>('upsert_provider_model', {
         input,
       });
@@ -227,12 +247,10 @@ export function useProviderSettings({
   return {
     settingsOpen,
     providerSettings,
-    providerModels,
-    providerSuggestedModels,
-    providerModelsLoading,
     providerProbeModels,
     providerProbeSuggestedModels,
     providerProbeModelsLoading,
+    providerTestLoading,
     providerTestMessage,
     providerTestSuccess,
     refreshProviderSettings,
@@ -246,8 +264,8 @@ export function useProviderSettings({
     saveAgent,
     deleteAgent,
     restoreMarchPrompt,
-    saveDefaultProvider,
-    loadProviderModelsForSettings,
+    saveDefaultModel,
     loadProbeModels,
+    invalidateProbeModelsCache,
   };
 }

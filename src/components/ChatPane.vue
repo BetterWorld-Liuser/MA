@@ -246,15 +246,15 @@
         :style="modelMenuStyle"
       >
         <ChatPaneModelMenu
-          :provider-groups="providerGroups"
-          :filtered-provider-groups="filteredProviderGroups"
+          :model-items="modelItems"
+          :filtered-model-items="filteredModelItems"
           :model-search-query="modelSearchQuery"
           :models-loading="modelsLoading"
           :models-refreshing="modelsRefreshing"
           :provider-type-label="providerTypeLabel"
           :is-model-active="isModelActive"
           @update:model-search-query="modelSearchQuery = $event"
-          @select-model="selectModel($event.providerId, $event.model)"
+          @select-model="selectModel($event.modelConfigId, $event.model)"
         />
       </div>
     </Teleport>
@@ -333,7 +333,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ComposerImageAttachment[] }];
-  setModel: [selection: { providerId?: number | null; model: string }];
+  setModel: [selection: { modelConfigId: number }];
   setModelSettings: [settings: {
     temperature?: number | null;
     topP?: number | null;
@@ -400,6 +400,7 @@ const {
   modelSettingsPanelRef,
   modelSettingsOpen,
   providerGroups,
+  modelItems,
   modelSearchQuery,
   modelsLoading,
   modelsRefreshing,
@@ -412,7 +413,7 @@ const {
   isCustomWorkingDirectory,
   workingDirectoryLabel,
   workingDirectoryTooltip,
-  filteredProviderGroups,
+  filteredModelItems,
   temperatureDraft,
   topPDraft,
   presencePenaltyDraft,

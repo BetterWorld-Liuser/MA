@@ -1,179 +1,199 @@
 <template>
-  <div ref="scrollContainer" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2.5 py-2">
-    <div v-if="!chat.length" class="empty-state">
-      <p class="text-[12px] text-text">No messages yet.</p>
-      <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
-    </div>
-
-    <TransitionGroup name="chat-history" tag="div">
-      <article
-        v-for="(message, index) in chat"
-        :key="messageKey(message, index)"
-        class="chat-row"
-        :class="message.role === 'assistant' ? 'chat-row-assistant' : 'chat-row-user'"
-      >
-        <span class="message-avatar shrink-0">{{ message.author.slice(0, 1) }}</span>
-
-        <div class="message-stack" :class="message.role === 'assistant' ? 'items-start' : 'items-end'">
-          <div class="message-meta" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-            <span class="text-[11px] font-semibold text-text">{{ message.author }}</span>
-            <time class="font-mono text-[9px] text-text-dim">{{ message.time }}</time>
-            <span
-              v-if="message.variant === 'intermediate'"
-              class="message-meta-badge"
-            >
-              过程
-            </span>
+  <div class="relative min-h-0 flex-1">
+    <div ref="scrollContainer" class="min-h-0 h-full overflow-x-hidden overflow-y-auto px-2.5 py-2" @scroll="handleScroll">
+      <div class="chat-stage">
+      <Transition name="chat-empty-fade">
+        <div v-if="!hasRenderableContent" class="empty-state-overlay">
+          <div class="empty-state">
+            <p class="text-[12px] text-text">No messages yet.</p>
+            <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
           </div>
+        </div>
+      </Transition>
 
-          <div
-            class="message-bubble"
-            :class="[
-              message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user',
-              message.variant === 'intermediate' ? 'message-bubble-intermediate' : '',
-            ]"
-            @click.capture="message.role === 'assistant' ? handleMarkdownLinkClick($event) : undefined"
+      <div class="chat-content-layer" :class="hasRenderableContent ? 'chat-content-layer-visible' : ''">
+        <TransitionGroup name="chat-history" tag="div">
+          <article
+            v-for="(message, index) in chat"
+            :key="messageKey(message, index)"
+            class="chat-row"
+            :class="message.role === 'assistant' ? 'chat-row-assistant' : 'chat-row-user'"
           >
-            <div v-if="message.images?.length" class="message-image-grid">
-              <button
-                v-for="image in message.images"
-                :key="image.id"
-                class="message-image-card"
-                type="button"
-                @click="previewImage = image"
+            <span class="message-avatar shrink-0">{{ message.author.slice(0, 1) }}</span>
+
+            <div class="message-stack" :class="message.role === 'assistant' ? 'items-start' : 'items-end'">
+              <div class="message-meta" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
+                <span class="text-[11px] font-semibold text-text">{{ message.author }}</span>
+                <time class="font-mono text-[9px] text-text-dim">{{ message.time }}</time>
+                <span
+                  v-if="message.variant === 'intermediate'"
+                  class="message-meta-badge"
+                >
+                  过程
+                </span>
+              </div>
+
+              <div
+                class="message-bubble"
+                :class="[
+                  message.role === 'assistant' ? 'message-bubble-assistant' : 'message-bubble-user',
+                  message.variant === 'intermediate' ? 'message-bubble-intermediate' : '',
+                ]"
+                @click.capture="message.role === 'assistant' ? handleMarkdownLinkClick($event) : undefined"
               >
-                <img class="message-image-thumb" :src="image.previewUrl" :alt="image.name" />
-                <span class="message-image-caption">{{ image.name }}</span>
-              </button>
-            </div>
+                <div v-if="message.images?.length" class="message-image-grid">
+                  <button
+                    v-for="image in message.images"
+                    :key="image.id"
+                    class="message-image-card"
+                    type="button"
+                    @click="previewImage = image"
+                  >
+                    <img class="message-image-thumb" :src="image.previewUrl" :alt="image.name" />
+                    <span class="message-image-caption">{{ image.name }}</span>
+                  </button>
+                </div>
 
-            <MarkdownRender
-              v-if="message.role === 'assistant'"
-              custom-id="ma-chat-message"
-              :content="renderAssistantContent(message.content)"
-              :final="true"
-              :max-live-nodes="0"
-              :render-batch-size="16"
-              :render-batch-delay="8"
-            />
-            <p v-else class="whitespace-pre-wrap text-[12px] leading-[1.5] text-text">{{ message.content }}</p>
+                <MarkdownRender
+                  v-if="message.role === 'assistant'"
+                  custom-id="ma-chat-message"
+                  :content="renderAssistantContent(message.content)"
+                  :final="true"
+                  :max-live-nodes="0"
+                  :render-batch-size="16"
+                  :render-batch-delay="8"
+                />
+                <p v-else class="whitespace-pre-wrap text-[12px] leading-[1.5] text-text">{{ message.content }}</p>
 
-            <details v-if="message.tools?.length" class="message-tools">
-              <summary class="message-tools-summary">
-                <span>{{ formatToolSummaryLabel(message.tools.length) }}</span>
-                <span class="message-tools-summary-action">查看</span>
-              </summary>
-              <ul class="message-tools-list">
-                <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
-                  <span class="message-tools-item-label">{{ tool.label }}</span>
-                  <span class="message-tools-item-separator">·</span>
-                  <span class="message-tools-item-summary">{{ tool.summary }}</span>
-                </li>
-              </ul>
-            </details>
-          </div>
+                <details v-if="message.tools?.length" class="message-tools">
+                  <summary class="message-tools-summary">
+                    <span>{{ formatToolSummaryLabel(message.tools.length) }}</span>
+                    <span class="message-tools-summary-action">查看</span>
+                  </summary>
+                  <ul class="message-tools-list">
+                    <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
+                      <span class="message-tools-item-label">{{ tool.label }}</span>
+                      <span class="message-tools-item-separator">·</span>
+                      <span class="message-tools-item-summary">{{ tool.summary }}</span>
+                    </li>
+                  </ul>
+                </details>
+              </div>
 
-          <div class="message-actions" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
-            <button
-              class="message-copy-button"
-              type="button"
-              :aria-label="getCopyButtonLabel(message.content)"
-              :title="getCopyButtonLabel(message.content)"
-              @click="copyMessage(message.content)"
-            >
-              <Icon :icon="copiedContent === normalizeCopyContent(message.content) ? checkIcon : copyIcon" class="message-copy-icon" />
-            </button>
-          </div>
-        </div>
-      </article>
-    </TransitionGroup>
-
-    <article v-if="liveTurn" class="chat-row chat-row-assistant">
-      <span class="message-avatar shrink-0">{{ liveTurn.author.slice(0, 1) }}</span>
-
-      <div class="message-stack items-start">
-        <div class="message-meta justify-start">
-          <span class="text-[11px] font-semibold text-text">{{ liveTurn.author }}</span>
-          <time class="font-mono text-[9px] text-text-dim">...</time>
-        </div>
-
-        <Transition name="live-turn-swap" mode="out-in">
-          <div
-            :key="liveTurnContentKey"
-            class="message-bubble message-bubble-assistant opacity-90"
-            :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''"
-            @click.capture="handleMarkdownLinkClick"
-          >
-            <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
-              <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
-                <span></span>
-                <span></span>
-                <span></span>
-              </span>
-              <span class="live-status-label" :class="liveTurn.state === 'error' ? 'text-error' : ''">{{ liveTurn.statusLabel }}</span>
-            </div>
-            <MarkdownRender
-              v-if="liveTurn.content"
-              custom-id="ma-chat-streaming"
-              :content="renderAssistantContent(liveTurn.content)"
-              :final="liveTurn.state !== 'streaming'"
-              :max-live-nodes="0"
-              :render-batch-size="16"
-              :render-batch-delay="8"
-            />
-            <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
-              {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : `${liveTurn.author} 正在处理这一轮请求。` }}
-            </p>
-
-            <p
-              v-if="liveTurn.state === 'error' && liveTurn.content && liveTurn.errorMessage"
-              class="mt-2 whitespace-pre-wrap text-[11px] text-error"
-            >
-              {{ liveTurn.errorMessage }}
-            </p>
-
-            <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">
-              <div v-for="tool in liveTurn.tools" :key="tool.id" class="live-tool-item">
-                <span class="live-tool-state" :class="`live-tool-state-${tool.state}`"></span>
-                <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
+              <div class="message-actions" :class="message.role === 'assistant' ? 'justify-start' : 'justify-end'">
+                <button
+                  class="message-copy-button"
+                  type="button"
+                  :aria-label="getCopyButtonLabel(message.content)"
+                  :title="getCopyButtonLabel(message.content)"
+                  @click="copyMessage(message.content)"
+                >
+                  <Icon :icon="copiedContent === normalizeCopyContent(message.content) ? checkIcon : copyIcon" class="message-copy-icon" />
+                </button>
               </div>
             </div>
+          </article>
+        </TransitionGroup>
+
+        <article v-if="liveTurn" class="chat-row chat-row-assistant">
+          <span class="message-avatar shrink-0">{{ liveTurn.author.slice(0, 1) }}</span>
+
+          <div class="message-stack items-start">
+            <div class="message-meta justify-start">
+              <span class="text-[11px] font-semibold text-text">{{ liveTurn.author }}</span>
+              <time class="font-mono text-[9px] text-text-dim">...</time>
+            </div>
+
+            <Transition name="live-turn-swap" mode="out-in">
+              <div
+                :key="liveTurnContentKey"
+                class="message-bubble message-bubble-assistant opacity-90"
+                :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''"
+                @click.capture="handleMarkdownLinkClick"
+              >
+                <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
+                  <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </span>
+                  <span class="live-status-label" :class="liveTurn.state === 'error' ? 'text-error' : ''">{{ liveTurn.statusLabel }}</span>
+                </div>
+                <MarkdownRender
+                  v-if="liveTurn.content"
+                  custom-id="ma-chat-streaming"
+                  :content="renderAssistantContent(liveTurn.content)"
+                  :final="liveTurn.state !== 'streaming'"
+                  :max-live-nodes="0"
+                  :render-batch-size="16"
+                  :render-batch-delay="8"
+                />
+                <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
+                  {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : `${liveTurn.author} 正在处理这一轮请求。` }}
+                </p>
+
+                <p
+                  v-if="liveTurn.state === 'error' && liveTurn.content && liveTurn.errorMessage"
+                  class="mt-2 whitespace-pre-wrap text-[11px] text-error"
+                >
+                  {{ liveTurn.errorMessage }}
+                </p>
+
+                <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">
+                  <div v-for="tool in liveTurn.tools" :key="tool.id" class="live-tool-item">
+                    <span class="live-tool-state" :class="`live-tool-state-${tool.state}`"></span>
+                    <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
+                  </div>
+                </div>
+              </div>
+            </Transition>
+
+            <div class="message-actions justify-start">
+              <button
+                class="message-copy-button"
+                type="button"
+                aria-label="拷贝当前回复内容"
+                title="拷贝当前回复内容"
+                :disabled="!liveTurn.content"
+                @click="copyMessage(liveTurn.content)"
+              >
+                <Icon :icon="copiedContent === normalizeCopyContent(liveTurn.content) && liveTurn.content ? checkIcon : copyIcon" class="message-copy-icon" />
+              </button>
+            </div>
           </div>
-        </Transition>
-
-        <div class="message-actions justify-start">
-          <button
-            class="message-copy-button"
-            type="button"
-            aria-label="拷贝当前回复内容"
-            title="拷贝当前回复内容"
-            :disabled="!liveTurn.content"
-            @click="copyMessage(liveTurn.content)"
-          >
-            <Icon :icon="copiedContent === normalizeCopyContent(liveTurn.content) && liveTurn.content ? checkIcon : copyIcon" class="message-copy-icon" />
-          </button>
-        </div>
+        </article>
       </div>
-    </article>
+    </div>
 
-    <div ref="bottomAnchor" aria-hidden="true"></div>
+    <button
+      v-if="showJumpToBottomButton"
+      class="absolute bottom-5 right-5 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/38 text-text-dim/80 shadow-[0_6px_18px_rgba(0,0,0,0.18)] backdrop-blur-sm transition hover:border-white/20 hover:bg-black/55 hover:text-text focus:outline-none focus:ring-2 focus:ring-accent/35 focus:ring-offset-2 focus:ring-offset-base"
+      type="button"
+      aria-label="回到底部"
+      title="回到底部"
+      @click="jumpToBottom"
+    >
+      <Icon :icon="arrowDownIcon" class="h-3.5 w-3.5" />
+    </button>
 
-    <Teleport to="body">
-      <div v-if="previewImage" class="composer-image-preview-backdrop" @click="previewImage = null">
-        <div class="composer-image-preview-panel" @click.stop>
-          <button class="composer-image-preview-close" type="button" @click="previewImage = null">关闭</button>
-          <img class="composer-image-preview-image" :src="previewImage.previewUrl" :alt="previewImage.name" />
-          <p class="composer-image-preview-name">{{ previewImage.name }}</p>
+      <Teleport to="body">
+        <div v-if="previewImage" class="composer-image-preview-backdrop" @click="previewImage = null">
+          <div class="composer-image-preview-panel" @click.stop>
+            <button class="composer-image-preview-close" type="button" @click="previewImage = null">关闭</button>
+            <img class="composer-image-preview-image" :src="previewImage.previewUrl" :alt="previewImage.name" />
+            <p class="composer-image-preview-name">{{ previewImage.name }}</p>
+          </div>
         </div>
-      </div>
-    </Teleport>
+      </Teleport>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { invoke } from '@tauri-apps/api/core';
+import arrowDownIcon from '@iconify-icons/lucide/arrow-down';
 import checkIcon from '@iconify-icons/lucide/check';
 import copyIcon from '@iconify-icons/lucide/copy';
 import MarkdownRender from 'markstream-vue';
@@ -186,15 +206,27 @@ const props = defineProps<{
 }>();
 
 const scrollContainer = ref<HTMLElement | null>(null);
-const bottomAnchor = ref<HTMLElement | null>(null);
 const copiedContent = ref('');
 const previewImage = ref<ChatImageAttachment | null>(null);
 const hasInitializedTaskPosition = ref(false);
+const shouldStickToBottom = ref(true);
+const distanceFromBottom = ref(0);
 let copyFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 const CODE_SPAN_PATTERN = /```[\s\S]*?```|`[^`\n]+`/g;
 const BARE_URL_PATTERN = /https?:\/\/[^\s<]+/g;
+const AUTO_FOLLOW_BOTTOM_THRESHOLD = 48;
+const JUMP_TO_BOTTOM_BUTTON_THRESHOLD = 80;
 
 const chatLength = computed(() => props.chat.length);
+const hasRenderableContent = computed(() => props.chat.length > 0 || !!props.liveTurn);
+const showJumpToBottomButton = computed(() => {
+  if (!scrollContainer.value || !hasRenderableContent.value) {
+    return false;
+  }
+
+  const hasScrollableOverflow = scrollContainer.value.scrollHeight - scrollContainer.value.clientHeight > 8;
+  return hasScrollableOverflow && distanceFromBottom.value > JUMP_TO_BOTTOM_BUTTON_THRESHOLD;
+});
 const liveTurnContentKey = computed(() => {
   if (!props.liveTurn) {
     return 'live-turn-empty';
@@ -218,8 +250,12 @@ watch(
       return;
     }
 
+    if (!shouldStickToBottom.value) {
+      return;
+    }
+
     await nextTick();
-    scrollToBottom('smooth');
+    scrollToBottom('auto');
   },
 );
 
@@ -228,6 +264,7 @@ watch(
   async () => {
     hasInitializedTaskPosition.value = false;
     await nextTick();
+    shouldStickToBottom.value = true;
     scrollToBottom('auto');
     hasInitializedTaskPosition.value = true;
   },
@@ -241,11 +278,20 @@ watch(
       return;
     }
 
+    if (!shouldStickToBottom.value && previousTurn) {
+      return;
+    }
+
     await nextTick();
-    scrollToBottom(previousTurn ? 'auto' : 'smooth');
+    scrollToBottom('auto');
   },
   { deep: true },
 );
+
+onMounted(async () => {
+  await nextTick();
+  updateStickToBottom();
+});
 
 onUnmounted(() => {
   if (copyFeedbackTimer) {
@@ -255,17 +301,34 @@ onUnmounted(() => {
 });
 
 function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
-  if (bottomAnchor.value) {
-    bottomAnchor.value.scrollIntoView({ behavior, block: 'end' });
-    return;
-  }
-
   if (scrollContainer.value) {
     scrollContainer.value.scrollTo({
       top: scrollContainer.value.scrollHeight,
       behavior,
     });
   }
+}
+
+function handleScroll() {
+  updateStickToBottom();
+}
+
+function jumpToBottom() {
+  shouldStickToBottom.value = true;
+  scrollToBottom('smooth');
+}
+
+function updateStickToBottom() {
+  if (!scrollContainer.value) {
+    distanceFromBottom.value = 0;
+    shouldStickToBottom.value = true;
+    return;
+  }
+
+  // 只在用户仍停留在底部附近时自动跟随，避免最终沉淀消息和输入区重排时“抢滚动”。
+  distanceFromBottom.value =
+    scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop - scrollContainer.value.clientHeight;
+  shouldStickToBottom.value = distanceFromBottom.value <= AUTO_FOLLOW_BOTTOM_THRESHOLD;
 }
 
 async function copyMessage(content: string) {

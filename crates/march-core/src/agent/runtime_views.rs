@@ -95,7 +95,10 @@ impl AgentSession {
         )
     }
 
-    pub(crate) fn estimate_context_pressure(&self, context_budget_tokens: usize) -> Option<ContextPressure> {
+    pub(crate) fn estimate_context_pressure(
+        &self,
+        context_budget_tokens: usize,
+    ) -> Option<ContextPressure> {
         let budget = context_budget_tokens.max(1);
         let size = estimate_token_count(&self.system_core_for_active_agent())
             + self
