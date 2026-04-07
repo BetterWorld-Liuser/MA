@@ -11,6 +11,7 @@ use crate::context::{
     ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus,
     ToolSummary, join_text_blocks,
 };
+use crate::memory::{MemoryIndexEntry, MemoryRecord, MemoryScope};
 use crate::paths::clean_path;
 use crate::provider::format_provider_response_for_debug;
 use crate::settings::{
@@ -23,10 +24,10 @@ use super::{
     UiAgentProfileView, UiAgentStatusPhase, UiAgentToolStatus, UiAssistantMessageCheckpointType,
     UiContextPressureView, UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView,
     UiDebugToolCallView, UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
-    UiModelCapabilitiesView, UiModifiedByView, UiNoteView, UiOpenFileView, UiProviderModelView,
-    UiProviderSettingsView, UiProviderView, UiRoleView, UiRuntimeSnapshot, UiServerToolView,
-    UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary, UiToolSummaryView,
-    UiTurnView,
+    UiMemoryDetailView, UiMemoryEntryView, UiModelCapabilitiesView, UiModifiedByView, UiNoteView,
+    UiOpenFileView, UiProviderModelView, UiProviderSettingsView, UiProviderView, UiRoleView,
+    UiRuntimeSnapshot, UiServerToolView, UiShellView, UiSkillView, UiSystemStatusView,
+    UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
 };
 
 impl UiTaskSnapshot {
@@ -164,6 +165,8 @@ impl UiRuntimeSnapshot {
         available_shells: Vec<UiShellView>,
         open_files: Vec<UiFileSnapshotView>,
         skills: Vec<UiSkillView>,
+        memories: Vec<UiMemoryEntryView>,
+        memory_warnings: Vec<String>,
         system_status: UiSystemStatusView,
         context_usage: UiContextUsageView,
     ) -> Self {
@@ -172,6 +175,8 @@ impl UiRuntimeSnapshot {
             available_shells,
             open_files,
             skills,
+            memories,
+            memory_warnings,
             system_status,
             context_usage,
         }
@@ -490,6 +495,47 @@ impl UiContextUsageSectionView {
         Self {
             name: name.into(),
             tokens,
+        }
+    }
+}
+
+impl From<MemoryIndexEntry> for UiMemoryEntryView {
+    fn from(value: MemoryIndexEntry) -> Self {
+        Self {
+            id: value.id,
+            memory_type: value.memory_type,
+            topic: value.topic,
+            title: value.title,
+            level: match value.level {
+                crate::memory::MemoryLevel::Project => "project",
+                crate::memory::MemoryLevel::Global => "global",
+            }
+            .to_string(),
+        }
+    }
+}
+
+impl From<MemoryRecord> for UiMemoryDetailView {
+    fn from(value: MemoryRecord) -> Self {
+        Self {
+            id: value.prefixed_id(),
+            memory_type: value.memory_type,
+            topic: value.topic,
+            title: value.title,
+            content: value.content,
+            tags: value.tags,
+            scope: match value.scope {
+                MemoryScope::Shared => "shared".to_string(),
+                MemoryScope::Agent(name) => name,
+            },
+            level: match value.level {
+                crate::memory::MemoryLevel::Project => "project",
+                crate::memory::MemoryLevel::Global => "global",
+            }
+            .to_string(),
+            access_count: value.access_count,
+            skip_count: value.skip_count,
+            updated_at: system_time_to_unix(value.updated_at),
         }
     }
 }

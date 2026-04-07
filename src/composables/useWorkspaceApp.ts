@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useLiveTurns } from '@/composables/useLiveTurns';
 import { useNoteDialog } from '@/composables/useNoteDialog';
+import { useMemoryDialog } from '@/composables/useMemoryDialog';
 import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
 import { useProviderSettings } from '@/composables/useProviderSettings';
 import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot } from '@/data/mock';
@@ -12,10 +13,11 @@ import { useWorkspaceTaskActions } from '@/composables/workspaceApp/useWorkspace
 import {
   humanizeError,
   type ChatPaneHandle,
+  type MemoryEditorDialogHandle,
   type NoteEditorDialogHandle,
 } from '@/composables/workspaceApp/types';
 
-export type { ChatPaneHandle, NoteEditorDialogHandle } from '@/composables/workspaceApp/types';
+export type { ChatPaneHandle, MemoryEditorDialogHandle, NoteEditorDialogHandle } from '@/composables/workspaceApp/types';
 
 export function useWorkspaceApp() {
   const appTitle = 'March';
@@ -25,6 +27,7 @@ export function useWorkspaceApp() {
   const errorMessage = ref('');
   const chatPaneRef = ref<ChatPaneHandle | null>(null);
   const noteDialogRef = ref<NoteEditorDialogHandle | null>(null);
+  const memoryDialogRef = ref<MemoryEditorDialogHandle | null>(null);
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
   const workspacePath = computed(() => snapshot.value?.workspace_path);
   const {
@@ -37,6 +40,7 @@ export function useWorkspaceApp() {
   } = useWindowControls();
 
   let unlistenAgentProgress: UnlistenFn | null = null;
+  let unlistenMemoryChanged: UnlistenFn | null = null;
 
   const {
     liveTurns,
@@ -76,6 +80,23 @@ export function useWorkspaceApp() {
     handleNoteDialogOpenChange,
     submitNoteDialog,
   } = useNoteDialog();
+  const {
+    memoryDialogOpen,
+    memoryDialogMode,
+    memoryDraftId,
+    memoryDraftType,
+    memoryDraftTopic,
+    memoryDraftTitle,
+    memoryDraftContent,
+    memoryDraftTags,
+    memoryDraftScope,
+    memoryDraftLevel,
+    openCreateMemoryDialog,
+    openEditMemoryDialog,
+    closeMemoryDialog,
+    handleMemoryDialogOpenChange,
+    submitMemoryDialog,
+  } = useMemoryDialog();
 
   const {
     confirmDialogOpen,
@@ -101,8 +122,12 @@ export function useWorkspaceApp() {
     cancelCurrentTurn,
     addNote,
     editNote,
+    addMemory,
+    editMemory,
     handleSubmitNoteDialog,
+    handleSubmitMemoryDialog,
     deleteNote,
+    deleteMemory,
     toggleOpenFileLock,
     closeOpenFile,
     openFilesFromComposer,
@@ -126,10 +151,14 @@ export function useWorkspaceApp() {
     clearArchivedIntermediateTurns,
     openCreateNoteDialog,
     openEditNoteDialog,
+    openCreateMemoryDialog,
+    openEditMemoryDialog,
     openConfirmDialog,
     closeConfirmDialog,
     noteDialogRef,
+    memoryDialogRef,
     submitNoteDialog,
+    submitMemoryDialog,
   });
 
   const {
@@ -173,6 +202,11 @@ export function useWorkspaceApp() {
     unlistenAgentProgress = await listen<BackendAgentProgressEvent>('march://agent-progress', (event) => {
       applyAgentProgress(event.payload);
     });
+    unlistenMemoryChanged = await listen('march://memory-changed', async () => {
+      if (!busy.value) {
+        await refreshWorkspace(workspaceState.activeTaskIdNumber.value);
+      }
+    });
     await refreshWorkspace();
     await refreshProviderSettings();
   }
@@ -181,6 +215,10 @@ export function useWorkspaceApp() {
     if (unlistenAgentProgress) {
       unlistenAgentProgress();
       unlistenAgentProgress = null;
+    }
+    if (unlistenMemoryChanged) {
+      unlistenMemoryChanged();
+      unlistenMemoryChanged = null;
     }
     disposeWindowState();
   }
@@ -243,6 +281,7 @@ export function useWorkspaceApp() {
     isMaximized,
     chatPaneRef,
     noteDialogRef,
+    memoryDialogRef,
     workspace: workspaceState.resolvedWorkspace,
     activeTaskIdNumber: workspaceState.activeTaskIdNumber,
     hasPendingSend,
@@ -261,6 +300,16 @@ export function useWorkspaceApp() {
     noteDialogMode,
     noteDraftId,
     noteDraftContent,
+    memoryDialogOpen,
+    memoryDialogMode,
+    memoryDraftId,
+    memoryDraftType,
+    memoryDraftTopic,
+    memoryDraftTitle,
+    memoryDraftContent,
+    memoryDraftTags,
+    memoryDraftScope,
+    memoryDraftLevel,
     confirmDialogOpen,
     confirmDialogTitle,
     confirmDialogDescription,
@@ -275,10 +324,16 @@ export function useWorkspaceApp() {
     cancelCurrentTurn,
     addNote,
     editNote,
+    addMemory,
+    editMemory,
     handleSubmitNoteDialog,
+    handleSubmitMemoryDialog,
     closeNoteDialog,
+    closeMemoryDialog,
     handleNoteDialogOpenChange,
+    handleMemoryDialogOpenChange,
     deleteNote,
+    deleteMemory,
     toggleOpenFileLock,
     closeOpenFile,
     openFilesFromComposer,

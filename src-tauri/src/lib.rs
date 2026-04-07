@@ -8,15 +8,16 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
 use march::ui::{
     UiAppBackend, UiCloseOpenFileRequest, UiCreateTaskRequest, UiDeleteAgentRequest,
-    UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
-    UiDeleteTaskRequest, UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest,
+    UiDeleteMemoryRequest, UiDeleteNoteRequest, UiDeleteProviderModelRequest,
+    UiDeleteProviderRequest, UiDeleteTaskRequest, UiGetMemoryRequest, UiListMemoriesRequest,
+    UiLoadWorkspaceImageRequest, UiMemoryDetailView, UiMentionTargetView, UiOpenFilesRequest,
     UiProbeProviderModelCapabilitiesRequest, UiProbeProviderModelCapabilitiesView,
     UiProbeProviderModelsRequest, UiProviderModelsView, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
     UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
     UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
-    UiToggleOpenFileLockRequest, UiUpsertAgentRequest, UiUpsertNoteRequest,
+    UiToggleOpenFileLockRequest, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
     UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
     UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_model_capabilities, fetch_probe_models,
     fetch_provider_models_for_provider, fetch_task_model_selector,
@@ -26,6 +27,29 @@ use march::ui::{
 struct AppState {
     workspace_path: PathBuf,
     cancellations: Mutex<HashMap<i64, Arc<TurnCancellation>>>,
+}
+
+fn start_memory_watcher(
+    app: &tauri::AppHandle,
+    workspace_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use notify::{RecursiveMode, Watcher};
+    let memory_dir = workspace_path.join(".march").join("memories");
+    std::fs::create_dir_all(&memory_dir)
+        .with_context(|| format!("failed to create {}", memory_dir.display()))?;
+    let app_handle = app.clone();
+    let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+        if let Ok(event) = result {
+            let _ = app_handle.emit("march://memory-changed", event.paths);
+        }
+    })
+    .context("failed to create memory watcher")?;
+    let mut watcher = Box::new(watcher);
+    watcher
+        .watch(&memory_dir, RecursiveMode::Recursive)
+        .with_context(|| format!("failed to watch {}", memory_dir.display()))?;
+    app.manage(Mutex::new(watcher));
+    Ok(())
 }
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -206,6 +230,52 @@ fn delete_note(
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
     backend
         .handle_delete_note(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_memories(
+    state: tauri::State<'_, AppState>,
+    input: UiListMemoriesRequest,
+) -> Result<Vec<UiMemoryDetailView>, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .list_memories(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_memory(
+    state: tauri::State<'_, AppState>,
+    input: UiGetMemoryRequest,
+) -> Result<UiMemoryDetailView, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend.get_memory(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn upsert_memory(
+    state: tauri::State<'_, AppState>,
+    input: UiUpsertMemoryRequest,
+) -> Result<UiWorkspaceSnapshot, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_upsert_memory(input)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_memory(
+    state: tauri::State<'_, AppState>,
+    input: UiDeleteMemoryRequest,
+) -> Result<UiWorkspaceSnapshot, String> {
+    let mut backend =
+        UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    backend
+        .handle_delete_memory(input)
         .map_err(|error| error.to_string())
 }
 
@@ -500,11 +570,15 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
-            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                normalize_main_window_bounds(&window)?;
+        .setup({
+            let watcher_workspace_path = workspace_path.clone();
+            move |app| {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    normalize_main_window_bounds(&window)?;
+                }
+                start_memory_watcher(app.handle(), &watcher_workspace_path)?;
+                Ok(())
             }
-            Ok(())
         })
         .manage(AppState {
             workspace_path,
@@ -519,6 +593,10 @@ pub fn run() {
             cancel_turn,
             upsert_note,
             delete_note,
+            list_memories,
+            get_memory,
+            upsert_memory,
+            delete_memory,
             toggle_open_file_lock,
             close_open_file,
             open_files,

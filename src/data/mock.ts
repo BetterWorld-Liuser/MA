@@ -80,6 +80,28 @@ export type SkillItem = {
   opened: boolean;
 };
 
+export type MemoryItem = {
+  id: string;
+  type: string;
+  topic: string;
+  title: string;
+  level: 'project' | 'global';
+};
+
+export type MemoryDetail = {
+  id: string;
+  memoryType: string;
+  topic: string;
+  title: string;
+  content: string;
+  tags: string[];
+  scope: string;
+  level: 'project' | 'global';
+  accessCount: number;
+  skipCount: number;
+  updatedAt: number;
+};
+
 export type ContextUsage = {
   percent: number;
   current: string;
@@ -120,6 +142,8 @@ export type WorkspaceView = {
   openFiles: OpenFileItem[];
   hints: HintItem[];
   skills: SkillItem[];
+  memories: MemoryItem[];
+  memoryWarnings: string[];
   contextUsage: ContextUsage;
   debugRounds: DebugRoundItem[];
   liveTurn?: LiveTurn;
@@ -249,6 +273,14 @@ export type BackendWorkspaceSnapshot = {
         description: string;
         opened: boolean;
       }>;
+      memories: Array<{
+        id: string;
+        memory_type: string;
+        topic: string;
+        title: string;
+        level: string;
+      }>;
+      memory_warnings: string[];
       system_status: {
         locked_files: string[];
         context_pressure?: {
@@ -505,6 +537,20 @@ export type ProviderSettingsView = {
   defaultModel?: string | null;
 };
 
+export type BackendMemoryDetailView = {
+  id: string;
+  memory_type: string;
+  topic: string;
+  title: string;
+  content: string;
+  tags: string[];
+  scope: string;
+  level: string;
+  access_count: number;
+  skip_count: number;
+  updated_at: number;
+};
+
 export const mockWorkspace: WorkspaceView = {
   title: '默认任务',
   tasks: [
@@ -572,6 +618,16 @@ export const mockWorkspace: WorkspaceView = {
       opened: false,
     },
   ] satisfies SkillItem[],
+  memories: [
+    {
+      id: 'p:auth-timeout-fix',
+      type: 'pattern',
+      topic: 'auth',
+      title: '登录超时问题通常先看 token 续期链路',
+      level: 'project',
+    },
+  ] satisfies MemoryItem[],
+  memoryWarnings: [] as string[],
   contextUsage: {
     percent: 42,
     current: '10.2k',
@@ -684,6 +740,14 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       description: skill.description,
       opened: skill.opened,
     })) ?? [],
+    memories: activeTask?.runtime?.memories.map((memory) => ({
+      id: memory.id,
+      type: memory.memory_type,
+      topic: memory.topic,
+      title: memory.title,
+      level: memory.level === 'global' ? 'global' : 'project',
+    })) ?? [],
+    memoryWarnings: activeTask?.runtime?.memory_warnings ?? [],
     contextUsage: formatContextUsage(activeTask?.runtime?.context_usage),
     debugRounds: activeTask?.debug_trace?.rounds.map((round) => ({
       iteration: round.iteration,

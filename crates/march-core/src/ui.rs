@@ -121,6 +121,40 @@ pub struct UiDeleteNoteRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UiListMemoriesRequest {
+    pub task_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiGetMemoryRequest {
+    pub task_id: Option<i64>,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiUpsertMemoryRequest {
+    pub task_id: Option<i64>,
+    pub id: String,
+    pub memory_type: String,
+    pub topic: String,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub scope: Option<String>,
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiDeleteMemoryRequest {
+    pub task_id: Option<i64>,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiToggleOpenFileLockRequest {
     pub task_id: Option<i64>,
     pub path: PathBuf,
@@ -452,6 +486,8 @@ pub struct UiRuntimeSnapshot {
     pub available_shells: Vec<UiShellView>,
     pub open_files: Vec<UiFileSnapshotView>,
     pub skills: Vec<UiSkillView>,
+    pub memories: Vec<UiMemoryEntryView>,
+    pub memory_warnings: Vec<String>,
     pub system_status: UiSystemStatusView,
     pub context_usage: UiContextUsageView,
 }
@@ -601,6 +637,30 @@ pub struct UiSkillView {
     pub path: PathBuf,
     pub description: String,
     pub opened: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiMemoryEntryView {
+    pub id: String,
+    pub memory_type: String,
+    pub topic: String,
+    pub title: String,
+    pub level: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiMemoryDetailView {
+    pub id: String,
+    pub memory_type: String,
+    pub topic: String,
+    pub title: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub scope: String,
+    pub level: String,
+    pub access_count: u32,
+    pub skip_count: u32,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

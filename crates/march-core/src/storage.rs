@@ -523,14 +523,14 @@ mod tests {
                 let mut options = TaskCreateOptions::new(workdir.clone());
                 options.title_source = TaskTitleSource::Manual;
                 options.title_locked = true;
-                options.selected_provider_id = Some(7);
+                options.selected_model_config_id = Some(7);
                 options.selected_model = Some("gpt-5.4".to_string());
                 options
             })
             .expect("create task");
 
         let loaded = storage.load_task(task.id).expect("load task");
-        assert_eq!(loaded.task.selected_provider_id, Some(7));
+        assert_eq!(loaded.task.selected_model_config_id, Some(7));
         assert_eq!(loaded.task.selected_model.as_deref(), Some("gpt-5.4"));
         assert_eq!(loaded.task.model_temperature, None);
         assert_eq!(loaded.task.model_top_p, None);
@@ -551,7 +551,7 @@ mod tests {
                 let mut options = TaskCreateOptions::new(workdir.clone());
                 options.title_source = TaskTitleSource::Manual;
                 options.title_locked = true;
-                options.selected_provider_id = Some(9);
+                options.selected_model_config_id = Some(9);
                 options.selected_model = Some("custom-model".to_string());
                 options
             })
@@ -562,14 +562,14 @@ mod tests {
             .expect("backfill defaults");
 
         let inherited_loaded = storage.load_task(inherited.id).expect("load inherited");
-        assert_eq!(inherited_loaded.task.selected_provider_id, Some(3));
+        assert_eq!(inherited_loaded.task.selected_model_config_id, Some(3));
         assert_eq!(
             inherited_loaded.task.selected_model.as_deref(),
             Some("gpt-5.3-codex")
         );
 
         let explicit_loaded = storage.load_task(explicit.id).expect("load explicit");
-        assert_eq!(explicit_loaded.task.selected_provider_id, Some(9));
+        assert_eq!(explicit_loaded.task.selected_model_config_id, Some(9));
         assert_eq!(
             explicit_loaded.task.selected_model.as_deref(),
             Some("custom-model")

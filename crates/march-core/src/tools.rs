@@ -22,6 +22,10 @@ impl ToolRuntime {
                 delete_lines_tool(),
                 write_note_tool(),
                 remove_note_tool(),
+                memorize_tool(),
+                recall_memory_tool(),
+                update_memory_tool(),
+                forget_memory_tool(),
                 create_agent_tool(),
                 update_agent_tool(),
                 delete_agent_tool(),
@@ -383,6 +387,148 @@ fn create_agent_tool() -> ToolDefinition {
         notes: vec![
             "Use create_agent when the user asks you to create a reusable reviewer, architect, planner, or similar role.".to_string(),
             "Agent names are normalized to lowercase mention names such as reviewer or architect.".to_string(),
+        ],
+    }
+}
+
+fn memorize_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "memorize",
+        description: "Create or overwrite a long-term memory that survives across tasks and sessions. Project memories are stored in `.march/memories/*.md`; global memories are stored in the user settings database.",
+        parameters: vec![
+            ToolParameter {
+                name: "id",
+                kind: "string",
+                required: true,
+                description: "Stable memory id. For project memories this becomes the markdown filename. Reuse the same id to refresh an existing memory instead of creating duplicates.",
+            },
+            ToolParameter {
+                name: "memory_type",
+                kind: "string",
+                required: true,
+                description: "Free-form memory type such as fact, decision, pattern, preference, or caveat.",
+            },
+            ToolParameter {
+                name: "topic",
+                kind: "string",
+                required: true,
+                description: "Topic bucket used for grouping related memories, such as auth, testing, style, or deployment.",
+            },
+            ToolParameter {
+                name: "title",
+                kind: "string",
+                required: true,
+                description: "One-line summary shown in the memory index.",
+            },
+            ToolParameter {
+                name: "content",
+                kind: "string",
+                required: true,
+                description: "The full memory detail body.",
+            },
+            ToolParameter {
+                name: "tags",
+                kind: "string",
+                required: true,
+                description: "Keyword list for retrieval. Provide it as an array of strings.",
+            },
+            ToolParameter {
+                name: "scope",
+                kind: "string",
+                required: false,
+                description: "Optional scope: shared or a specific agent name.",
+            },
+            ToolParameter {
+                name: "level",
+                kind: "string",
+                required: false,
+                description: "Optional level: project or global. When omitted, preference defaults to global and everything else defaults to project.",
+            },
+        ],
+        notes: vec![
+            "Prefer reusing a stable id when the new content updates the same long-term fact or preference.".to_string(),
+            "Use memories for durable project knowledge, decisions, workflows, and user preferences — not for short-lived task state.".to_string(),
+        ],
+    }
+}
+
+fn recall_memory_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "recall_memory",
+        description: "Load the full content for one indexed memory by id.",
+        parameters: vec![ToolParameter {
+            name: "id",
+            kind: "string",
+            required: true,
+            description: "Memory id from the memory index, usually prefixed like p:auth-policy or g:12.",
+        }],
+        notes: vec![
+            "recall_memory increments the memory's access count and resets its skip count."
+                .to_string(),
+        ],
+    }
+}
+
+fn update_memory_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "update_memory",
+        description: "Update selected fields on an existing long-term memory.",
+        parameters: vec![
+            ToolParameter {
+                name: "id",
+                kind: "string",
+                required: true,
+                description: "Existing memory id, prefixed or raw.",
+            },
+            ToolParameter {
+                name: "title",
+                kind: "string",
+                required: false,
+                description: "Optional replacement title.",
+            },
+            ToolParameter {
+                name: "content",
+                kind: "string",
+                required: false,
+                description: "Optional replacement content.",
+            },
+            ToolParameter {
+                name: "tags",
+                kind: "string",
+                required: false,
+                description: "Optional replacement tag array.",
+            },
+            ToolParameter {
+                name: "topic",
+                kind: "string",
+                required: false,
+                description: "Optional replacement topic.",
+            },
+            ToolParameter {
+                name: "memory_type",
+                kind: "string",
+                required: false,
+                description: "Optional replacement memory type.",
+            },
+        ],
+        notes: vec![
+            "Use update_memory when the same durable fact still exists but needs a cleaner title, fresher content, or new retrieval tags.".to_string(),
+        ],
+    }
+}
+
+fn forget_memory_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "forget_memory",
+        description: "Delete an outdated or redundant long-term memory.",
+        parameters: vec![ToolParameter {
+            name: "id",
+            kind: "string",
+            required: true,
+            description: "Existing memory id, prefixed or raw.",
+        }],
+        notes: vec![
+            "Use forget_memory when the stored information is no longer true or a new consolidated memory has replaced several older ones.".to_string(),
         ],
     }
 }

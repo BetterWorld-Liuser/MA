@@ -58,12 +58,17 @@
           :working-directory="workspace.workingDirectory"
           :hints="workspace.hints"
           :skills="workspace.skills"
+          :memories="workspace.memories"
+          :memory-warnings="workspace.memoryWarnings"
           :usage="workspace.contextUsage"
           :debug-rounds="workspace.debugRounds"
           :busy="busy"
           @add-note="addNote"
           @edit-note="editNote"
           @delete-note="deleteNote"
+          @add-memory="addMemory"
+          @edit-memory="editMemory"
+          @delete-memory="deleteMemory"
           @toggle-file-lock="toggleOpenFileLock"
           @close-file="closeOpenFile"
           @refresh-skills="refreshSkills"
@@ -116,6 +121,32 @@
       @cancel="closeNoteDialog"
     />
 
+    <MemoryEditorDialog
+      ref="memoryDialogRef"
+      :open="memoryDialogOpen"
+      :mode="memoryDialogMode"
+      :draft-id="memoryDraftId"
+      :draft-type="memoryDraftType"
+      :draft-topic="memoryDraftTopic"
+      :draft-title="memoryDraftTitle"
+      :draft-content="memoryDraftContent"
+      :draft-tags="memoryDraftTags"
+      :draft-scope="memoryDraftScope"
+      :draft-level="memoryDraftLevel"
+      :busy="busy"
+      @update:open="handleMemoryDialogOpenChange"
+      @update:draft-id="memoryDraftId = $event"
+      @update:draft-type="memoryDraftType = $event"
+      @update:draft-topic="memoryDraftTopic = $event"
+      @update:draft-title="memoryDraftTitle = $event"
+      @update:draft-content="memoryDraftContent = $event"
+      @update:draft-tags="memoryDraftTags = $event"
+      @update:draft-scope="memoryDraftScope = $event"
+      @update:draft-level="memoryDraftLevel = $event"
+      @submit="handleSubmitMemoryDialog"
+      @cancel="closeMemoryDialog"
+    />
+
     <ConfirmActionDialog
       :open="confirmDialogOpen"
       :title="confirmDialogTitle"
@@ -135,6 +166,7 @@ import AppTitleBar from '@/components/AppTitleBar.vue';
 import ChatPane from '@/components/ChatPane.vue';
 import ConfirmActionDialog from '@/components/ConfirmActionDialog.vue';
 import ContextPanel from '@/components/ContextPanel.vue';
+import MemoryEditorDialog from '@/components/MemoryEditorDialog.vue';
 import NoteEditorDialog from '@/components/NoteEditorDialog.vue';
 import SettingsPage from '@/components/SettingsPage.vue';
 import TaskList from '@/components/TaskList.vue';
@@ -149,6 +181,7 @@ const {
   isMaximized,
   chatPaneRef,
   noteDialogRef,
+  memoryDialogRef,
   workspace,
   activeTaskIdNumber,
   hasPendingSend,
@@ -167,6 +200,16 @@ const {
   noteDialogMode,
   noteDraftId,
   noteDraftContent,
+  memoryDialogOpen,
+  memoryDialogMode,
+  memoryDraftId,
+  memoryDraftType,
+  memoryDraftTopic,
+  memoryDraftTitle,
+  memoryDraftContent,
+  memoryDraftTags,
+  memoryDraftScope,
+  memoryDraftLevel,
   confirmDialogOpen,
   confirmDialogTitle,
   confirmDialogDescription,
@@ -181,10 +224,16 @@ const {
   cancelCurrentTurn,
   addNote,
   editNote,
+  addMemory,
+  editMemory,
   handleSubmitNoteDialog,
+  handleSubmitMemoryDialog,
   closeNoteDialog,
+  closeMemoryDialog,
   handleNoteDialogOpenChange,
+  handleMemoryDialogOpenChange,
   deleteNote,
+  deleteMemory,
   toggleOpenFileLock,
   closeOpenFile,
   openFilesFromComposer,

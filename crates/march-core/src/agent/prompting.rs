@@ -167,6 +167,17 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
             output.push_str(&format!("{id}: {}\n", note.content));
         }
     }
+    output.push_str("\n# Memory Index\n");
+    if let Some(memory_index) = &context.memory_index {
+        if memory_index.is_empty() {
+            output.push_str("(none)\n");
+        } else {
+            output.push_str(&memory_index.render_for_prompt());
+            output.push('\n');
+        }
+    } else {
+        output.push_str("(none)\n");
+    }
     output.push_str("\n# Runtime Status\n");
     if context.runtime_status.is_empty() {
         output.push_str("(none)\n");

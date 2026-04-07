@@ -2,6 +2,7 @@ import { nextTick, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type {
   BackendWorkspaceSnapshot,
+  BackendMemoryDetailView,
   ChatMessage,
   LiveTurn,
 } from '@/data/mock';
@@ -42,8 +43,27 @@ type UseWorkspaceTaskActionsOptions = {
     focusIdField: () => void;
     focusContentField: () => void;
   } | null>;
+  memoryDialogRef: Ref<{
+    focusIdField: () => void;
+    focusContentField: () => void;
+  } | null>;
   submitNoteDialog: (
     onSubmit: (id: string, content: string) => Promise<void>,
+    focus: { id: () => void; content: () => void },
+  ) => Promise<void>;
+  openCreateMemoryDialog: () => void;
+  openEditMemoryDialog: (memory: BackendMemoryDetailView) => void;
+  submitMemoryDialog: (
+    onSubmit: (payload: {
+      id: string;
+      memoryType: string;
+      topic: string;
+      title: string;
+      content: string;
+      tags: string[];
+      scope?: string;
+      level?: string;
+    }) => Promise<void>,
     focus: { id: () => void; content: () => void },
   ) => Promise<void>;
 };
@@ -67,7 +87,11 @@ export function useWorkspaceTaskActions({
   openConfirmDialog,
   closeConfirmDialog,
   noteDialogRef,
+  memoryDialogRef,
   submitNoteDialog,
+  openCreateMemoryDialog,
+  openEditMemoryDialog,
+  submitMemoryDialog,
 }: UseWorkspaceTaskActionsOptions) {
   const {
     snapshot,
@@ -286,6 +310,15 @@ export function useWorkspaceTaskActions({
     noteDialogRef.value?.focusIdField();
   }
 
+  async function addMemory() {
+    if (!activeTaskIdNumber.value || busy.value) {
+      return;
+    }
+    openCreateMemoryDialog();
+    await nextTick();
+    memoryDialogRef.value?.focusIdField();
+  }
+
   async function editNote(noteId: string) {
     if (!activeTaskIdNumber.value || busy.value) {
       return;
@@ -300,6 +333,21 @@ export function useWorkspaceTaskActions({
     noteDialogRef.value?.focusContentField();
   }
 
+  async function editMemory(memoryId: string) {
+    if (!activeTaskIdNumber.value || busy.value) {
+      return;
+    }
+    const memory = await invoke<BackendMemoryDetailView>('get_memory', {
+      input: {
+        taskId: activeTaskIdNumber.value,
+        id: memoryId,
+      },
+    });
+    openEditMemoryDialog(memory);
+    await nextTick();
+    memoryDialogRef.value?.focusContentField();
+  }
+
   async function handleSubmitNoteDialog() {
     await submitNoteDialog(saveNote, {
       id: () => {
@@ -311,6 +359,17 @@ export function useWorkspaceTaskActions({
     });
   }
 
+  async function handleSubmitMemoryDialog() {
+    await submitMemoryDialog(saveMemory, {
+      id: () => {
+        memoryDialogRef.value?.focusIdField();
+      },
+      content: () => {
+        memoryDialogRef.value?.focusContentField();
+      },
+    });
+  }
+
   async function saveNote(noteId: string, content: string) {
     await runWorkspaceAction(async () => {
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('upsert_note', {
@@ -318,6 +377,33 @@ export function useWorkspaceTaskActions({
           taskId: activeTaskIdNumber.value,
           noteId,
           content,
+        },
+      });
+    });
+  }
+
+  async function saveMemory(payload: {
+    id: string;
+    memoryType: string;
+    topic: string;
+    title: string;
+    content: string;
+    tags: string[];
+    scope?: string;
+    level?: string;
+  }) {
+    await runWorkspaceAction(async () => {
+      snapshot.value = await invoke<BackendWorkspaceSnapshot>('upsert_memory', {
+        input: {
+          taskId: activeTaskIdNumber.value,
+          id: payload.id,
+          memoryType: payload.memoryType,
+          topic: payload.topic,
+          title: payload.title,
+          content: payload.content,
+          tags: payload.tags,
+          scope: payload.scope ?? null,
+          level: payload.level ?? null,
         },
       });
     });
@@ -339,6 +425,30 @@ export function useWorkspaceTaskActions({
             input: {
               taskId: activeTaskIdNumber.value,
               noteId,
+            },
+          });
+        });
+        closeConfirmDialog();
+      },
+    });
+  }
+
+  async function deleteMemory(memoryId: string) {
+    if (!activeTaskIdNumber.value) {
+      return;
+    }
+
+    openConfirmDialog({
+      title: '删除 Memory',
+      description: '删除后，这条长期记忆不会再参与召回。',
+      body: `确认删除 Memory「${memoryId}」吗？`,
+      confirmLabel: '删除 Memory',
+      action: async () => {
+        await runWorkspaceAction(async () => {
+          snapshot.value = await invoke<BackendWorkspaceSnapshot>('delete_memory', {
+            input: {
+              taskId: activeTaskIdNumber.value,
+              id: memoryId,
             },
           });
         });
@@ -467,8 +577,12 @@ export function useWorkspaceTaskActions({
     cancelCurrentTurn,
     addNote,
     editNote,
+    addMemory,
+    editMemory,
     handleSubmitNoteDialog,
+    handleSubmitMemoryDialog,
     deleteNote,
+    deleteMemory,
     toggleOpenFileLock,
     closeOpenFile,
     openFilesFromComposer,

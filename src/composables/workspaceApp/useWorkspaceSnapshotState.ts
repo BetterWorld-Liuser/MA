@@ -200,6 +200,8 @@ function buildEmptyTaskWorkspace(
     openFiles: [],
     hints: [],
     skills: [],
+    memories: [],
+    memoryWarnings: [],
     contextUsage: {
       percent: 0,
       current: '0',
@@ -234,6 +236,8 @@ function applyOptimisticActiveTask(workspace: WorkspaceView, optimisticTaskId: s
     openFiles: [],
     hints: [],
     skills: [],
+    memories: [],
+    memoryWarnings: [],
     contextUsage: {
       percent: 0,
       current: '0',

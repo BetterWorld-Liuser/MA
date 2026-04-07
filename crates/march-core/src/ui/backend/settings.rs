@@ -1,4 +1,5 @@
 use super::*;
+use crate::memory::MemoryManager;
 
 impl UiAppBackend {
     pub fn provider_settings(&self) -> Result<UiProviderSettingsView> {
@@ -47,6 +48,8 @@ impl UiAppBackend {
         if name == MARCH_AGENT_NAME {
             bail!("cannot delete March");
         }
+        let mut memories = MemoryManager::load(&self.workspace_path)?;
+        memories.reassign_scope_from_agent(&name)?;
         let settings = SettingsStorage::open()?;
         settings.delete_agent_profile(&name)?;
         self.provider_settings()

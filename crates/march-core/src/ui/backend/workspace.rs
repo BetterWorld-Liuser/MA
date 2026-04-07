@@ -446,4 +446,65 @@ impl UiAppBackend {
     pub fn workspace_path(&self) -> &std::path::Path {
         &self.workspace_path
     }
+
+    pub fn list_memories(
+        &mut self,
+        request: UiListMemoriesRequest,
+    ) -> Result<Vec<UiMemoryDetailView>> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        let session = self.load_session(task_id)?;
+        let working_directory = self.working_directory_for_task(Some(task_id))?;
+        let mut manager = MemoryManager::load(&working_directory)?;
+        let memories = manager
+            .list_visible(session.active_agent_name())?
+            .into_iter()
+            .map(UiMemoryDetailView::from)
+            .collect::<Vec<_>>();
+        Ok(memories)
+    }
+
+    pub fn get_memory(&mut self, request: UiGetMemoryRequest) -> Result<UiMemoryDetailView> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        let session = self.load_session(task_id)?;
+        let working_directory = self.working_directory_for_task(Some(task_id))?;
+        let mut manager = MemoryManager::load(&working_directory)?;
+        manager
+            .recall(&request.id, session.active_agent_name())
+            .map(UiMemoryDetailView::from)
+    }
+
+    pub fn handle_upsert_memory(
+        &mut self,
+        request: UiUpsertMemoryRequest,
+    ) -> Result<UiWorkspaceSnapshot> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        let session = self.load_session(task_id)?;
+        let working_directory = self.working_directory_for_task(Some(task_id))?;
+        let mut manager = MemoryManager::load(&working_directory)?;
+        manager.memorize(
+            MemorizeRequest {
+                id: request.id,
+                memory_type: request.memory_type,
+                topic: request.topic,
+                title: request.title,
+                content: request.content,
+                tags: request.tags,
+                scope: request.scope,
+                level: request.level,
+            },
+            session.active_agent_name(),
+        )?;
+        self.workspace_snapshot(Some(task_id))
+    }
+
+    pub fn handle_delete_memory(
+        &mut self,
+        request: UiDeleteMemoryRequest,
+    ) -> Result<UiWorkspaceSnapshot> {
+        let task_id = self.resolve_or_create_task_id(request.task_id)?;
+        let working_directory = self.working_directory_for_task(Some(task_id))?;
+        let mut manager = MemoryManager::load(&working_directory)?;
+        manager.forget(&request.id)?;
+        self.workspace_snapshot(Some(task_id))
+    }
 }

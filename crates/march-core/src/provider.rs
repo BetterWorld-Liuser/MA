@@ -735,6 +735,7 @@ mod tests {
             },
             open_files,
             notes,
+            memory_index: None,
             runtime_status: RuntimeStatus {
                 locked_files: vec![PathBuf::from("AGENTS.md")],
                 context_pressure: Some(ContextPressure {

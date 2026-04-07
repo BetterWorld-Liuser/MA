@@ -12,6 +12,7 @@ use crate::agent::{
 use crate::agents::SHARED_SCOPE;
 use crate::agents::{MARCH_AGENT_NAME, load_agent_profiles};
 use crate::context::{ContentBlock, ConversationHistory, join_text_blocks};
+use crate::memory::{MemorizeRequest, MemoryManager};
 use crate::paths::{canonicalize_clean, clean_path};
 use crate::provider::{OpenAiCompatibleClient, fallback_task_title};
 use crate::settings::{
@@ -26,14 +27,16 @@ use super::util::{resolve_context_window_fallback, system_time_to_unix};
 use super::{
     DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProfileView,
     UiAgentProgressEvent, UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock,
-    UiCreateTaskRequest, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteNoteRequest,
-    UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest,
-    UiLoadWorkspaceImageRequest, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
+    UiCreateTaskRequest, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteMemoryRequest,
+    UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
+    UiDeleteTaskRequest, UiGetMemoryRequest, UiListMemoriesRequest, UiLoadWorkspaceImageRequest,
+    UiMemoryDetailView, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
     UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
-    UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
-    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
+    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
+    UiWorkspaceImageView, UiWorkspaceSnapshot,
 };
 
 mod messaging;

@@ -34,6 +34,13 @@ impl AgentSession {
                     .sum(),
             ),
             UiContextUsageSectionView::new(
+                "memory",
+                self.last_memory_index
+                    .as_ref()
+                    .map(|index| estimate_token_count(&index.render_for_prompt()))
+                    .unwrap_or(0),
+            ),
+            UiContextUsageSectionView::new(
                 "chat",
                 self.history
                     .turns
@@ -84,12 +91,31 @@ impl AgentSession {
                 opened: open_file_snapshots.contains_key(&skill.path),
             })
             .collect::<Vec<_>>();
+        let memories = self
+            .last_memory_index
+            .as_ref()
+            .map(|index| {
+                index
+                    .entries
+                    .iter()
+                    .cloned()
+                    .map(crate::ui::UiMemoryEntryView::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let memory_warnings = self
+            .last_memory_index
+            .as_ref()
+            .map(|index| index.topic_warnings.clone())
+            .unwrap_or_default();
 
         UiRuntimeSnapshot::new(
             clean_path(self.working_directory.clone()),
             available_shells,
             open_files,
             skills,
+            memories,
+            memory_warnings,
             self.ui_system_status(context_budget_tokens),
             self.ui_context_usage(context_budget_tokens),
         )
@@ -111,6 +137,11 @@ impl AgentSession {
                 .values()
                 .map(|note| estimate_token_count(&note.content))
                 .sum::<usize>()
+            + self
+                .last_memory_index
+                .as_ref()
+                .map(|index| estimate_token_count(&index.render_for_prompt()))
+                .unwrap_or(0)
             + self
                 .history
                 .turns

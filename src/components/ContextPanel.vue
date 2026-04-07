@@ -25,6 +25,14 @@
       />
 
       <ContextHintsSection v-if="hints.length" :hints="hints" />
+      <ContextMemoriesSection
+        :memories="memories"
+        :warnings="memoryWarnings"
+        :busy="busy"
+        @add-memory="$emit('add-memory')"
+        @edit-memory="$emit('edit-memory', $event)"
+        @delete-memory="$emit('delete-memory', $event)"
+      />
       <ContextSkillsSection
         :skills="skills"
         :busy="busy"
@@ -291,11 +299,12 @@ import gaugeIcon from '@iconify-icons/lucide/gauge';
 import panelRightIcon from '@iconify-icons/lucide/panel-right';
 import xIcon from '@iconify-icons/lucide/x';
 import ContextHintsSection from '@/components/context/ContextHintsSection.vue';
+import ContextMemoriesSection from '@/components/context/ContextMemoriesSection.vue';
 import ContextNotesSection from '@/components/context/ContextNotesSection.vue';
 import ContextOpenFilesSection from '@/components/context/ContextOpenFilesSection.vue';
 import ContextSkillsSection from '@/components/context/ContextSkillsSection.vue';
 import { Dialog, DialogClose, DialogContent, DialogTitle } from './ui/dialog';
-import type { ContextUsage, DebugRoundItem, HintItem, NoteItem, OpenFileItem, SkillItem } from '../data/mock';
+import type { ContextUsage, DebugRoundItem, HintItem, MemoryItem, NoteItem, OpenFileItem, SkillItem } from '../data/mock';
 
 withDefaults(defineProps<{
   notes: NoteItem[];
@@ -303,6 +312,8 @@ withDefaults(defineProps<{
   workingDirectory?: string;
   hints: HintItem[];
   skills: SkillItem[];
+  memories: MemoryItem[];
+  memoryWarnings: string[];
   usage: ContextUsage;
   debugRounds: DebugRoundItem[];
   busy?: boolean;
@@ -312,6 +323,8 @@ withDefaults(defineProps<{
   workingDirectory: undefined,
   hints: () => [],
   skills: () => [],
+  memories: () => [],
+  memoryWarnings: () => [],
   busy: false,
 });
 
@@ -319,6 +332,9 @@ defineEmits<{
   'add-note': [];
   'edit-note': [noteId: string];
   'delete-note': [noteId: string];
+  'add-memory': [];
+  'edit-memory': [memoryId: string];
+  'delete-memory': [memoryId: string];
   'toggle-file-lock': [path: string, locked: boolean];
   'close-file': [path: string];
   'refresh-skills': [];

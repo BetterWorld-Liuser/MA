@@ -12,6 +12,7 @@ use crate::context::{
     ConversationHistory, DisplayTurn, FileSnapshot, Hint, Injection, NoteEntry, Role,
     SessionStatus, SystemStatus, ToolSummary, join_text_blocks,
 };
+use crate::memory::{MemoryIndexView, MemoryManager};
 use crate::paths::clean_path;
 use crate::storage::{PersistedNote, PersistedOpenFile, PersistedTask, PersistedTaskState};
 use crate::tools::ToolRuntime;
@@ -98,6 +99,8 @@ pub struct AgentSession {
     notes: IndexMap<String, IndexMap<String, NoteEntry>>,
     open_files: Vec<PersistedOpenFile>,
     hints: Vec<Hint>,
+    memory_manager: MemoryManager,
+    last_memory_index: Option<MemoryIndexView>,
     injections: Vec<Injection>,
     skills: Vec<crate::skills::SkillEntry>,
     available_shells: Vec<AvailableShell>,
@@ -418,7 +421,7 @@ mod tests {
                 title_source: TaskTitleSource::Default,
                 title_locked: false,
                 working_directory: std::env::current_dir().expect("current dir"),
-                selected_provider_id: None,
+                selected_model_config_id: None,
                 selected_model: None,
                 model_temperature: None,
                 model_top_p: None,

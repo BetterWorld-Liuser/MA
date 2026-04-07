@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::context::ToolSummary;
+use crate::memory::{MemorizeRequest, UpdateMemoryRequest};
 use crate::provider::ProviderToolCall;
 use crate::settings::SettingsStorage;
 
@@ -176,6 +177,77 @@ impl AgentSession {
                     format!("移除了 note {}", args.id),
                 ))
             }
+            "memorize" => {
+                let args: MemorizeArgs =
+                    serde_json::from_value(args).context("invalid memorize args")?;
+                let active_agent = self.active_agent_name().to_string();
+                let memory = self.memory_manager.memorize(
+                    MemorizeRequest {
+                        id: args.id,
+                        memory_type: args.memory_type,
+                        topic: args.topic,
+                        title: args.title,
+                        content: args.content,
+                        tags: args.tags,
+                        scope: args.scope,
+                        level: args.level,
+                    },
+                    &active_agent,
+                )?;
+                Ok(simple_tool(
+                    format!("stored memory {}", memory.prefixed_id()),
+                    "memorize",
+                    format!("写入了记忆 {}", memory.prefixed_id()),
+                ))
+            }
+            "recall_memory" => {
+                let args: MemoryIdArgs =
+                    serde_json::from_value(args).context("invalid recall_memory args")?;
+                let active_agent = self.active_agent_name().to_string();
+                let memory = self.memory_manager.recall(&args.id, &active_agent)?;
+                Ok(ToolOutcome {
+                    result_text: format!(
+                        "id: {}\nlevel: {:?}\ntype: {}\ntopic: {}\ntitle: {}\ncontent:\n{}",
+                        memory.prefixed_id(),
+                        memory.level,
+                        memory.memory_type,
+                        memory.topic,
+                        memory.title,
+                        memory.content
+                    ),
+                    summary: Some(ToolSummary {
+                        name: "recall_memory".to_string(),
+                        summary: format!("查看了记忆 {}", memory.prefixed_id()),
+                    }),
+                })
+            }
+            "update_memory" => {
+                let args: UpdateMemoryArgs =
+                    serde_json::from_value(args).context("invalid update_memory args")?;
+                let memory = self.memory_manager.update_memory(UpdateMemoryRequest {
+                    id: args.id,
+                    title: args.title,
+                    content: args.content,
+                    tags: args.tags,
+                    topic: args.topic,
+                    memory_type: args.memory_type,
+                })?;
+                Ok(simple_tool(
+                    format!("updated memory {}", memory.prefixed_id()),
+                    "update_memory",
+                    format!("更新了记忆 {}", memory.prefixed_id()),
+                ))
+            }
+            "forget_memory" => {
+                let args: MemoryIdArgs =
+                    serde_json::from_value(args).context("invalid forget_memory args")?;
+                self.memory_manager.forget(&args.id)?;
+                Ok(simple_tool(
+                    format!("forgot memory {}", args.id),
+                    "forget_memory",
+                    format!("删除了记忆 {}", args.id),
+                ))
+            }
             "create_agent" => {
                 let args: CreateAgentArgs =
                     serde_json::from_value(args).context("invalid create_agent args")?;
@@ -265,13 +337,17 @@ impl AgentSession {
                 if self.active_agent_name() == name {
                     bail!("cannot delete the currently active agent {}", name);
                 }
+                let reassigned_count = self.memory_manager.reassign_scope_from_agent(&name)?;
                 let settings = SettingsStorage::open()?;
                 settings.delete_agent_profile(&name)?;
                 self.refresh_agent_profiles()?;
                 Ok(simple_tool(
                     format!("deleted agent {}", name),
                     "delete_agent",
-                    format!("删除了角色 {}", name),
+                    format!(
+                        "删除了角色 {}，并把 {} 条私有记忆转成共享",
+                        name, reassigned_count
+                    ),
                 ))
             }
             other => bail!("unknown tool call: {}", other),
@@ -370,6 +446,14 @@ pub(super) fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
             }
         }
         "write_note" | "remove_note" => {
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+            if id.is_empty() {
+                name.to_string()
+            } else {
+                format!("{name} {id}")
+            }
+        }
+        "memorize" | "recall_memory" | "update_memory" | "forget_memory" => {
             let id = args.get("id").and_then(Value::as_str).unwrap_or("");
             if id.is_empty() {
                 name.to_string()
@@ -509,6 +593,35 @@ struct WriteNoteArgs {
 #[derive(Debug, Deserialize)]
 struct RemoveNoteArgs {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct MemorizeArgs {
+    id: String,
+    memory_type: String,
+    topic: String,
+    title: String,
+    content: String,
+    tags: Vec<String>,
+    scope: Option<String>,
+    level: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryIdArgs {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct UpdateMemoryArgs {
+    id: String,
+    title: Option<String>,
+    content: Option<String>,
+    tags: Option<Vec<String>>,
+    topic: Option<String>,
+    memory_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

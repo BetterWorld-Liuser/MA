@@ -13,6 +13,11 @@ export type NoteEditorDialogHandle = {
   focusContentField: () => void;
 };
 
+export type MemoryEditorDialogHandle = {
+  focusIdField: () => void;
+  focusContentField: () => void;
+};
+
 export type ComposerPayload = {
   content: string;
   directories: string[];

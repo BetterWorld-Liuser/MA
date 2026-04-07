@@ -61,6 +61,7 @@ impl AgentSession {
             .into_iter()
             .map(|profile| (profile.name.clone(), profile))
             .collect::<IndexMap<_, _>>();
+        let memory_manager = MemoryManager::load(&working_directory)?;
         let (skills, skill_injection) = load_skills_for_workspace(&working_directory)?;
         let mut injections = injections;
         upsert_injection(&mut injections, skill_injection);
@@ -79,6 +80,8 @@ impl AgentSession {
             notes: super::scopes::notes_by_scope(notes),
             open_files,
             hints,
+            memory_manager,
+            last_memory_index: None,
             injections,
             skills,
             available_shells: detect_available_shells()?,
@@ -205,6 +208,12 @@ impl AgentSession {
         let tools = ToolRuntime::for_session(&self.available_shells, &self.working_directory).tools;
         let notes = self.notes_for_active_agent();
         let open_files = self.open_file_snapshots_for_active_agent();
+        let memory_index = self
+            .memory_manager
+            .search(&self.build_memory_query(), 12)
+            .ok()
+            .filter(|index| !index.is_empty());
+        self.last_memory_index = memory_index.clone();
         let context = AgentContextBuilder::new(self.system_core_for_active_agent())
             .with_config(ContextBuildConfig {
                 max_recent_chat_turns: self.config.max_recent_turns,
@@ -213,6 +222,7 @@ impl AgentSession {
             .injections(self.injections.clone())
             .tools(tools)
             .notes(notes)
+            .memory_index(memory_index)
             .session_status(self.session_status())
             .runtime_status(SystemStatus {
                 locked_files: self.locked_files_for_active_agent(),
@@ -339,5 +349,35 @@ impl AgentSession {
             hint.tick_turn();
         }
         self.prune_expired_hints();
+    }
+
+    fn build_memory_query(&self) -> crate::memory::MemoryQuery {
+        crate::memory::MemoryQuery {
+            latest_user_message: self
+                .history
+                .turns
+                .iter()
+                .rev()
+                .find(|turn| matches!(turn.role, Role::User))
+                .map(|turn| join_text_blocks(&turn.content)),
+            open_file_paths: self
+                .open_file_snapshots_for_active_agent()
+                .keys()
+                .cloned()
+                .collect(),
+            recent_assistant_messages: self
+                .history
+                .turns
+                .iter()
+                .rev()
+                .filter(|turn| matches!(turn.role, Role::Assistant))
+                .take(2)
+                .map(|turn| join_text_blocks(&turn.content))
+                .collect(),
+            active_agent: self.active_agent.clone(),
+            context_pressure_percent: self
+                .estimate_context_pressure(DEFAULT_CONTEXT_WINDOW_TOKENS)
+                .map(|pressure| pressure.used_percent),
+        }
     }
 }

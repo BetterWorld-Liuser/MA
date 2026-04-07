@@ -5,6 +5,7 @@ use chrono::{DateTime, Local};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::memory::MemoryIndexView;
 use crate::tools::ToolDefinition;
 
 /// AI 每轮实际收到的上下文。
@@ -17,6 +18,7 @@ pub struct AgentContext {
     pub tools: Vec<ToolDefinition>,
     pub open_files: IndexMap<PathBuf, FileSnapshot>,
     pub notes: IndexMap<String, NoteEntry>,
+    pub memory_index: Option<MemoryIndexView>,
     pub session_status: SessionStatus,
     pub runtime_status: RuntimeStatus,
     pub hints: Vec<Hint>,
@@ -422,6 +424,7 @@ pub struct AgentContextBuilder {
     tools: Vec<ToolDefinition>,
     open_files: IndexMap<PathBuf, FileSnapshot>,
     notes: IndexMap<String, NoteEntry>,
+    memory_index: Option<MemoryIndexView>,
     session_status: SessionStatus,
     runtime_status: RuntimeStatus,
     hints: Vec<Hint>,
@@ -438,6 +441,7 @@ impl AgentContextBuilder {
             tools: Vec::new(),
             open_files: IndexMap::new(),
             notes: IndexMap::new(),
+            memory_index: None,
             session_status: SessionStatus::default(),
             runtime_status: RuntimeStatus::default(),
             hints: Vec::new(),
@@ -477,6 +481,11 @@ impl AgentContextBuilder {
 
     pub fn notes(mut self, notes: IndexMap<String, NoteEntry>) -> Self {
         self.notes = notes;
+        self
+    }
+
+    pub fn memory_index(mut self, memory_index: Option<MemoryIndexView>) -> Self {
+        self.memory_index = memory_index;
         self
     }
 
@@ -524,6 +533,7 @@ impl AgentContextBuilder {
             tools: self.tools,
             open_files: self.open_files,
             notes: self.notes,
+            memory_index: self.memory_index,
             session_status: self.session_status,
             runtime_status: self.runtime_status,
             hints: self.hints,
