@@ -167,13 +167,13 @@
 
     <button
       v-if="showJumpToBottomButton"
-      class="absolute bottom-5 right-5 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/38 text-text-dim/80 shadow-[0_6px_18px_rgba(0,0,0,0.18)] backdrop-blur-sm transition hover:border-white/20 hover:bg-black/55 hover:text-text focus:outline-none focus:ring-2 focus:ring-accent/35 focus:ring-offset-2 focus:ring-offset-base"
+      class="jump-to-bottom-button absolute bottom-5 right-5 z-20 inline-flex h-8 w-8 items-center justify-center rounded-full transition focus:outline-none focus:ring-2 focus:ring-accent/35 focus:ring-offset-2 focus:ring-offset-base"
       type="button"
       aria-label="回到底部"
       title="回到底部"
       @click="jumpToBottom"
     >
-      <Icon :icon="arrowDownIcon" class="h-3.5 w-3.5" />
+      <Icon :icon="arrowDownIcon" class="jump-to-bottom-icon h-3.5 w-3.5" />
     </button>
 
       <Teleport to="body">
@@ -462,3 +462,31 @@ function messageKey(message: ChatMessage, index: number) {
   ].join('::');
 }
 </script>
+
+<style scoped>
+.jump-to-bottom-button {
+  border: 1px solid var(--ma-line-strong);
+  background: color-mix(in srgb, var(--ma-panel-elevated) 88%, transparent);
+  color: color-mix(in srgb, var(--ma-text-muted) 82%, transparent);
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.jump-to-bottom-button:hover {
+  border-color: var(--ma-line-strong);
+  background: color-mix(in srgb, var(--ma-panel-elevated-strong) 94%, transparent);
+  color: var(--ma-text);
+}
+
+.jump-to-bottom-icon {
+  stroke-width: 2.1;
+}
+
+:global(:root:not([data-theme='light'])) .jump-to-bottom-button {
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+</style>
