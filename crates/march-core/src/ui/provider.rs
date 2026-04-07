@@ -14,93 +14,44 @@ use super::{
 };
 
 pub(super) fn provider_config_for_task(task: &TaskRecord) -> Result<OpenAiCompatibleConfig> {
-    let settings = SettingsStorage::open()?;
-
-    if let Some(provider_id) = task.selected_provider_id {
-        if let Ok(provider) = settings.load_provider(provider_id) {
-            let model = task
-                .selected_model
-                .clone()
-                .or(settings.default_model()?)
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| anyhow::anyhow!("missing task model in settings"))?;
-
-            return Ok(OpenAiCompatibleConfig {
-                provider_type: provider.provider_type,
-                base_url: provider.base_url,
-                api_key: provider.api_key,
-                model: model.clone(),
-                server_tools: resolve_server_tools(&settings, provider.id, &model)?,
-                temperature: task.model_temperature,
-                top_p: task.model_top_p,
-                presence_penalty: task.model_presence_penalty,
-                frequency_penalty: task.model_frequency_penalty,
-                max_output_tokens: task.model_max_output_tokens,
-            });
-        }
-    }
-
-    if let Some(provider) = settings.default_provider()? {
-        let model = task
-            .selected_model
-            .clone()
-            .or(settings.default_model()?)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("missing default model in settings"))?;
-
-        return Ok(OpenAiCompatibleConfig {
-            provider_type: provider.provider_type,
-            base_url: provider.base_url,
-            api_key: provider.api_key,
-            model: model.clone(),
-            server_tools: resolve_server_tools(&settings, provider.id, &model)?,
-            temperature: task.model_temperature,
-            top_p: task.model_top_p,
-            presence_penalty: task.model_presence_penalty,
-            frequency_penalty: task.model_frequency_penalty,
-            max_output_tokens: task.model_max_output_tokens,
-        });
-    }
-
-    let mut config = OpenAiCompatibleConfig::from_env()?;
-    if let Some(model) = &task.selected_model {
-        config.model = model.clone();
-    }
-    Ok(config)
+    resolve_active_provider_config(Some(task))
 }
 
 pub(super) fn provider_config_for_session(
     task: &TaskRecord,
     session: &AgentSession,
 ) -> Result<OpenAiCompatibleConfig> {
-    if let Some(profile) = session.active_agent_profile() {
-        let settings = SettingsStorage::open()?;
-        if let Some(provider_id) = profile.provider_id {
-            if let Ok(provider) = settings.load_provider(provider_id) {
-                let model = profile
-                    .model_id
-                    .clone()
-                    .or_else(|| task.selected_model.clone())
-                    .or(settings.default_model()?)
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| anyhow::anyhow!("missing agent model in settings"))?;
-                return Ok(OpenAiCompatibleConfig {
-                    provider_type: provider.provider_type,
-                    base_url: provider.base_url,
-                    api_key: provider.api_key,
-                    model: model.clone(),
-                    server_tools: resolve_server_tools(&settings, provider.id, &model)?,
-                    temperature: task.model_temperature,
-                    top_p: task.model_top_p,
-                    presence_penalty: task.model_presence_penalty,
-                    frequency_penalty: task.model_frequency_penalty,
-                    max_output_tokens: task.model_max_output_tokens,
-                });
-            }
-        }
-    }
+    let Some(profile) = session.active_agent_profile() else {
+        return provider_config_for_task(task);
+    };
+    let Some(provider_id) = profile.provider_id else {
+        return provider_config_for_task(task);
+    };
 
-    provider_config_for_task(task)
+    let settings = SettingsStorage::open()?;
+    let Ok(provider) = settings.load_provider(provider_id) else {
+        return provider_config_for_task(task);
+    };
+
+    let model = profile
+        .model_id
+        .clone()
+        .or_else(|| task.selected_model.clone())
+        .or(settings.default_model()?)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("missing agent model in settings"))?;
+    Ok(OpenAiCompatibleConfig {
+        provider_type: provider.provider_type,
+        base_url: provider.base_url,
+        api_key: provider.api_key,
+        model: model.clone(),
+        server_tools: resolve_server_tools(&settings, provider.id, &model)?,
+        temperature: task.model_temperature,
+        top_p: task.model_top_p,
+        presence_penalty: task.model_presence_penalty,
+        frequency_penalty: task.model_frequency_penalty,
+        max_output_tokens: task.model_max_output_tokens,
+    })
 }
 
 pub async fn fetch_provider_models_for_task(
@@ -112,11 +63,7 @@ pub async fn fetch_provider_models_for_task(
     let provider_cache_key = provider_cache_key(&config.provider_type, config.base_url.as_deref());
     let client = OpenAiCompatibleClient::new(config);
     let mut available_models = client.list_models().await.unwrap_or_default();
-    if !available_models.iter().any(|model| model == &current_model) {
-        available_models.insert(0, current_model.clone());
-    }
-    available_models.sort();
-    available_models.dedup();
+    ensure_model_in_list(&mut available_models, &current_model);
 
     Ok(UiProviderModelsView {
         current_model,
@@ -180,15 +127,7 @@ pub async fn fetch_task_model_selector(
             .map(|model| model.model_id)
             .collect::<Vec<_>>();
         available_models.extend(persisted_models);
-        if !provider_current_model.is_empty()
-            && !available_models
-                .iter()
-                .any(|model| model == &provider_current_model)
-        {
-            available_models.insert(0, provider_current_model);
-        }
-        available_models.sort();
-        available_models.dedup();
+        ensure_model_in_list(&mut available_models, &provider_current_model);
 
         providers.push(UiProviderModelGroupView {
             provider_id: Some(provider.id),
@@ -251,11 +190,7 @@ pub async fn fetch_provider_models_for_provider(provider_id: i64) -> Result<UiPr
             .into_iter()
             .map(|model| model.model_id),
     );
-    if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
-        available_models.insert(0, current_model.clone());
-    }
-    available_models.sort();
-    available_models.dedup();
+    ensure_model_in_list(&mut available_models, &current_model);
 
     Ok(UiProviderModelsView {
         current_model,
@@ -271,15 +206,7 @@ pub async fn fetch_probe_models(
     let provider_type = ProviderType::from_db_value(&request.provider_type)
         .ok_or_else(|| anyhow::anyhow!("unsupported provider type {}", request.provider_type))?;
     let settings = SettingsStorage::open()?;
-    let persisted_api_key = match request.id {
-        Some(id) => settings.load_provider(id)?.api_key,
-        None => String::new(),
-    };
-    let api_key = if request.api_key.trim().is_empty() {
-        persisted_api_key
-    } else {
-        request.api_key.trim().to_string()
-    };
+    let api_key = resolve_api_key(&settings, request.id, &request.api_key)?;
     let suggested_models = suggested_models_for_provider_type(provider_type);
     let current_model = request
         .probe_model
@@ -305,11 +232,7 @@ pub async fn fetch_probe_models(
         max_output_tokens: None,
     });
     let mut available_models = client.list_models().await.unwrap_or_default();
-    if !current_model.is_empty() && !available_models.iter().any(|model| model == &current_model) {
-        available_models.insert(0, current_model.clone());
-    }
-    available_models.sort();
-    available_models.dedup();
+    ensure_model_in_list(&mut available_models, &current_model);
 
     Ok(UiProviderModelsView {
         current_model,
@@ -328,15 +251,7 @@ pub async fn test_provider_connection(
     let suggested_model = suggested_models_for_provider_type(provider_type)
         .into_iter()
         .next();
-    let persisted_api_key = match request.id {
-        Some(id) => settings.load_provider(id)?.api_key,
-        None => String::new(),
-    };
-    let api_key = if request.api_key.trim().is_empty() {
-        persisted_api_key
-    } else {
-        request.api_key.trim().to_string()
-    };
+    let api_key = resolve_api_key(&settings, request.id, &request.api_key)?;
     let model = request
         .probe_model
         .as_deref()
@@ -421,6 +336,30 @@ fn resolve_active_provider_config(task: Option<&TaskRecord>) -> Result<OpenAiCom
         config.model = model;
     }
     Ok(config)
+}
+
+fn ensure_model_in_list(models: &mut Vec<String>, current: &str) {
+    if !current.is_empty() && !models.iter().any(|model| model == current) {
+        models.insert(0, current.to_string());
+    }
+    models.sort();
+    models.dedup();
+}
+
+fn resolve_api_key(
+    settings: &SettingsStorage,
+    provider_id: Option<i64>,
+    provided: &str,
+) -> Result<String> {
+    let provided = provided.trim();
+    if !provided.is_empty() {
+        return Ok(provided.to_string());
+    }
+
+    Ok(match provider_id {
+        Some(provider_id) => settings.load_provider(provider_id)?.api_key,
+        None => String::new(),
+    })
 }
 
 fn resolve_server_tools(

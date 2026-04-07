@@ -28,10 +28,18 @@ pub fn canonicalize_clean(path: &Path) -> Result<PathBuf> {
 /// `.march/` content lives at the workspace root. Walk upward so task-local cwd
 /// changes do not hide shared agents, skills, config, or the database.
 pub fn resolve_project_root(path: &Path) -> PathBuf {
+    resolve_project_root_with(path, |p| p.join(".march").is_dir())
+}
+
+/// Inner implementation that accepts an injectable predicate for testing.
+pub(crate) fn resolve_project_root_with(
+    path: &Path,
+    has_march: impl Fn(&Path) -> bool,
+) -> PathBuf {
     let cleaned = clean_path(path.to_path_buf());
 
     for ancestor in cleaned.ancestors() {
-        if ancestor.join(".march").is_dir() {
+        if has_march(ancestor) {
             return clean_path(ancestor.to_path_buf());
         }
     }
@@ -41,12 +49,10 @@ pub fn resolve_project_root(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::resolve_project_root;
-
-    use super::clean_path;
+    use super::{clean_path, resolve_project_root_with};
 
     #[test]
     fn clean_path_strips_windows_verbatim_prefix() {
@@ -63,14 +69,13 @@ mod tests {
     #[test]
     fn resolve_project_root_finds_nearest_march_ancestor() {
         let fixture = TestFixture::new("project-root-march");
-        let nested = fixture.root.join("workspace").join("src").join("nested");
-        std::fs::create_dir_all(&nested).expect("create nested dir");
-        std::fs::create_dir_all(fixture.root.join("workspace").join(".march"))
-            .expect("create workspace .march");
+        let workspace = fixture.root.join("workspace");
+        let nested = workspace.join("src").join("nested");
 
+        // Inject a predicate that simulates .march existing only at `workspace/`.
         assert_eq!(
-            resolve_project_root(&nested),
-            fixture.root.join("workspace"),
+            resolve_project_root_with(&nested, |p| p == workspace),
+            workspace,
         );
     }
 
@@ -78,10 +83,10 @@ mod tests {
     fn resolve_project_root_falls_back_to_path_when_no_march() {
         let fixture = TestFixture::new("project-root-no-march");
         let nested = fixture.root.join("external").join("pkg").join("src");
-        std::fs::create_dir_all(&nested).expect("create nested dir");
 
+        // Inject a predicate that reports no .march anywhere.
         assert_eq!(
-            resolve_project_root(&nested),
+            resolve_project_root_with(&nested, |_| false),
             nested,
         );
     }

@@ -117,18 +117,10 @@ impl WireAdapter for OpenAiWire {
         if !tool_defs.is_empty() {
             body["tools"] = Value::Array(tool_defs);
         }
-        if let Some(top_p) = options.top_p {
-            body["top_p"] = json!(top_p);
-        }
-        if let Some(presence_penalty) = options.presence_penalty {
-            body["presence_penalty"] = json!(presence_penalty);
-        }
-        if let Some(frequency_penalty) = options.frequency_penalty {
-            body["frequency_penalty"] = json!(frequency_penalty);
-        }
-        if let Some(max_output_tokens) = options.max_output_tokens {
-            body["max_tokens"] = json!(max_output_tokens);
-        }
+        insert_optional_json_field(&mut body, "top_p", options.top_p);
+        insert_optional_json_field(&mut body, "presence_penalty", options.presence_penalty);
+        insert_optional_json_field(&mut body, "frequency_penalty", options.frequency_penalty);
+        insert_optional_json_field(&mut body, "max_tokens", options.max_output_tokens);
 
         let mut headers = json_headers();
         apply_bearer_auth(&mut headers, &config.api_key)?;
@@ -835,24 +827,16 @@ fn build_openai_responses_request(
         "stream": options.stream,
         "store": false,
     });
-    if let Some(top_p) = options.top_p {
-        body["top_p"] = json!(top_p);
-    }
-    if let Some(presence_penalty) = options.presence_penalty {
-        body["presence_penalty"] = json!(presence_penalty);
-    }
-    if let Some(frequency_penalty) = options.frequency_penalty {
-        body["frequency_penalty"] = json!(frequency_penalty);
-    }
+    insert_optional_json_field(&mut body, "top_p", options.top_p);
+    insert_optional_json_field(&mut body, "presence_penalty", options.presence_penalty);
+    insert_optional_json_field(&mut body, "frequency_penalty", options.frequency_penalty);
     if !instructions.is_empty() {
         body["instructions"] = Value::String(instructions.join("\n\n"));
     }
     if !tool_defs.is_empty() {
         body["tools"] = Value::Array(tool_defs);
     }
-    if let Some(max_output_tokens) = options.max_output_tokens {
-        body["max_output_tokens"] = json!(max_output_tokens);
-    }
+    insert_optional_json_field(&mut body, "max_output_tokens", options.max_output_tokens);
 
     let mut headers = json_headers();
     apply_bearer_auth(&mut headers, &config.api_key)?;
@@ -888,39 +872,77 @@ fn openai_responses_function_tool(tool: &FunctionToolDefinition) -> Value {
     })
 }
 
-fn serialize_openai_responses_content(content: Option<&MessageContent>) -> Value {
+fn insert_optional_json_field<T>(body: &mut Value, key: &str, value: Option<T>)
+where
+    T: serde::Serialize,
+{
+    if let Some(value) = value {
+        body[key] = json!(value);
+    }
+}
+
+enum SerializedContent {
+    Null,
+    Text(String),
+    Parts(Vec<Value>),
+}
+
+fn serialize_message_parts(
+    content: Option<&MessageContent>,
+    collapse_text_only: bool,
+    text_part: impl Fn(&str) -> Value,
+    image_part: impl Fn(&str, &str) -> Value,
+) -> SerializedContent {
     let Some(content) = content else {
-        return Value::Array(Vec::new());
+        return SerializedContent::Null;
     };
 
-    if content
-        .parts()
-        .iter()
-        .all(|part| matches!(part, MessageContentPart::Text(_)))
+    if collapse_text_only
+        && content
+            .parts()
+            .iter()
+            .all(|part| matches!(part, MessageContentPart::Text(_)))
     {
-        return Value::String(content.joined_texts().unwrap_or_default());
+        return SerializedContent::Text(content.joined_texts().unwrap_or_default());
     }
 
-    Value::Array(
+    SerializedContent::Parts(
         content
             .parts()
             .iter()
             .map(|part| match part {
-                MessageContentPart::Text(text) => json!({
-                    "type": "input_text",
-                    "text": text,
-                }),
+                MessageContentPart::Text(text) => text_part(text),
                 MessageContentPart::Image {
                     media_type,
                     data_base64,
                     ..
-                } => json!({
-                    "type": "input_image",
-                    "image_url": format!("data:{};base64,{}", media_type, data_base64),
-                }),
+                } => image_part(media_type, data_base64),
             })
             .collect(),
     )
+}
+
+fn serialize_openai_responses_content(content: Option<&MessageContent>) -> Value {
+    match serialize_message_parts(
+        content,
+        true,
+        |text| {
+            json!({
+                "type": "input_text",
+                "text": text,
+            })
+        },
+        |media_type, data_base64| {
+            json!({
+                "type": "input_image",
+                "image_url": format!("data:{};base64,{}", media_type, data_base64),
+            })
+        },
+    ) {
+        SerializedContent::Null => Value::Array(Vec::new()),
+        SerializedContent::Text(text) => Value::String(text),
+        SerializedContent::Parts(parts) => Value::Array(parts),
+    }
 }
 
 fn parse_openai_responses_response(body: &Value) -> Result<WireResponse> {
@@ -1041,69 +1063,60 @@ fn parse_openai_responses_stream_event(data: &str) -> Result<Vec<WireStreamDelta
 }
 
 fn serialize_openai_content(content: Option<&MessageContent>) -> Value {
-    let Some(content) = content else {
-        return Value::Null;
-    };
-    if content
-        .parts()
-        .iter()
-        .all(|part| matches!(part, MessageContentPart::Text(_)))
-    {
-        return Value::String(content.joined_texts().unwrap_or_default());
-    }
-
-    Value::Array(
-        content
-            .parts()
-            .iter()
-            .map(|part| match part {
-                MessageContentPart::Text(text) => json!({
-                    "type": "text",
-                    "text": text,
-                }),
-                MessageContentPart::Image {
-                    media_type,
-                    data_base64,
-                    ..
-                } => json!({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": format!("data:{};base64,{}", media_type, data_base64),
-                    }
-                }),
+    match serialize_message_parts(
+        content,
+        true,
+        |text| {
+            json!({
+                "type": "text",
+                "text": text,
             })
-            .collect(),
-    )
+        },
+        |media_type, data_base64| {
+            json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:{};base64,{}", media_type, data_base64),
+                }
+            })
+        },
+    ) {
+        SerializedContent::Null => Value::Null,
+        SerializedContent::Text(text) => Value::String(text),
+        SerializedContent::Parts(parts) => Value::Array(parts),
+    }
 }
 
 fn serialize_anthropic_blocks(content: Option<&MessageContent>) -> Result<Vec<Value>> {
-    Ok(content
-        .map(|content| {
-            content
-                .parts()
-                .iter()
-                .map(|part| match part {
-                    MessageContentPart::Text(text) => Ok(json!({
-                        "type": "text",
-                        "text": text,
-                    })),
-                    MessageContentPart::Image {
-                        media_type,
-                        data_base64,
-                        ..
-                    } => Ok(json!({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": data_base64,
-                        }
-                    })),
+    Ok(
+        match serialize_message_parts(
+            content,
+            false,
+            |text| {
+                json!({
+                    "type": "text",
+                    "text": text,
                 })
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default())
+            },
+            |media_type, data_base64| {
+                json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data_base64,
+                    }
+                })
+            },
+        ) {
+            SerializedContent::Null => Vec::new(),
+            SerializedContent::Text(text) => vec![json!({
+                "type": "text",
+                "text": text,
+            })],
+            SerializedContent::Parts(parts) => parts,
+        },
+    )
 }
 
 fn serialize_gemini_parts(content: Option<&MessageContent>) -> Result<Vec<Value>> {

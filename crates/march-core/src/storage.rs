@@ -18,6 +18,7 @@ use persist::{
     replace_conversation_history, replace_hints, replace_notes, replace_open_files,
     update_task_last_active,
 };
+pub use tasks::TaskCreateOptions;
 
 pub struct MarchStorage {
     workspace_root: PathBuf,
@@ -213,63 +214,9 @@ impl MarchStorage {
     }
 
     fn ensure_task_columns(&self) -> Result<()> {
-        let mut statement = self
-            .connection
-            .prepare("PRAGMA table_info(tasks)")
-            .context("failed to prepare tasks table_info query")?;
-        let columns = statement
-            .query_map([], |row| row.get::<_, String>(1))
-            .context("failed to query tasks table_info")?;
+        let columns = self.table_columns("tasks")?;
 
-        let mut has_title_source = false;
-        let mut has_title_locked = false;
-        let mut has_working_directory = false;
-        let mut has_selected_provider_id = false;
-        let mut has_selected_model = false;
-        let mut has_model_temperature = false;
-        let mut has_model_top_p = false;
-        let mut has_model_presence_penalty = false;
-        let mut has_model_frequency_penalty = false;
-        let mut has_model_max_output_tokens = false;
-        let mut has_active_agent = false;
-        for column in columns {
-            let column = column.context("failed to decode tasks table_info row")?;
-            if column == "title_source" {
-                has_title_source = true;
-            }
-            if column == "title_locked" {
-                has_title_locked = true;
-            }
-            if column == "working_directory" {
-                has_working_directory = true;
-            }
-            if column == "selected_provider_id" {
-                has_selected_provider_id = true;
-            }
-            if column == "selected_model" {
-                has_selected_model = true;
-            }
-            if column == "model_temperature" {
-                has_model_temperature = true;
-            }
-            if column == "model_top_p" {
-                has_model_top_p = true;
-            }
-            if column == "model_presence_penalty" {
-                has_model_presence_penalty = true;
-            }
-            if column == "model_frequency_penalty" {
-                has_model_frequency_penalty = true;
-            }
-            if column == "model_max_output_tokens" {
-                has_model_max_output_tokens = true;
-            }
-            if column == "active_agent" {
-                has_active_agent = true;
-            }
-        }
-
-        if !has_title_source {
+        if !columns.iter().any(|column| column == "title_source") {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN title_source TEXT NOT NULL DEFAULT 'default'",
@@ -278,7 +225,7 @@ impl MarchStorage {
                 .context("failed to add tasks.title_source column")?;
         }
 
-        if !has_title_locked {
+        if !columns.iter().any(|column| column == "title_locked") {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0",
@@ -287,7 +234,7 @@ impl MarchStorage {
                 .context("failed to add tasks.title_locked column")?;
         }
 
-        if !has_working_directory {
+        if !columns.iter().any(|column| column == "working_directory") {
             self.connection
                 .execute("ALTER TABLE tasks ADD COLUMN working_directory TEXT", [])
                 .context("failed to add tasks.working_directory column")?;
@@ -302,7 +249,10 @@ impl MarchStorage {
             )
             .context("failed to backfill tasks.working_directory column")?;
 
-        if !has_selected_provider_id {
+        if !columns
+            .iter()
+            .any(|column| column == "selected_provider_id")
+        {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN selected_provider_id INTEGER",
@@ -311,25 +261,28 @@ impl MarchStorage {
                 .context("failed to add tasks.selected_provider_id column")?;
         }
 
-        if !has_selected_model {
+        if !columns.iter().any(|column| column == "selected_model") {
             self.connection
                 .execute("ALTER TABLE tasks ADD COLUMN selected_model TEXT", [])
                 .context("failed to add tasks.selected_model column")?;
         }
 
-        if !has_model_temperature {
+        if !columns.iter().any(|column| column == "model_temperature") {
             self.connection
                 .execute("ALTER TABLE tasks ADD COLUMN model_temperature REAL", [])
                 .context("failed to add tasks.model_temperature column")?;
         }
 
-        if !has_model_top_p {
+        if !columns.iter().any(|column| column == "model_top_p") {
             self.connection
                 .execute("ALTER TABLE tasks ADD COLUMN model_top_p REAL", [])
                 .context("failed to add tasks.model_top_p column")?;
         }
 
-        if !has_model_presence_penalty {
+        if !columns
+            .iter()
+            .any(|column| column == "model_presence_penalty")
+        {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN model_presence_penalty REAL",
@@ -338,7 +291,10 @@ impl MarchStorage {
                 .context("failed to add tasks.model_presence_penalty column")?;
         }
 
-        if !has_model_frequency_penalty {
+        if !columns
+            .iter()
+            .any(|column| column == "model_frequency_penalty")
+        {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN model_frequency_penalty REAL",
@@ -347,7 +303,10 @@ impl MarchStorage {
                 .context("failed to add tasks.model_frequency_penalty column")?;
         }
 
-        if !has_model_max_output_tokens {
+        if !columns
+            .iter()
+            .any(|column| column == "model_max_output_tokens")
+        {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN model_max_output_tokens INTEGER",
@@ -356,7 +315,7 @@ impl MarchStorage {
                 .context("failed to add tasks.model_max_output_tokens column")?;
         }
 
-        if !has_active_agent {
+        if !columns.iter().any(|column| column == "active_agent") {
             self.connection
                 .execute(
                     "ALTER TABLE tasks ADD COLUMN active_agent TEXT NOT NULL DEFAULT 'march'",
@@ -560,19 +519,14 @@ mod tests {
         let workdir = temp_workspace();
         let storage = MarchStorage::open(&workdir).expect("open storage");
         let task = storage
-            .create_task_with_metadata_and_selection(
-                "demo",
-                TaskTitleSource::Manual,
-                true,
-                workdir.clone(),
-                Some(7),
-                Some("gpt-5.4".to_string()),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
+            .create_task_with_options("demo", {
+                let mut options = TaskCreateOptions::new(workdir.clone());
+                options.title_source = TaskTitleSource::Manual;
+                options.title_locked = true;
+                options.selected_provider_id = Some(7);
+                options.selected_model = Some("gpt-5.4".to_string());
+                options
+            })
             .expect("create task");
 
         let loaded = storage.load_task(task.id).expect("load task");
@@ -593,19 +547,14 @@ mod tests {
             .create_task("inherited")
             .expect("create inherited task");
         let explicit = storage
-            .create_task_with_metadata_and_selection(
-                "explicit",
-                TaskTitleSource::Manual,
-                true,
-                workdir.clone(),
-                Some(9),
-                Some("custom-model".to_string()),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
+            .create_task_with_options("explicit", {
+                let mut options = TaskCreateOptions::new(workdir.clone());
+                options.title_source = TaskTitleSource::Manual;
+                options.title_locked = true;
+                options.selected_provider_id = Some(9);
+                options.selected_model = Some("custom-model".to_string());
+                options
+            })
             .expect("create explicit task");
 
         storage

@@ -1,47 +1,42 @@
-import { computed, nextTick, ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { computed, ref } from 'vue';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
 import { useLiveTurns } from '@/composables/useLiveTurns';
 import { useNoteDialog } from '@/composables/useNoteDialog';
 import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
 import { useProviderSettings } from '@/composables/useProviderSettings';
+import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot } from '@/data/mock';
+import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
+import { useWorkspaceSnapshotState } from '@/composables/workspaceApp/useWorkspaceSnapshotState';
+import { useWorkspaceTaskActions } from '@/composables/workspaceApp/useWorkspaceTaskActions';
 import {
-  mockWorkspace,
-  toWorkspaceView,
-  type ChatImageAttachment,
-  type ChatMessage,
-  type BackendAgentProgressEvent,
-  type BackendWorkspaceSnapshot,
-  type WorkspaceView,
-} from '@/data/mock';
+  humanizeError,
+  type ChatPaneHandle,
+  type NoteEditorDialogHandle,
+} from '@/composables/workspaceApp/types';
 
-export type ChatPaneHandle = { focusComposer: () => void };
-export type NoteEditorDialogHandle = {
-  focusIdField: () => void;
-  focusContentField: () => void;
-};
+export type { ChatPaneHandle, NoteEditorDialogHandle } from '@/composables/workspaceApp/types';
 
 export function useWorkspaceApp() {
   const appTitle = 'March';
-  const appWindow = getCurrentWindow();
-  const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
-  const optimisticTaskId = ref<string | null>(null);
-  const optimisticActiveTaskId = ref<string | null>(null);
-  const optimisticDeletedTaskIds = ref<Set<string>>(new Set());
-  const localComposerMessages = ref<Record<number, ChatMessage[]>>({});
-  const workspacePath = computed(() => snapshot.value?.workspace_path);
   const busy = ref(false);
   const sendingTaskId = ref<number | null>(null);
   const cancellingTaskId = ref<number | null>(null);
   const errorMessage = ref('');
-  const isMaximized = ref(false);
   const chatPaneRef = ref<ChatPaneHandle | null>(null);
   const noteDialogRef = ref<NoteEditorDialogHandle | null>(null);
+  const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
+  const workspacePath = computed(() => snapshot.value?.workspace_path);
+  const {
+    isMaximized,
+    initializeWindowState,
+    disposeWindowState,
+    minimizeWindow,
+    toggleMaximize,
+    closeWindow,
+  } = useWindowControls();
 
   let unlistenAgentProgress: UnlistenFn | null = null;
-  let unlistenWindowResize: UnlistenFn | null = null;
 
   const {
     liveTurns,
@@ -60,6 +55,14 @@ export function useWorkspaceApp() {
     sendingTaskId,
     errorMessage,
     workspacePath,
+  });
+
+  const workspaceState = useWorkspaceSnapshotState({
+    snapshot,
+    liveTurns,
+    archivedFailedTurns,
+    archivedIntermediateTurns,
+    taskActivityStatuses,
   });
 
   const {
@@ -87,6 +90,47 @@ export function useWorkspaceApp() {
   } = useConfirmDialog();
 
   const { theme, setTheme } = useAppearanceSettings();
+
+  const {
+    runWorkspaceAction,
+    refreshWorkspace,
+    createTask,
+    selectTask,
+    deleteTask,
+    sendMessage,
+    cancelCurrentTurn,
+    addNote,
+    editNote,
+    handleSubmitNoteDialog,
+    deleteNote,
+    toggleOpenFileLock,
+    closeOpenFile,
+    openFilesFromComposer,
+    setTaskModel,
+    setTaskModelSettings,
+    setTaskWorkingDirectory,
+    refreshSkills,
+  } = useWorkspaceTaskActions({
+    workspaceState,
+    liveTurns,
+    sendingTaskId,
+    cancellingTaskId,
+    busy,
+    errorMessage,
+    chatPaneRef,
+    clearTaskActivity,
+    upsertLiveTurn,
+    archiveFailedTurn,
+    clearLiveTurn,
+    clearArchivedFailedTurns,
+    clearArchivedIntermediateTurns,
+    openCreateNoteDialog,
+    openEditNoteDialog,
+    openConfirmDialog,
+    closeConfirmDialog,
+    noteDialogRef,
+    submitNoteDialog,
+  });
 
   const {
     settingsOpen,
@@ -121,190 +165,18 @@ export function useWorkspaceApp() {
     humanizeError,
   });
 
-  const workspace = computed<WorkspaceView>(() => {
-    const activeTaskId = snapshot.value?.active_task?.task.id ?? (snapshot.value?.tasks[0]?.id ?? null);
-
-    if (snapshot.value) {
-      const baseWorkspace = toWorkspaceView(snapshot.value);
-      const intermediateMessages = activeTaskId
-        ? (archivedIntermediateTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
-        : [];
-      const archivedMessages = activeTaskId
-        ? (archivedFailedTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
-        : [];
-      const mergedChat = [...baseWorkspace.chat, ...intermediateMessages, ...archivedMessages].sort(
-        (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
-      );
-      return {
-        ...baseWorkspace,
-        tasks: baseWorkspace.tasks.map((task) => {
-          const taskId = Number(task.id);
-          const activityStatus = Number.isFinite(taskId) ? taskActivityStatuses.value[taskId] : undefined;
-          return {
-            ...task,
-            activityStatus: task.id === String(activeTaskId) ? undefined : activityStatus,
-          };
-        }),
-        chat: mergeChatWithComposerMessages(activeTaskId ?? undefined, mergedChat),
-        liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
-      };
-    }
-
-    return mockWorkspace;
-  });
-
-  const resolvedWorkspace = computed<WorkspaceView>(() => {
-    const baseWorkspace = workspace.value;
-    let nextWorkspace = baseWorkspace;
-
-    if (optimisticTaskId.value) {
-      const optimisticTask = {
-        id: optimisticTaskId.value,
-        name: '默认任务',
-        status: 'active' as const,
-        updatedAt: '刚刚',
-      };
-
-      nextWorkspace = {
-        ...baseWorkspace,
-        title: optimisticTask.name,
-        tasks: [
-          optimisticTask,
-          ...baseWorkspace.tasks
-            .filter((task) => task.id !== optimisticTask.id)
-            .map((task) => ({
-              ...task,
-              status: 'idle' as const,
-            })),
-        ],
-        activeTaskId: optimisticTask.id,
-        selectedModel: undefined,
-        selectedTemperature: undefined,
-        selectedTopP: undefined,
-        selectedPresencePenalty: undefined,
-        selectedFrequencyPenalty: undefined,
-        selectedMaxOutputTokens: undefined,
-        workingDirectory: baseWorkspace.workspacePath ?? baseWorkspace.workingDirectory,
-        chat: [],
-        notes: [],
-        openFiles: [],
-        hints: [],
-        skills: [],
-        contextUsage: {
-          percent: 0,
-          current: '0',
-          limit: baseWorkspace.contextUsage.limit,
-          sections: [],
-        },
-        debugRounds: [],
-        liveTurn: undefined,
-      };
-    }
-
-    if (!optimisticDeletedTaskIds.value.size) {
-      return applyOptimisticActiveTask(nextWorkspace);
-    }
-
-    const visibleTasks = nextWorkspace.tasks.filter((task) => !optimisticDeletedTaskIds.value.has(task.id));
-    const activeTaskVisible = nextWorkspace.activeTaskId && !optimisticDeletedTaskIds.value.has(nextWorkspace.activeTaskId);
-    const fallbackActiveTaskId = activeTaskVisible ? nextWorkspace.activeTaskId : (visibleTasks[0]?.id ?? '');
-
-    if (activeTaskVisible) {
-      return applyOptimisticActiveTask({
-        ...nextWorkspace,
-        tasks: visibleTasks,
-      });
-    }
-
-    const fallbackTaskName = visibleTasks.find((task) => task.id === fallbackActiveTaskId)?.name ?? 'March';
-
-    return applyOptimisticActiveTask({
-      ...nextWorkspace,
-      title: fallbackTaskName,
-      tasks: visibleTasks,
-      activeTaskId: fallbackActiveTaskId,
-      selectedModel: undefined,
-      selectedTemperature: undefined,
-      selectedTopP: undefined,
-      selectedPresencePenalty: undefined,
-      selectedFrequencyPenalty: undefined,
-      selectedMaxOutputTokens: undefined,
-      workingDirectory: nextWorkspace.workspacePath ?? nextWorkspace.workingDirectory,
-      chat: [],
-      notes: [],
-      openFiles: [],
-      hints: [],
-      skills: [],
-      contextUsage: {
-        percent: 0,
-        current: '0',
-        limit: nextWorkspace.contextUsage.limit,
-        sections: [],
-      },
-      debugRounds: [],
-      liveTurn: undefined,
-    });
-  });
-
-  function applyOptimisticActiveTask(w: WorkspaceView): WorkspaceView {
-    const targetId = optimisticActiveTaskId.value;
-    if (!targetId || targetId === w.activeTaskId) {
-      return w;
-    }
-    const targetTask = w.tasks.find((task) => task.id === targetId);
-    if (!targetTask) {
-      return w;
-    }
-    return {
-      ...w,
-      activeTaskId: targetId,
-      title: targetTask.name,
-      selectedModel: undefined,
-      selectedTemperature: undefined,
-      selectedTopP: undefined,
-      selectedPresencePenalty: undefined,
-      selectedFrequencyPenalty: undefined,
-      selectedMaxOutputTokens: undefined,
-      chat: [],
-      notes: [],
-      openFiles: [],
-      hints: [],
-      skills: [],
-      contextUsage: {
-        percent: 0,
-        current: '0',
-        limit: w.contextUsage.limit,
-        sections: [],
-      },
-      debugRounds: [],
-      liveTurn: undefined,
-    };
-  }
-
-  const activeTaskIdNumber = computed(() => {
-    const raw = resolvedWorkspace.value.activeTaskId;
-    if (!raw || raw === optimisticTaskId.value) {
-      return null;
-    }
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  });
-
   const hasPendingSend = computed(() => sendingTaskId.value !== null);
   const isActiveTaskSending = computed(() =>
-    !!activeTaskIdNumber.value && sendingTaskId.value === activeTaskIdNumber.value,
+    !!workspaceState.activeTaskIdNumber.value && sendingTaskId.value === workspaceState.activeTaskIdNumber.value,
   );
   const isActiveTaskCancelling = computed(() =>
-    !!activeTaskIdNumber.value && cancellingTaskId.value === activeTaskIdNumber.value,
+    !!workspaceState.activeTaskIdNumber.value && cancellingTaskId.value === workspaceState.activeTaskIdNumber.value,
   );
 
   async function initialize() {
-    isMaximized.value = await appWindow.isMaximized();
+    await initializeWindowState();
     unlistenAgentProgress = await listen<BackendAgentProgressEvent>('march://agent-progress', (event) => {
       applyAgentProgress(event.payload);
-    });
-    unlistenWindowResize = await appWindow.onResized(async () => {
-      isMaximized.value = await appWindow.isMaximized();
     });
     await refreshWorkspace();
     await refreshProviderSettings();
@@ -315,391 +187,7 @@ export function useWorkspaceApp() {
       unlistenAgentProgress();
       unlistenAgentProgress = null;
     }
-    if (unlistenWindowResize) {
-      unlistenWindowResize();
-      unlistenWindowResize = null;
-    }
-  }
-
-  async function refreshWorkspace(activeTaskId?: number | null) {
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('load_workspace_snapshot', {
-        activeTaskId: activeTaskId ?? undefined,
-      });
-    });
-  }
-
-  async function createTask() {
-    if (busy.value) {
-      return;
-    }
-
-    optimisticTaskId.value = `pending-task-${Date.now()}`;
-    await nextTick();
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('create_task', {
-        input: {},
-      });
-    });
-    optimisticTaskId.value = null;
-    await nextTick();
-    chatPaneRef.value?.focusComposer();
-  }
-
-  async function selectTask(taskId: string) {
-    if (!taskId || busy.value) {
-      return;
-    }
-
-    const numericTaskId = Number(taskId);
-    if (Number.isFinite(numericTaskId)) {
-      clearTaskActivity(numericTaskId);
-    }
-
-    optimisticActiveTaskId.value = taskId;
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('select_task', {
-        input: { taskId: numericTaskId },
-      });
-    });
-
-    optimisticActiveTaskId.value = null;
-  }
-
-  async function deleteTask(taskId: string) {
-    if (!taskId || busy.value) {
-      return;
-    }
-
-    const task = workspace.value.tasks.find((item) => item.id === taskId);
-    openConfirmDialog({
-      title: '删除任务',
-      description: '删除后，这个主题窗口及其聊天记录会从当前工作区移除。',
-      body: `确认删除「${task?.name ?? taskId}」吗？这个操作目前不能撤销。`,
-      confirmLabel: '删除任务',
-      action: async () => {
-        optimisticDeletedTaskIds.value = new Set([...optimisticDeletedTaskIds.value, taskId]);
-        const succeeded = await runWorkspaceAction(async () => {
-          snapshot.value = await invoke<BackendWorkspaceSnapshot>('delete_task', {
-            input: { taskId: Number(taskId) },
-          });
-        });
-        optimisticDeletedTaskIds.value = new Set(
-          [...optimisticDeletedTaskIds.value].filter((id) => id !== taskId),
-        );
-        if (!succeeded) {
-          return;
-        }
-        clearLiveTurn(Number(taskId));
-        clearTaskActivity(Number(taskId));
-        clearArchivedFailedTurns(Number(taskId));
-        clearArchivedIntermediateTurns(Number(taskId));
-        delete localComposerMessages.value[Number(taskId)];
-        if (sendingTaskId.value === Number(taskId)) {
-          sendingTaskId.value = null;
-        }
-        closeConfirmDialog();
-      },
-    });
-  }
-
-  async function sendMessage(payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ChatImageAttachment[] }) {
-    if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
-      return;
-    }
-
-    const taskId = activeTaskIdNumber.value;
-    const content = augmentComposerMessage(payload);
-
-    queueLocalComposerMessage(taskId, {
-      role: 'user',
-      author: 'User',
-      time: new Date().toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      timestamp: Date.now(),
-      content,
-      images: payload.images,
-    });
-    upsertLiveTurn(taskId, {
-      turnId: `pending-${Date.now()}`,
-      author: 'March',
-      state: 'pending',
-      statusLabel: '已发送，正在准备',
-      content: '',
-      errorMessage: '',
-      tools: [],
-    });
-    sendingTaskId.value = taskId;
-
-    try {
-      const openFilePaths = Array.from(new Set([...payload.files, ...payload.skills]));
-      if (openFilePaths.length) {
-        snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
-          input: {
-            taskId,
-            paths: openFilePaths,
-          },
-        });
-      }
-
-      const nextSnapshot = await invoke<BackendWorkspaceSnapshot>('send_message', {
-        input: {
-          taskId,
-          contentBlocks: [
-            ...(content
-              ? [{ type: 'text', text: content }]
-              : []),
-            ...payload.images.map((image) => ({
-              type: 'image',
-              media_type: image.mediaType,
-              data_base64: extractBase64Payload(image.previewUrl),
-              source_path: image.sourcePath ?? null,
-              name: image.name,
-            })),
-          ],
-        },
-      });
-      clearLocalComposerMessages(taskId);
-      clearLiveTurn(taskId);
-      if (snapshot.value?.active_task?.task.id === taskId) {
-        snapshot.value = nextSnapshot;
-      } else if (snapshot.value) {
-        snapshot.value = {
-          ...snapshot.value,
-          tasks: nextSnapshot.tasks,
-        };
-      }
-      errorMessage.value = '';
-    } catch (error) {
-      const currentLiveTurn = liveTurns.value[taskId];
-      if (currentLiveTurn) {
-        const failedTurn = {
-          ...currentLiveTurn,
-          state: 'error',
-          statusLabel: '本轮执行失败',
-          errorMessage: humanizeError(error),
-        } as const;
-        upsertLiveTurn(taskId, failedTurn);
-        archiveFailedTurn(taskId, failedTurn);
-        clearLiveTurn(taskId);
-      }
-      errorMessage.value = humanizeError(error);
-    } finally {
-      if (sendingTaskId.value === taskId) {
-        sendingTaskId.value = null;
-      }
-      if (cancellingTaskId.value === taskId) {
-        cancellingTaskId.value = null;
-      }
-    }
-  }
-
-  async function cancelCurrentTurn() {
-    if (!sendingTaskId.value || cancellingTaskId.value === sendingTaskId.value) {
-      return;
-    }
-
-    const taskId = sendingTaskId.value;
-    cancellingTaskId.value = taskId;
-    const currentLiveTurn = liveTurns.value[taskId];
-    if (currentLiveTurn) {
-      upsertLiveTurn(taskId, {
-        ...currentLiveTurn,
-        statusLabel: '正在中断…',
-      });
-    }
-
-    try {
-      await invoke('cancel_turn', { taskId });
-    } catch (error) {
-      cancellingTaskId.value = null;
-      errorMessage.value = humanizeError(error);
-    }
-  }
-
-  function augmentComposerMessage(payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ChatImageAttachment[] }) {
-    const base = payload.content.trim();
-    const sections = [base];
-    if (payload.directories.length) {
-      sections.push(`[目录引用]\n${payload.directories.map((path) => `- ${path}`).join('\n')}`);
-    }
-    return sections.filter(Boolean).join('\n\n');
-  }
-
-  async function addNote() {
-    if (!activeTaskIdNumber.value || busy.value) {
-      return;
-    }
-    openCreateNoteDialog();
-    await nextTick();
-    noteDialogRef.value?.focusIdField();
-  }
-
-  async function editNote(noteId: string) {
-    if (!activeTaskIdNumber.value || busy.value) {
-      return;
-    }
-
-    const existing = workspace.value.notes.find((note) => note.id === noteId);
-    openEditNoteDialog({
-      id: noteId,
-      content: existing?.content ?? '',
-    });
-    await nextTick();
-    noteDialogRef.value?.focusContentField();
-  }
-
-  async function handleSubmitNoteDialog() {
-    await submitNoteDialog(saveNote, {
-      id: () => {
-        noteDialogRef.value?.focusIdField();
-      },
-      content: () => {
-        noteDialogRef.value?.focusContentField();
-      },
-    });
-  }
-
-  async function saveNote(noteId: string, content: string) {
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('upsert_note', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          noteId,
-          content,
-        },
-      });
-    });
-  }
-
-  async function deleteNote(noteId: string) {
-    if (!activeTaskIdNumber.value) {
-      return;
-    }
-
-    openConfirmDialog({
-      title: '删除 Note',
-      description: '删除后，这条上下文不会再注入到下一轮 AI 视图中。',
-      body: `确认删除 Note「${noteId}」吗？`,
-      confirmLabel: '删除 Note',
-      action: async () => {
-        await runWorkspaceAction(async () => {
-          snapshot.value = await invoke<BackendWorkspaceSnapshot>('delete_note', {
-            input: {
-              taskId: activeTaskIdNumber.value,
-              noteId,
-            },
-          });
-        });
-        closeConfirmDialog();
-      },
-    });
-  }
-
-  async function toggleOpenFileLock(path: string, locked: boolean) {
-    if (!activeTaskIdNumber.value) {
-      return;
-    }
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('toggle_open_file_lock', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          path,
-          locked,
-        },
-      });
-    });
-  }
-
-  async function closeOpenFile(path: string) {
-    if (!activeTaskIdNumber.value) {
-      return;
-    }
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('close_open_file', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          path,
-        },
-      });
-    });
-  }
-
-  async function openFilesFromComposer(paths: string[]) {
-    if (!activeTaskIdNumber.value || !paths.length) {
-      return;
-    }
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          paths,
-        },
-      });
-    });
-  }
-
-  async function setTaskModel(selection: { providerId?: number | null; model: string }) {
-    if (!activeTaskIdNumber.value || busy.value) {
-      return;
-    }
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_model', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          providerId: selection.providerId ?? null,
-          model: selection.model,
-        },
-      });
-    });
-  }
-
-  async function setTaskModelSettings(settings: {
-    temperature?: number | null;
-    topP?: number | null;
-    presencePenalty?: number | null;
-    frequencyPenalty?: number | null;
-    maxOutputTokens?: number | null;
-  }) {
-    if (!activeTaskIdNumber.value || busy.value) {
-      return;
-    }
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_model_settings', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          temperature: settings.temperature ?? null,
-          topP: settings.topP ?? null,
-          presencePenalty: settings.presencePenalty ?? null,
-          frequencyPenalty: settings.frequencyPenalty ?? null,
-          maxOutputTokens: settings.maxOutputTokens ?? null,
-        },
-      });
-    });
-  }
-
-  async function setTaskWorkingDirectory(path?: string | null) {
-    if (!activeTaskIdNumber.value || busy.value) {
-      return;
-    }
-
-    await runWorkspaceAction(async () => {
-      snapshot.value = await invoke<BackendWorkspaceSnapshot>('set_task_working_directory', {
-        input: {
-          taskId: activeTaskIdNumber.value,
-          path: path ?? null,
-        },
-      });
-    });
+    disposeWindowState();
   }
 
   async function handleOpenSettings() {
@@ -722,14 +210,6 @@ export function useWorkspaceApp() {
     } catch (error) {
       errorMessage.value = humanizeError(error);
     }
-  }
-
-  async function refreshSkills() {
-    if (!activeTaskIdNumber.value || busy.value) {
-      return;
-    }
-
-    await refreshWorkspace(activeTaskIdNumber.value);
   }
 
   function confirmDeleteProvider(providerId: number) {
@@ -758,112 +238,6 @@ export function useWorkspaceApp() {
     });
   }
 
-  async function runWorkspaceAction(action: () => Promise<void>) {
-    busy.value = true;
-    try {
-      await action();
-      errorMessage.value = '';
-      return true;
-    } catch (error) {
-      optimisticTaskId.value = null;
-      if (!snapshot.value) {
-        console.warn('Failed to load workspace snapshot from Tauri backend, using mock data.', error);
-      }
-      errorMessage.value = humanizeError(error);
-      return false;
-    } finally {
-      busy.value = false;
-    }
-  }
-
-  function humanizeError(error: unknown) {
-    if (typeof error === 'string') {
-      return error;
-    }
-    if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-      return error.message;
-    }
-    return 'Unknown error while talking to the March backend.';
-  }
-
-  function queueLocalComposerMessage(taskId: number, message: ChatMessage) {
-    localComposerMessages.value = {
-      ...localComposerMessages.value,
-      [taskId]: [...(localComposerMessages.value[taskId] ?? []), message],
-    };
-  }
-
-  function clearLocalComposerMessages(taskId: number) {
-    if (!(taskId in localComposerMessages.value)) {
-      return;
-    }
-
-    const nextMessages = { ...localComposerMessages.value };
-    delete nextMessages[taskId];
-    localComposerMessages.value = nextMessages;
-  }
-
-  function mergeChatWithComposerMessages(taskId: number | undefined, chat: ChatMessage[]) {
-    if (!taskId) {
-      return chat;
-    }
-
-    const localMessages = localComposerMessages.value[taskId] ?? [];
-    if (!localMessages.length) {
-      return chat;
-    }
-
-    const merged = chat.map((message) => ({
-      ...message,
-      images: message.images ? [...message.images] : undefined,
-    }));
-    const usedIndices = new Set<number>();
-    const unmatched: ChatMessage[] = [];
-
-    for (const localMessage of localMessages) {
-      const matchIndex = merged.findIndex((message, index) =>
-        !usedIndices.has(index)
-        && message.role === localMessage.role
-        && message.content === localMessage.content
-        && Math.abs((message.timestamp ?? 0) - (localMessage.timestamp ?? 0)) < 120000,
-      );
-
-      if (matchIndex >= 0) {
-        usedIndices.add(matchIndex);
-        if (localMessage.images?.length) {
-          merged[matchIndex] = {
-            ...merged[matchIndex],
-            images: localMessage.images,
-          };
-        }
-      } else {
-        unmatched.push(localMessage);
-      }
-    }
-
-    return [...merged, ...unmatched].sort(
-      (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
-    );
-  }
-
-  function extractBase64Payload(dataUrl: string) {
-    const separatorIndex = dataUrl.indexOf(',');
-    return separatorIndex >= 0 ? dataUrl.slice(separatorIndex + 1) : dataUrl;
-  }
-
-  async function minimizeWindow() {
-    await appWindow.minimize();
-  }
-
-  async function toggleMaximize() {
-    await appWindow.toggleMaximize();
-    isMaximized.value = await appWindow.isMaximized();
-  }
-
-  async function closeWindow() {
-    await appWindow.close();
-  }
-
   return {
     appTitle,
     busy,
@@ -871,8 +245,8 @@ export function useWorkspaceApp() {
     isMaximized,
     chatPaneRef,
     noteDialogRef,
-    workspace: resolvedWorkspace,
-    activeTaskIdNumber,
+    workspace: workspaceState.resolvedWorkspace,
+    activeTaskIdNumber: workspaceState.activeTaskIdNumber,
     hasPendingSend,
     isActiveTaskSending,
     isActiveTaskCancelling,

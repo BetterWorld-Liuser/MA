@@ -265,8 +265,7 @@ impl ProviderClient {
                         remember_stream_failure(&provider.config);
                     }
 
-                    let can_retry =
-                        failure.is_stream_retryable() && !attempt_content_delivered;
+                    let can_retry = failure.is_stream_retryable() && !attempt_content_delivered;
                     stream_failure_summary = Some(failure.summary());
 
                     if can_retry && attempt < STREAM_MAX_RETRIES {

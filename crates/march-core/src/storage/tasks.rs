@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Row, params};
 
 use crate::agents::MARCH_AGENT_NAME;
 use crate::context::{ConversationHistory, DisplayTurn, Hint, NoteEntry};
@@ -16,21 +16,40 @@ use super::{
     MarchStorage, PersistedNote, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource,
 };
 
+#[derive(Debug, Clone)]
+pub struct TaskCreateOptions {
+    pub title_source: TaskTitleSource,
+    pub title_locked: bool,
+    pub working_directory: PathBuf,
+    pub selected_provider_id: Option<i64>,
+    pub selected_model: Option<String>,
+    pub model_temperature: Option<f32>,
+    pub model_top_p: Option<f32>,
+    pub model_presence_penalty: Option<f32>,
+    pub model_frequency_penalty: Option<f32>,
+    pub model_max_output_tokens: Option<u32>,
+}
+
+impl TaskCreateOptions {
+    pub fn new(working_directory: PathBuf) -> Self {
+        Self {
+            title_source: TaskTitleSource::Default,
+            title_locked: false,
+            working_directory,
+            selected_provider_id: None,
+            selected_model: None,
+            model_temperature: None,
+            model_top_p: None,
+            model_presence_penalty: None,
+            model_frequency_penalty: None,
+            model_max_output_tokens: None,
+        }
+    }
+}
+
 impl MarchStorage {
     pub fn create_task(&self, name: impl AsRef<str>) -> Result<TaskRecord> {
-        self.create_task_with_metadata_and_selection(
-            name,
-            TaskTitleSource::Default,
-            false,
-            self.workspace_root.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        self.create_task_with_options(name, TaskCreateOptions::new(self.workspace_root.clone()))
     }
 
     pub fn create_task_with_metadata(
@@ -39,47 +58,34 @@ impl MarchStorage {
         title_source: TaskTitleSource,
         title_locked: bool,
     ) -> Result<TaskRecord> {
-        self.create_task_with_metadata_and_selection(
-            name,
-            title_source,
-            title_locked,
-            self.workspace_root.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        let mut options = TaskCreateOptions::new(self.workspace_root.clone());
+        options.title_source = title_source;
+        options.title_locked = title_locked;
+        self.create_task_with_options(name, options)
     }
 
-    pub fn create_task_with_metadata_and_selection(
+    pub fn create_task_with_options(
         &self,
         name: impl AsRef<str>,
-        title_source: TaskTitleSource,
-        title_locked: bool,
-        working_directory: PathBuf,
-        selected_provider_id: Option<i64>,
-        selected_model: Option<String>,
-        model_temperature: Option<f32>,
-        model_top_p: Option<f32>,
-        model_presence_penalty: Option<f32>,
-        model_frequency_penalty: Option<f32>,
-        model_max_output_tokens: Option<u32>,
+        options: TaskCreateOptions,
     ) -> Result<TaskRecord> {
         let name = name.as_ref().trim();
         if name.is_empty() {
             bail!("task name cannot be empty");
         }
-        let normalized_model = selected_model.and_then(|model| {
-            let trimmed = model.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
+        let TaskCreateOptions {
+            title_source,
+            title_locked,
+            working_directory,
+            selected_provider_id,
+            selected_model,
+            model_temperature,
+            model_top_p,
+            model_presence_penalty,
+            model_frequency_penalty,
+            model_max_output_tokens,
+        } = options;
+        let normalized_model = normalize_model_id(selected_model);
         let working_directory = normalize_working_directory(&working_directory)?;
         let normalized_temperature = normalize_model_temperature(model_temperature)?;
         let normalized_top_p = normalize_model_top_p(model_top_p)?;
@@ -176,9 +182,7 @@ impl MarchStorage {
             )
             .context("failed to update task title")?;
 
-        if affected == 0 {
-            bail!("task {} not found", task_id);
-        }
+        require_task_found(affected, task_id)?;
 
         Ok(())
     }
@@ -226,14 +230,7 @@ impl MarchStorage {
         selected_provider_id: Option<i64>,
         selected_model: Option<String>,
     ) -> Result<()> {
-        let normalized = selected_model.and_then(|model| {
-            let trimmed = model.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
+        let normalized = normalize_model_id(selected_model);
 
         let affected = self
             .connection
@@ -245,9 +242,7 @@ impl MarchStorage {
             )
             .context("failed to update task selection")?;
 
-        if affected == 0 {
-            bail!("task {} not found", task_id);
-        }
+        require_task_found(affected, task_id)?;
 
         Ok(())
     }
@@ -291,9 +286,7 @@ impl MarchStorage {
             )
             .context("failed to update task model settings")?;
 
-        if affected == 0 {
-            bail!("task {} not found", task_id);
-        }
+        require_task_found(affected, task_id)?;
 
         Ok(())
     }
@@ -315,9 +308,7 @@ impl MarchStorage {
             )
             .context("failed to update task working_directory")?;
 
-        if affected == 0 {
-            bail!("task {} not found", task_id);
-        }
+        require_task_found(affected, task_id)?;
 
         Ok(())
     }
@@ -327,14 +318,7 @@ impl MarchStorage {
         selected_provider_id: Option<i64>,
         selected_model: Option<String>,
     ) -> Result<()> {
-        let normalized_model = selected_model.and_then(|model| {
-            let trimmed = model.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        });
+        let normalized_model = normalize_model_id(selected_model);
 
         self.connection
             .execute(
@@ -364,9 +348,7 @@ impl MarchStorage {
             )
             .context("failed to update task active_agent")?;
 
-        if affected == 0 {
-            bail!("task {} not found", task_id);
-        }
+        require_task_found(affected, task_id)?;
 
         Ok(())
     }
@@ -374,77 +356,22 @@ impl MarchStorage {
     pub fn list_tasks(&self) -> Result<Vec<TaskRecord>> {
         let mut statement = self
             .connection
-            .prepare(
-                "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
-                 , selected_provider_id, selected_model, model_temperature, model_top_p,
-                   model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent
-                 FROM tasks
-                 ORDER BY last_active DESC, id DESC",
-            )
+            .prepare(&format!(
+                "SELECT {}
+                     FROM tasks
+                     ORDER BY last_active DESC, id DESC",
+                TASK_RECORD_SELECT_COLUMNS
+            ))
             .context("failed to prepare list_tasks query")?;
 
         let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, Option<i64>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
-                    row.get::<_, Option<f32>>(9)?,
-                    row.get::<_, Option<f32>>(10)?,
-                    row.get::<_, Option<f32>>(11)?,
-                    row.get::<_, Option<f32>>(12)?,
-                    row.get::<_, Option<i64>>(13)?,
-                    row.get::<_, String>(14)?,
-                ))
-            })
+            .query_map([], RawTaskRecord::from_row)
             .context("failed to query tasks")?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let (
-                id,
-                name,
-                title_source,
-                title_locked,
-                working_directory,
-                created_at,
-                last_active,
-                selected_provider_id,
-                selected_model,
-                model_temperature,
-                model_top_p,
-                model_presence_penalty,
-                model_frequency_penalty,
-                model_max_output_tokens,
-                active_agent,
-            ) = row.context("failed to decode task row")?;
-            tasks.push(TaskRecord {
-                id,
-                name,
-                title_source: TaskTitleSource::from_db_value(&title_source)?,
-                title_locked: title_locked != 0,
-                working_directory: decode_working_directory(
-                    working_directory,
-                    &self.workspace_root,
-                )?,
-                selected_provider_id,
-                selected_model,
-                model_temperature,
-                model_top_p,
-                model_presence_penalty,
-                model_frequency_penalty,
-                model_max_output_tokens: model_max_output_tokens
-                    .and_then(|value| u32::try_from(value).ok()),
-                active_agent,
-                created_at: system_time_from_unix(created_at)?,
-                last_active: system_time_from_unix(last_active)?,
-            });
+            let raw = row.context("failed to decode task row")?;
+            tasks.push(raw.decode(&self.workspace_root)?);
         }
         Ok(tasks)
     }
@@ -470,53 +397,20 @@ impl MarchStorage {
         let raw = self
             .connection
             .query_row(
-                "SELECT id, name, title_source, title_locked, working_directory, created_at, last_active
-                 , selected_provider_id, selected_model, model_temperature, model_top_p,
-                   model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent
-                 FROM tasks
-                 WHERE id = ?1",
+                &format!(
+                    "SELECT {}
+                     FROM tasks
+                     WHERE id = ?1",
+                    TASK_RECORD_SELECT_COLUMNS
+                ),
                 params![task_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, Option<i64>>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                        row.get::<_, Option<f32>>(9)?,
-                        row.get::<_, Option<f32>>(10)?,
-                        row.get::<_, Option<f32>>(11)?,
-                        row.get::<_, Option<f32>>(12)?,
-                        row.get::<_, Option<i64>>(13)?,
-                        row.get::<_, String>(14)?,
-                    ))
-                },
+                RawTaskRecord::from_row,
             )
             .optional()
             .context("failed to load task row")?
             .with_context(|| format!("task {} not found", task_id))?;
 
-        Ok(TaskRecord {
-            id: raw.0,
-            name: raw.1,
-            title_source: TaskTitleSource::from_db_value(&raw.2)?,
-            title_locked: raw.3 != 0,
-            working_directory: decode_working_directory(raw.4, &self.workspace_root)?,
-            selected_provider_id: raw.7,
-            selected_model: raw.8,
-            model_temperature: raw.9,
-            model_top_p: raw.10,
-            model_presence_penalty: raw.11,
-            model_frequency_penalty: raw.12,
-            model_max_output_tokens: raw.13.and_then(|value| u32::try_from(value).ok()),
-            active_agent: raw.14,
-            created_at: system_time_from_unix(raw.5)?,
-            last_active: system_time_from_unix(raw.6)?,
-        })
+        raw.decode(&self.workspace_root)
     }
 
     fn load_conversation_history(&self, task_id: i64) -> Result<ConversationHistory> {
@@ -655,6 +549,90 @@ impl MarchStorage {
         }
         Ok(hints)
     }
+}
+
+const TASK_RECORD_SELECT_COLUMNS: &str = "id, name, title_source, title_locked, working_directory, created_at, last_active, \
+     selected_provider_id, selected_model, model_temperature, model_top_p, \
+     model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent";
+
+struct RawTaskRecord {
+    id: i64,
+    name: String,
+    title_source: String,
+    title_locked: i64,
+    working_directory: Option<String>,
+    created_at: i64,
+    last_active: i64,
+    selected_provider_id: Option<i64>,
+    selected_model: Option<String>,
+    model_temperature: Option<f32>,
+    model_top_p: Option<f32>,
+    model_presence_penalty: Option<f32>,
+    model_frequency_penalty: Option<f32>,
+    model_max_output_tokens: Option<i64>,
+    active_agent: String,
+}
+
+impl RawTaskRecord {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            title_source: row.get("title_source")?,
+            title_locked: row.get("title_locked")?,
+            working_directory: row.get("working_directory")?,
+            created_at: row.get("created_at")?,
+            last_active: row.get("last_active")?,
+            selected_provider_id: row.get("selected_provider_id")?,
+            selected_model: row.get("selected_model")?,
+            model_temperature: row.get("model_temperature")?,
+            model_top_p: row.get("model_top_p")?,
+            model_presence_penalty: row.get("model_presence_penalty")?,
+            model_frequency_penalty: row.get("model_frequency_penalty")?,
+            model_max_output_tokens: row.get("model_max_output_tokens")?,
+            active_agent: row.get("active_agent")?,
+        })
+    }
+
+    fn decode(self, workspace_root: &PathBuf) -> Result<TaskRecord> {
+        Ok(TaskRecord {
+            id: self.id,
+            name: self.name,
+            title_source: TaskTitleSource::from_db_value(&self.title_source)?,
+            title_locked: self.title_locked != 0,
+            working_directory: decode_working_directory(self.working_directory, workspace_root)?,
+            selected_provider_id: self.selected_provider_id,
+            selected_model: self.selected_model,
+            model_temperature: self.model_temperature,
+            model_top_p: self.model_top_p,
+            model_presence_penalty: self.model_presence_penalty,
+            model_frequency_penalty: self.model_frequency_penalty,
+            model_max_output_tokens: self
+                .model_max_output_tokens
+                .and_then(|value| u32::try_from(value).ok()),
+            active_agent: self.active_agent,
+            created_at: system_time_from_unix(self.created_at)?,
+            last_active: system_time_from_unix(self.last_active)?,
+        })
+    }
+}
+
+fn normalize_model_id(model: Option<String>) -> Option<String> {
+    model.and_then(|model| {
+        let trimmed = model.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn require_task_found(affected: usize, task_id: i64) -> Result<()> {
+    if affected == 0 {
+        bail!("task {} not found", task_id);
+    }
+    Ok(())
 }
 
 fn normalize_model_temperature(value: Option<f32>) -> Result<Option<f32>> {

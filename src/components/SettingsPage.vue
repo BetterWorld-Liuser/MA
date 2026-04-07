@@ -46,515 +46,113 @@
       </aside>
 
       <div class="min-h-0 overflow-y-auto">
-        <div v-if="activeSection === 'appearance'" class="space-y-5">
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">主题</h3>
-                <p class="settings-section-copy">目前提供深色与浅色两套主题。切换后立即作用于整套应用壳层与面板组件。</p>
-              </div>
-            </div>
+        <AppearanceSettingsSection
+          v-if="activeSection === 'appearance'"
+          :theme="theme"
+          :theme-options="themeOptions"
+          @update-theme="emit('updateTheme', $event)"
+        />
 
-            <div class="grid gap-4 lg:grid-cols-2">
-              <button
-                v-for="option in themeOptions"
-                :key="option.value"
-                type="button"
-                class="theme-card"
-                :class="theme === option.value ? 'theme-card-active' : ''"
-                @click="emit('updateTheme', option.value)"
-              >
-                <div class="flex items-start justify-between gap-4">
-                  <div>
-                    <div class="flex items-center gap-2">
-                      <Icon :icon="option.icon" class="h-4 w-4 text-accent" />
-                      <h4 class="text-[15px] font-medium text-text">{{ option.label }}</h4>
-                    </div>
-                    <p class="mt-2 text-[12px] leading-5 text-text-muted">{{ option.description }}</p>
-                  </div>
-                  <span class="theme-card-check">
-                    <Icon v-if="theme === option.value" :icon="checkIcon" class="h-3.5 w-3.5" />
-                  </span>
-                </div>
+        <ProviderSettingsSection
+          v-else-if="activeSection === 'providers'"
+          :settings="settings"
+          :busy="busy"
+          :probe-models="probeModels"
+          :probe-suggested-models="probeSuggestedModels"
+          :probe-models-loading="probeModelsLoading"
+          :provider-test-message="providerTestMessage"
+          :provider-test-success="providerTestSuccess"
+          :active-editor-id="activeEditorId"
+          :active-provider-model-id="activeProviderModelId"
+          :provider-type="providerType"
+          :provider-name="providerName"
+          :provider-base-url="providerBaseUrl"
+          :provider-api-key="providerApiKey"
+          :provider-probe-model="providerProbeModel"
+          :provider-type-options="providerTypeOptions"
+          :provider-name-placeholder="providerNamePlaceholder"
+          :base-url-placeholder="baseUrlPlaceholder"
+          :base-url-hint="baseUrlHint"
+          :api-key-placeholder="apiKeyPlaceholder"
+          :probe-model-placeholder="probeModelPlaceholder"
+          :probe-model-select-placeholder="probeModelSelectPlaceholder"
+          :provider-model-id="providerModelId"
+          :provider-model-display-name="providerModelDisplayName"
+          :provider-model-context-window="providerModelContextWindow"
+          :provider-model-max-output-tokens="providerModelMaxOutputTokens"
+          :provider-model-supports-tool-use="providerModelSupportsToolUse"
+          :provider-model-supports-vision="providerModelSupportsVision"
+          :provider-model-supports-audio="providerModelSupportsAudio"
+          :provider-model-supports-pdf="providerModelSupportsPdf"
+          :provider-model-server-tools="providerModelServerTools"
+          :provider-model-id-options="providerModelIdOptions"
+          :provider-model-id-suggestions="providerModelIdSuggestions"
+          :server-tool-definitions="serverToolDefinitions"
+          :server-tool-format-options="serverToolFormatOptions"
+          :is-server-tool-enabled="isServerToolEnabled"
+          :provider-type-label="providerTypeLabel"
+          :format-capabilities-summary="formatCapabilitiesSummary"
+          @start-create="startCreate"
+          @start-edit="startEdit"
+          @delete-provider="emit('deleteProvider', $event)"
+          @update:provider-type="providerType = $event"
+          @update:provider-name="providerName = $event"
+          @update:provider-base-url="providerBaseUrl = $event"
+          @update:provider-api-key="providerApiKey = $event"
+          @update:provider-probe-model="providerProbeModel = $event"
+          @submit-provider="submitProvider"
+          @test-provider="testProvider"
+          @reset-form="resetForm"
+          @request-probe-models-now="requestProbeModelsNow"
+          @start-create-provider-model="startCreateProviderModel"
+          @start-edit-provider-model="startEditProviderModel"
+          @delete-provider-model="emit('deleteProviderModel', $event)"
+          @update:provider-model-id="providerModelId = $event"
+          @update:provider-model-display-name="providerModelDisplayName = $event"
+          @update:provider-model-context-window="providerModelContextWindow = $event"
+          @update:provider-model-max-output-tokens="providerModelMaxOutputTokens = $event"
+          @update:provider-model-supports-tool-use="providerModelSupportsToolUse = $event"
+          @update:provider-model-supports-vision="providerModelSupportsVision = $event"
+          @update:provider-model-supports-audio="providerModelSupportsAudio = $event"
+          @update:provider-model-supports-pdf="providerModelSupportsPdf = $event"
+          @submit-provider-model="submitProviderModel"
+          @reset-provider-model-form="resetProviderModelForm"
+          @server-tool-toggle="onServerToolToggle"
+          @set-server-tool-format="setServerToolFormat"
+        />
 
-                <div class="theme-preview" :data-preview-theme="option.value">
-                  <div class="theme-preview-titlebar">
-                    <span class="theme-preview-logo">M</span>
-                    <span class="text-[10px] font-medium">March</span>
-                  </div>
-                  <div class="theme-preview-body">
-                    <div class="theme-preview-sidebar">
-                      <span class="theme-preview-chip theme-preview-chip-active"></span>
-                      <span class="theme-preview-chip"></span>
-                      <span class="theme-preview-chip"></span>
-                    </div>
-                    <div class="theme-preview-main">
-                      <div class="theme-preview-message"></div>
-                      <div class="theme-preview-message theme-preview-message-secondary"></div>
-                      <div class="theme-preview-input"></div>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            </div>
-          </section>
-
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">外观说明</h3>
-                <p class="settings-section-copy">主题切换只影响 UI 呈现，不会触发任务、上下文或 provider 的运行时变更。</p>
-              </div>
-            </div>
-
-            <div class="grid gap-3 md:grid-cols-3">
-              <article class="settings-info-card">
-                <p class="settings-info-label">持久化</p>
-                <p class="settings-info-value">保存在当前设备本地</p>
-              </article>
-              <article class="settings-info-card">
-                <p class="settings-info-label">生效方式</p>
-                <p class="settings-info-value">即时切换，无需重启</p>
-              </article>
-              <article class="settings-info-card">
-                <p class="settings-info-label">默认主题</p>
-                <p class="settings-info-value">深色，保持当前视觉延续</p>
-              </article>
-            </div>
-          </section>
-        </div>
-
-        <div v-else-if="activeSection === 'providers'" class="settings-grid">
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">Providers</h3>
-                <p class="settings-section-copy">全局配置，保存在用户目录下。</p>
-              </div>
-              <Button variant="outline" size="sm" @click="startCreate">新增 Provider</Button>
-            </div>
-
-            <div v-if="settings?.providers.length" class="space-y-3">
-              <article
-                v-for="provider in settings.providers"
-                :key="provider.id"
-                class="settings-provider-card"
-                :class="provider.id === activeEditorId ? 'settings-provider-card-active' : ''"
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="flex items-center gap-2">
-                      <h4 class="truncate text-[14px] font-medium text-text">{{ provider.name }}</h4>
-                      <span v-if="provider.id === settings.defaultProviderId" class="settings-default-badge">默认</span>
-                    </div>
-                    <p class="mt-1 text-[11px] uppercase tracking-[0.12em] text-text-dim">{{ providerTypeLabel(provider.providerType) }}</p>
-                    <p v-if="provider.baseUrl" class="mt-1 truncate font-mono text-[11px] text-text-dim">{{ provider.baseUrl }}</p>
-                    <p class="mt-2 text-[12px] text-text-muted">Key: {{ provider.apiKeyHint }}</p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-1">
-                    <Button variant="ghost" size="sm" @click="startEdit(provider)">编辑</Button>
-                    <Button variant="ghost" size="sm" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProvider', provider.id)">
-                      删除
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            </div>
-
-            <div v-else class="settings-empty">
-              还没有配置 provider。先新增一个 provider 类型和凭据，后面模型选择器就能接上它。
-            </div>
-          </section>
-
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">{{ activeEditorId ? '编辑 Provider' : '新增 Provider' }}</h3>
-                <p class="settings-section-copy">这里只负责维护单个 provider 的接入信息，不再承载全局默认模型配置。</p>
-              </div>
-            </div>
-
-            <form class="space-y-4" @submit.prevent="submitProvider">
-              <div class="dialog-field">
-                <label class="dialog-label" for="provider-type">类型</label>
-                <SettingsSelect v-model="providerType" :options="providerTypeOptions" placeholder="请选择 provider 类型" />
-              </div>
-              <div class="dialog-field">
-                <label class="dialog-label" for="provider-name">名称</label>
-                <Input id="provider-name" v-model="providerName" :placeholder="providerNamePlaceholder" />
-              </div>
-              <div class="dialog-field">
-                <label class="dialog-label" for="provider-base-url">Base URL</label>
-                <Input
-                  id="provider-base-url"
-                  v-model="providerBaseUrl"
-                  :placeholder="baseUrlPlaceholder"
-                />
-                <p class="dialog-hint">
-                  {{ baseUrlHint }}
-                </p>
-              </div>
-              <div class="dialog-field">
-                <label class="dialog-label" for="provider-api-key">API Key</label>
-                <Input
-                  id="provider-api-key"
-                  v-model="providerApiKey"
-                  type="password"
-                  :placeholder="apiKeyPlaceholder"
-                />
-              </div>
-              <div class="dialog-field">
-                <div class="flex items-center justify-between gap-3">
-                  <label class="dialog-label" for="provider-probe-model">Probe Model</label>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    type="button"
-                    :disabled="busy || probeModelsLoading"
-                    @click="requestProbeModelsNow"
-                  >
-                    {{ probeModelsLoading ? '读取中…' : '刷新列表' }}
-                  </Button>
-                </div>
-                <Input
-                  id="provider-probe-model"
-                  v-model="providerProbeModel"
-                  :placeholder="probeModelPlaceholder"
-                />
-                <SettingsSelect
-                  v-model="providerProbeModel"
-                  class="mt-2"
-                  :options="probeModelOptions"
-                  :placeholder="probeModelSelectPlaceholder"
-                  :disabled="busy || !probeModels.length"
-                  searchable
-                  search-placeholder="搜索 probe model…"
-                />
-                <div
-                  v-if="!probeModels.length && probeModelsLoading"
-                  class="mt-2 text-[11px] text-text-dim"
-                >
-                  正在读取供应商模型列表，读取完成后可直接从下拉中选择。
-                </div>
-                <div
-                  v-else-if="!probeModels.length && probeSuggestedModels.length"
-                  class="mt-2 flex flex-wrap gap-2"
-                >
-                  <button
-                    v-for="model in probeSuggestedModels"
-                    :key="model"
-                    type="button"
-                    class="rounded-full border border-[color:var(--ma-line-soft)] px-2.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
-                    @click="providerProbeModel = model"
-                  >
-                    {{ model }}
-                  </button>
-                </div>
-                <p class="dialog-hint">
-                  优先展示供应商 `/models` 返回的可搜索列表；若接口没返回数据，或你想测试一个未列出的模型，也可以继续手动填写。
-                </p>
-              </div>
-              <div class="flex items-center justify-end gap-2">
-                <Button variant="outline" type="button" :disabled="busy" @click="testProvider">
-                  测试连通性
-                </Button>
-                <Button variant="ghost" type="button" @click="resetForm">清空</Button>
-                <Button type="submit" :disabled="busy">{{ activeEditorId ? '保存修改' : '创建 Provider' }}</Button>
-              </div>
-              <p v-if="props.providerTestMessage" class="text-[12px]" :class="props.providerTestSuccess ? 'text-success' : 'text-error'">
-                {{ props.providerTestMessage }}
-              </p>
-            </form>
-
-            <div v-if="activeEditorProvider" class="mt-6 border-t border-[color:var(--ma-line-soft)] pt-5">
-              <div class="settings-panel-header">
-                <div>
-                  <h3 class="settings-section-title">模型能力</h3>
-                  <p class="settings-section-copy">这里维护该 provider 下的模型能力。OpenAI-compatible 依赖这份配置决定图片入口、工具能力与上下文预算；已知 provider 也可以在这里补充或覆盖新模型。</p>
-                </div>
-                <Button variant="outline" size="sm" type="button" @click="startCreateProviderModel">
-                  添加模型
-                </Button>
-              </div>
-
-              <div v-if="activeEditorProvider.models.length" class="space-y-3">
-                <article
-                  v-for="model in activeEditorProvider.models"
-                  :key="model.id"
-                  class="settings-provider-card"
-                  :class="activeProviderModelId === model.id ? 'settings-provider-card-active' : ''"
-                >
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <div class="flex items-center gap-2">
-                        <h4 class="truncate text-[14px] font-medium text-text">{{ model.displayName || model.modelId }}</h4>
-                        <span class="rounded-full bg-bg-hover px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-text-dim">{{ model.modelId }}</span>
-                      </div>
-                      <p class="mt-2 text-[12px] text-text-muted">
-                        {{ formatCapabilitiesSummary(model.capabilities) }}
-                      </p>
-                    </div>
-                    <div class="flex shrink-0 items-center gap-1">
-                      <Button variant="ghost" size="sm" type="button" @click="startEditProviderModel(model)">编辑</Button>
-                      <Button variant="ghost" size="sm" type="button" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProviderModel', model.id)">
-                        删除
-                      </Button>
-                    </div>
-                  </div>
-                </article>
-              </div>
-              <div v-else class="settings-empty">
-                这个 provider 还没有单独配置模型能力。
-              </div>
-
-              <form class="mt-4 space-y-4" @submit.prevent="submitProviderModel">
-                <div class="grid gap-4 md:grid-cols-2">
-                  <div class="dialog-field">
-                    <label class="dialog-label" for="provider-model-id">模型 ID</label>
-                    <template v-if="providerModelIdOptions.length">
-                      <SettingsSelect
-                        v-model="providerModelId"
-                        :options="providerModelIdOptions"
-                        placeholder="从已探测或已配置模型中选择"
-                        searchable
-                        search-placeholder="搜索模型 ID…"
-                      />
-                    </template>
-                    <template v-else>
-                      <Input id="provider-model-id" v-model="providerModelId" placeholder="gpt-4o-mini / qwen2.5-coder:32b" />
-                    </template>
-                    <Input
-                      v-if="providerModelIdOptions.length"
-                      v-model="providerModelId"
-                      class="mt-2"
-                      placeholder="也可以直接手填新的 model_id"
-                    />
-                  </div>
-                  <div class="dialog-field">
-                    <label class="dialog-label" for="provider-model-display-name">显示名称</label>
-                    <Input id="provider-model-display-name" v-model="providerModelDisplayName" placeholder="可选，留空则界面显示 model_id" />
-                  </div>
-                  <div class="dialog-field">
-                    <label class="dialog-label" for="provider-model-context-window">上下文窗口</label>
-                    <Input id="provider-model-context-window" v-model="providerModelContextWindow" type="number" min="1" />
-                  </div>
-                  <div class="dialog-field">
-                    <label class="dialog-label" for="provider-model-max-output">最大输出</label>
-                    <Input id="provider-model-max-output" v-model="providerModelMaxOutputTokens" type="number" min="1" />
-                  </div>
-                </div>
-
-                <div v-if="providerModelIdSuggestions.length" class="flex flex-wrap gap-2">
-                  <button
-                    v-for="model in providerModelIdSuggestions"
-                    :key="model"
-                    type="button"
-                    class="rounded-full border border-[color:var(--ma-line-soft)] px-2.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
-                    @click="providerModelId = model"
-                  >
-                    {{ model }}
-                  </button>
-                </div>
-
-                <div class="dialog-field">
-                  <label class="dialog-label">能力</label>
-                  <div class="grid gap-3 md:grid-cols-2">
-                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
-                      <input v-model="providerModelSupportsToolUse" type="checkbox" />
-                      <span>工具调用</span>
-                    </label>
-                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
-                      <input v-model="providerModelSupportsVision" type="checkbox" />
-                      <span>图片输入</span>
-                    </label>
-                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
-                      <input v-model="providerModelSupportsAudio" type="checkbox" />
-                      <span>音频输入</span>
-                    </label>
-                    <label class="flex items-center gap-2 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-2 text-[12px] text-text">
-                      <input v-model="providerModelSupportsPdf" type="checkbox" />
-                      <span>PDF 输入</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div class="dialog-field">
-                  <label class="dialog-label">Server-side Tools</label>
-                  <div class="space-y-3">
-                    <div
-                      v-for="tool in serverToolDefinitions"
-                      :key="tool.capability"
-                      class="grid gap-3 rounded-2xl border border-[color:var(--ma-line-soft)] px-3 py-3 md:grid-cols-[minmax(0,1fr)_220px]"
-                    >
-                      <label class="flex items-center gap-2 text-[12px] text-text">
-                        <input
-                          :checked="isServerToolEnabled(tool.capability)"
-                          type="checkbox"
-                          @change="onServerToolToggle(tool.capability, $event)"
-                        />
-                        <span>{{ tool.label }}</span>
-                      </label>
-                      <SettingsSelect
-                        :model-value="providerModelServerTools[tool.capability] ?? ''"
-                        :options="serverToolFormatOptions(tool.capability)"
-                        placeholder="选择格式"
-                        :disabled="!isServerToolEnabled(tool.capability)"
-                        @update:model-value="setServerToolFormat(tool.capability, $event)"
-                      />
-                    </div>
-                  </div>
-                  <p class="dialog-hint">
-                    这些工具由 provider 侧执行，March 只负责保存能力配置并在后续请求翻译层中注入对应定义。
-                  </p>
-                </div>
-
-                <div class="flex items-center justify-end gap-2">
-                  <Button variant="ghost" type="button" @click="resetProviderModelForm">清空</Button>
-                  <Button type="submit" :disabled="busy || !providerModelId.trim()">
-                    {{ activeProviderModelId ? '保存模型能力' : '添加模型能力' }}
-                  </Button>
-                </div>
-              </form>
-            </div>
-          </section>
-        </div>
-
-        <div v-else-if="activeSection === 'agents'" class="settings-grid">
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">角色</h3>
-                <p class="settings-section-copy">管理 March 和可复用的自定义角色。它们会出现在聊天里的 `@agent` 召唤链路中。</p>
-              </div>
-              <Button variant="outline" size="sm" @click="startCreateAgent">新增角色</Button>
-            </div>
-
-            <div v-if="settings?.agents.length" class="space-y-3">
-              <article
-                v-for="agent in settings.agents"
-                :key="agent.name"
-                class="settings-provider-card"
-                :class="agent.name === activeAgentName ? 'settings-provider-card-active' : ''"
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span class="h-3 w-3 rounded-full" :style="{ background: agent.avatarColor }"></span>
-                      <h4 class="truncate text-[14px] font-medium text-text">{{ agent.displayName }}</h4>
-                      <span v-if="agent.isBuiltIn" class="settings-default-badge">March</span>
-                    </div>
-                    <p class="mt-1 font-mono text-[11px] text-text-dim">@{{ agent.name }}</p>
-                    <p class="mt-2 text-[12px] leading-5 text-text-muted">{{ agent.description }}</p>
-                    <p class="mt-2 line-clamp-2 text-[11px] leading-5 text-text-dim">{{ agent.systemPrompt }}</p>
-                    <p class="mt-2 text-[11px] text-text-dim">
-                      {{ formatAgentBinding(agent.providerId, agent.modelId) }} · {{ formatAgentSource(agent.source) }}
-                    </p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-1">
-                    <Button variant="ghost" size="sm" @click="startEditAgent(agent)">编辑</Button>
-                    <Button
-                      v-if="agent.isBuiltIn"
-                      variant="ghost"
-                      size="sm"
-                      @click="emit('restoreMarchPrompt')"
-                    >
-                      恢复默认
-                    </Button>
-                    <Button
-                      v-else-if="agent.source === 'user'"
-                      variant="ghost"
-                      size="sm"
-                      class="text-[#d44a4a] hover:text-[#d44a4a]"
-                      @click="emit('deleteAgent', agent.name)"
-                    >
-                      删除
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            </div>
-            <div v-else class="settings-empty">
-              还没有角色配置。你可以保留默认 March，也可以再加 reviewer、architect 之类的辅助角色。
-            </div>
-          </section>
-
-          <section class="settings-panel">
-            <div class="settings-panel-header">
-              <div>
-                <h3 class="settings-section-title">{{ editingBuiltInMarch ? '编辑 March' : activeAgentName ? '编辑角色' : '新增角色' }}</h3>
-                <p class="settings-section-copy">角色提示词定义它的职责和风格；模型绑定可选，留空时跟随任务默认模型。</p>
-              </div>
-            </div>
-
-            <form class="space-y-4" @submit.prevent="submitAgent">
-              <div class="grid gap-4 md:grid-cols-2">
-                <div class="dialog-field">
-                  <label class="dialog-label">角色名</label>
-                  <Input v-model="agentName" :disabled="editingBuiltInMarch || !!activeAgentName" placeholder="reviewer" />
-                </div>
-                <div class="dialog-field">
-                  <label class="dialog-label">显示名</label>
-                  <Input v-model="agentDisplayName" placeholder="代码审查员" />
-                </div>
-              </div>
-
-              <div class="dialog-field">
-                <label class="dialog-label">短描述</label>
-                <Input
-                  v-model="agentDescription"
-                  :disabled="editingBuiltInMarch"
-                  placeholder="一句话说明这个角色主要负责什么"
-                />
-                <p class="dialog-hint">
-                  用于 `@` 面板、角色列表和 prompt 里的 agent roster。尽量保持简短稳定。
-                </p>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <div class="dialog-field">
-                  <label class="dialog-label">头像颜色</label>
-                  <Input v-model="agentAvatarColor" placeholder="#3B82F6" />
-                </div>
-                <div class="dialog-field">
-                  <label class="dialog-label">绑定 Provider</label>
-                  <SettingsSelect
-                    v-model="agentProviderIdString"
-                    :options="agentProviderOptions"
-                    placeholder="跟随任务默认"
-                  />
-                </div>
-              </div>
-
-              <div class="dialog-field">
-                <label class="dialog-label">绑定模型</label>
-                <SettingsSelect
-                  v-if="agentModelOptions.length"
-                  v-model="agentModelId"
-                  :options="agentModelOptions"
-                  placeholder="跟随任务默认"
-                  searchable
-                  search-placeholder="搜索模型…"
-                />
-                <Input v-else v-model="agentModelId" placeholder="留空则跟随任务默认" />
-              </div>
-
-              <div class="dialog-field">
-                <label class="dialog-label">System Prompt</label>
-                <Textarea v-model="agentSystemPrompt" class="min-h-[220px]" placeholder="描述这个角色的职责、风格和边界…" />
-              </div>
-
-              <div class="flex items-center justify-end gap-2">
-                <Button variant="ghost" type="button" @click="resetAgentForm">清空</Button>
-                <Button
-                  type="submit"
-                  :disabled="busy || !agentDisplayName.trim() || (!editingBuiltInMarch && !agentDescription.trim()) || !agentSystemPrompt.trim() || !resolvedAgentName"
-                >
-                  {{ editingBuiltInMarch || activeAgentName ? '保存角色' : '创建角色' }}
-                </Button>
-              </div>
-            </form>
-          </section>
-        </div>
+        <AgentSettingsSection
+          v-else-if="activeSection === 'agents'"
+          :settings="settings"
+          :busy="busy"
+          :active-agent-name="activeAgentName"
+          :editing-built-in-march="editingBuiltInMarch"
+          :agent-name="agentName"
+          :agent-display-name="agentDisplayName"
+          :agent-description="agentDescription"
+          :agent-avatar-color="agentAvatarColor"
+          :agent-provider-id-string="agentProviderIdString"
+          :agent-model-id="agentModelId"
+          :agent-system-prompt="agentSystemPrompt"
+          :resolved-agent-name="resolvedAgentName"
+          :agent-provider-options="agentProviderOptions"
+          :agent-model-options="agentModelOptions"
+          :format-agent-binding="formatAgentBinding"
+          :format-agent-source="formatAgentSource"
+          @start-create-agent="startCreateAgent"
+          @start-edit-agent="startEditAgent"
+          @restore-march-prompt="emit('restoreMarchPrompt')"
+          @delete-agent="emit('deleteAgent', $event)"
+          @update:agent-name="agentName = $event"
+          @update:agent-display-name="agentDisplayName = $event"
+          @update:agent-description="agentDescription = $event"
+          @update:agent-avatar-color="agentAvatarColor = $event"
+          @update:agent-provider-id-string="agentProviderIdString = $event"
+          @update:agent-model-id="agentModelId = $event"
+          @update:agent-system-prompt="agentSystemPrompt = $event"
+          @submit-agent="submitAgent"
+          @reset-agent-form="resetAgentForm"
+        />
 
         <div v-else class="space-y-5">
           <section class="settings-panel">
@@ -650,16 +248,17 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import arrowLeftIcon from '@iconify-icons/lucide/arrow-left';
-import checkIcon from '@iconify-icons/lucide/check';
 import moonIcon from '@iconify-icons/lucide/moon-star';
 import slidersHorizontalIcon from '@iconify-icons/lucide/sliders-horizontal';
 import serverIcon from '@iconify-icons/lucide/server-cog';
 import sunIcon from '@iconify-icons/lucide/sun-medium';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import type { ThemeMode } from '@/composables/useAppearanceSettings';
 import type { ProviderSettingsView } from '@/data/mock';
+import AgentSettingsSection from '@/components/settings/AgentSettingsSection.vue';
+import AppearanceSettingsSection from '@/components/settings/AppearanceSettingsSection.vue';
+import ProviderSettingsSection from '@/components/settings/ProviderSettingsSection.vue';
 import SettingsSelect from './SettingsSelect.vue';
 
 const props = defineProps<{
@@ -1008,47 +607,23 @@ onUnmounted(() => {
 
 function startCreate() {
   activeSection.value = 'providers';
-  activeEditorId.value = null;
-  providerType.value = 'openai_compat';
-  providerName.value = '';
-  providerBaseUrl.value = '';
-  providerApiKey.value = '';
-  providerProbeModel.value = '';
+  applyProviderEditorState();
   resetProviderModelForm();
 }
 
 function startCreateAgent() {
   activeSection.value = 'agents';
-  activeAgentName.value = '';
-  agentName.value = '';
-  agentDisplayName.value = '';
-  agentDescription.value = '';
-  agentAvatarColor.value = '#64748B';
-  agentProviderIdString.value = '';
-  agentModelId.value = '';
-  agentSystemPrompt.value = '';
+  applyAgentEditorState();
 }
 
 function startEditAgent(agent: ProviderSettingsView['agents'][number]) {
   activeSection.value = 'agents';
-  activeAgentName.value = agent.name;
-  agentName.value = agent.name;
-  agentDisplayName.value = agent.displayName;
-  agentDescription.value = agent.description;
-  agentAvatarColor.value = agent.avatarColor || '#64748B';
-  agentProviderIdString.value = agent.providerId ? String(agent.providerId) : '';
-  agentModelId.value = agent.modelId ?? '';
-  agentSystemPrompt.value = agent.systemPrompt;
+  applyAgentEditorState(agent);
 }
 
 function startEdit(provider: ProviderSettingsView['providers'][number]) {
   activeSection.value = 'providers';
-  activeEditorId.value = provider.id;
-  providerType.value = provider.providerType;
-  providerName.value = provider.name;
-  providerBaseUrl.value = provider.baseUrl ?? '';
-  providerApiKey.value = '';
-  providerProbeModel.value = '';
+  applyProviderEditorState(provider);
   resetProviderModelForm();
 }
 
@@ -1067,11 +642,31 @@ function resetAgentForm() {
   if (activeAgentName.value) {
     const agent = props.settings?.agents.find((item) => item.name === activeAgentName.value);
     if (agent) {
-      startEditAgent(agent);
+      applyAgentEditorState(agent);
       return;
     }
   }
   startCreateAgent();
+}
+
+function applyProviderEditorState(provider?: ProviderSettingsView['providers'][number]) {
+  activeEditorId.value = provider?.id ?? null;
+  providerType.value = provider?.providerType ?? 'openai_compat';
+  providerName.value = provider?.name ?? '';
+  providerBaseUrl.value = provider?.baseUrl ?? '';
+  providerApiKey.value = '';
+  providerProbeModel.value = '';
+}
+
+function applyAgentEditorState(agent?: ProviderSettingsView['agents'][number]) {
+  activeAgentName.value = agent?.name ?? '';
+  agentName.value = agent?.name ?? '';
+  agentDisplayName.value = agent?.displayName ?? '';
+  agentDescription.value = agent?.description ?? '';
+  agentAvatarColor.value = agent?.avatarColor || '#64748B';
+  agentProviderIdString.value = agent?.providerId ? String(agent.providerId) : '';
+  agentModelId.value = agent?.modelId ?? '';
+  agentSystemPrompt.value = agent?.systemPrompt ?? '';
 }
 
 function submitProvider() {
