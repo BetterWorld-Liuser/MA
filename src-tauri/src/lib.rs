@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -27,16 +27,74 @@ use march::ui::{
 struct AppState {
     workspace_path: PathBuf,
     cancellations: Mutex<HashMap<i64, Arc<TurnCancellation>>>,
+    memory_watcher: Mutex<MemoryWatcherState>,
 }
 
-fn start_memory_watcher(
+struct MemoryWatcherState {
+    watcher: notify::RecommendedWatcher,
+    watched_dirs: HashSet<PathBuf>,
+}
+
+impl MemoryWatcherState {
+    fn sync_dirs(&mut self, dirs: &[PathBuf]) -> anyhow::Result<()> {
+        use notify::{RecursiveMode, Watcher};
+
+        let desired = dirs.iter().cloned().collect::<HashSet<_>>();
+        for path in self
+            .watched_dirs
+            .difference(&desired)
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            self.watcher
+                .unwatch(&path)
+                .with_context(|| format!("failed to unwatch {}", path.display()))?;
+            self.watched_dirs.remove(&path);
+        }
+
+        for path in desired
+            .difference(&self.watched_dirs)
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            std::fs::create_dir_all(&path)
+                .with_context(|| format!("failed to create {}", path.display()))?;
+            self.watcher
+                .watch(&path, RecursiveMode::Recursive)
+                .with_context(|| format!("failed to watch {}", path.display()))?;
+            self.watched_dirs.insert(path);
+        }
+
+        Ok(())
+    }
+}
+
+fn collect_memory_dirs(workspace_path: &std::path::Path) -> anyhow::Result<Vec<PathBuf>> {
+    let backend = UiAppBackend::open(workspace_path.to_path_buf())?;
+    let mut dirs = backend
+        .task_working_directories()?
+        .into_iter()
+        .map(|path| path.join(".march").join("memories"))
+        .collect::<Vec<_>>();
+    dirs.push(workspace_path.join(".march").join("memories"));
+    dirs.sort();
+    dirs.dedup();
+    Ok(dirs)
+}
+
+fn sync_memory_watcher(state: &AppState) -> anyhow::Result<()> {
+    let dirs = collect_memory_dirs(&state.workspace_path)?;
+    let mut watcher = state
+        .memory_watcher
+        .lock()
+        .map_err(|_| anyhow::anyhow!("failed to acquire memory watcher"))?;
+    watcher.sync_dirs(&dirs)
+}
+
+fn build_memory_watcher(
     app: &tauri::AppHandle,
     workspace_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    use notify::{RecursiveMode, Watcher};
-    let memory_dir = workspace_path.join(".march").join("memories");
-    std::fs::create_dir_all(&memory_dir)
-        .with_context(|| format!("failed to create {}", memory_dir.display()))?;
+) -> anyhow::Result<MemoryWatcherState> {
     let app_handle = app.clone();
     let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         if let Ok(event) = result {
@@ -44,12 +102,12 @@ fn start_memory_watcher(
         }
     })
     .context("failed to create memory watcher")?;
-    let mut watcher = Box::new(watcher);
-    watcher
-        .watch(&memory_dir, RecursiveMode::Recursive)
-        .with_context(|| format!("failed to watch {}", memory_dir.display()))?;
-    app.manage(Mutex::new(watcher));
-    Ok(())
+    let mut state = MemoryWatcherState {
+        watcher,
+        watched_dirs: HashSet::new(),
+    };
+    state.sync_dirs(&collect_memory_dirs(workspace_path)?)?;
+    Ok(state)
 }
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -120,9 +178,13 @@ fn create_task(
 ) -> Result<UiWorkspaceSnapshot, String> {
     let mut backend =
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
-    backend
+    let result = backend
         .handle_create_task(input)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    if result.is_ok() {
+        let _ = sync_memory_watcher(&state);
+    }
+    result
 }
 
 #[tauri::command]
@@ -144,9 +206,13 @@ fn delete_task(
 ) -> Result<UiWorkspaceSnapshot, String> {
     let mut backend =
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
-    backend
+    let result = backend
         .handle_delete_task(input)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    if result.is_ok() {
+        let _ = sync_memory_watcher(&state);
+    }
+    result
 }
 
 #[tauri::command]
@@ -173,7 +239,7 @@ async fn send_message(
         task_id: Some(task_id),
         content_blocks: input.content_blocks,
     };
-    backend
+    let result = backend
         .handle_send_message_with_progress_and_cancel(
             request,
             |event| {
@@ -184,17 +250,14 @@ async fn send_message(
             cancellation.as_ref(),
         )
         .await
-        .map_err(|error| error.to_string())
-        .inspect(|_| {
-            if let Ok(mut cancellations) = state.cancellations.lock() {
-                cancellations.remove(&task_id);
-            }
-        })
-        .inspect_err(|_| {
-            if let Ok(mut cancellations) = state.cancellations.lock() {
-                cancellations.remove(&task_id);
-            }
-        })
+        .map_err(|error| error.to_string());
+    if let Ok(mut cancellations) = state.cancellations.lock() {
+        cancellations.remove(&task_id);
+    }
+    if result.is_ok() {
+        let _ = sync_memory_watcher(&state);
+    }
+    result
 }
 
 #[tauri::command]
@@ -388,9 +451,13 @@ fn set_task_working_directory(
 ) -> Result<UiWorkspaceSnapshot, String> {
     let mut backend =
         UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
-    backend
+    let result = backend
         .handle_set_task_working_directory(input)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    if result.is_ok() {
+        let _ = sync_memory_watcher(&state);
+    }
+    result
 }
 
 #[tauri::command]
@@ -576,13 +643,14 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                     normalize_main_window_bounds(&window)?;
                 }
-                start_memory_watcher(app.handle(), &watcher_workspace_path)?;
+                let memory_watcher = build_memory_watcher(app.handle(), &watcher_workspace_path)?;
+                app.manage(AppState {
+                    workspace_path: watcher_workspace_path.clone(),
+                    cancellations: Mutex::new(HashMap::new()),
+                    memory_watcher: Mutex::new(memory_watcher),
+                });
                 Ok(())
             }
-        })
-        .manage(AppState {
-            workspace_path,
-            cancellations: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             load_workspace_snapshot,

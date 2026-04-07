@@ -230,11 +230,12 @@ MVP 不要求这个事件携带原始 input/output；展开详情时可以从本
 
 ### `assistant_stream_delta`
 
-表示 AI 正在流式输出自然语言内容。
+表示 AI 正在流式输出内容。`content_type` 区分 reasoning 流和正文流。
 
 ```ts
 type AssistantStreamDeltaEvent = UiRunEventBase & {
   type: 'assistant_stream_delta'
+  content_type: 'reasoning' | 'text'
   delta: string
 }
 ```
@@ -242,8 +243,11 @@ type AssistantStreamDeltaEvent = UiRunEventBase & {
 前端行为：
 
 - 将 AI 消息状态切为 `streaming`
-- 把 `delta` 追加到当前消息正文
-- 如果视图停留在底部，则自动跟随滚动
+- `content_type: 'text'`：把 `delta` 追加到消息正文；如果视图停留在底部则自动跟随滚动
+- `content_type: 'reasoning'`：把 `delta` 追加到折叠块内的 reasoning 文本；折叠块默认折叠，流式期间可展开查看
+- reasoning 流先于 text 流，两段之间有明确分界，不并行渲染
+
+对 `OpenAiHidden` 风格的模型（reasoning 不可见），不会产生 `content_type: 'reasoning'` 的 delta；reasoning token 用量通过 `turn_finished.reasoning_tokens_used` 字段携带。
 
 ---
 
@@ -293,6 +297,7 @@ type TurnFinishedEvent = UiRunEventBase & {
   type: 'turn_finished'
   assistant_message_id: string
   final_text: string
+  reasoning_tokens_used?: number  // 本轮 reasoning 消耗的 token 数；OpenAiHidden 时尤为有用
 }
 ```
 
@@ -301,6 +306,7 @@ type TurnFinishedEvent = UiRunEventBase & {
 - 将 AI 消息状态收口为 `done`
 - 停止等待态动画
 - 持久化当前轮展示内容到聊天记录
+- 若 `reasoning_tokens_used` 有值，刷新右侧面板上下文用量中的 reasoning token 计数
 
 说明：
 

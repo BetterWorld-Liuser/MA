@@ -3,6 +3,7 @@ use super::*;
 impl AgentSession {
     pub fn new(
         config: AgentConfig,
+        task_name: impl Into<String>,
         history: ConversationHistory,
         open_files: impl IntoIterator<Item = PathBuf>,
         working_directory: PathBuf,
@@ -17,6 +18,7 @@ impl AgentSession {
         );
         Self::create(
             config,
+            task_name.into(),
             history,
             normalized_open_files,
             working_directory,
@@ -32,6 +34,7 @@ impl AgentSession {
         let open_files = normalize_open_files_for_workspace(&working_directory, task.open_files);
         Self::create(
             config,
+            task.task.name,
             task.history,
             open_files,
             working_directory,
@@ -44,6 +47,7 @@ impl AgentSession {
 
     fn create(
         config: AgentConfig,
+        task_name: String,
         history: ConversationHistory,
         open_files: Vec<PersistedOpenFile>,
         working_directory: PathBuf,
@@ -75,6 +79,7 @@ impl AgentSession {
             config,
             watcher,
             agent_profiles,
+            task_name,
             active_agent,
             history,
             notes: super::scopes::notes_by_scope(notes),
@@ -301,6 +306,10 @@ impl AgentSession {
         }
     }
 
+    pub fn flush_memory_usage(&mut self) -> Result<()> {
+        self.memory_manager.flush_pending_usage_updates()
+    }
+
     pub fn available_shells(&self) -> &[AvailableShell] {
         &self.available_shells
     }
@@ -353,6 +362,7 @@ impl AgentSession {
 
     fn build_memory_query(&self) -> crate::memory::MemoryQuery {
         crate::memory::MemoryQuery {
+            task_name: Some(self.task_name.clone()),
             latest_user_message: self
                 .history
                 .turns

@@ -44,13 +44,14 @@ impl UiAppBackend {
         options.selected_model_config_id = defaults.default_model_config_id;
         options.selected_model = settings.default_model()?;
         let task = self.storage.create_task_with_options(name, options)?;
-        let session = AgentSession::new(
+        let mut session = AgentSession::new(
             ui_agent_config(),
+            task.name.clone(),
             ConversationHistory::default(),
             [],
             self.workspace_path.clone(),
         )?;
-        self.save_session(task.id, &session)?;
+        self.save_session(task.id, &mut session)?;
         Ok(task)
     }
 
@@ -62,7 +63,8 @@ impl UiAppBackend {
         AgentSession::restore(ui_agent_config(), self.storage.load_task(task_id)?)
     }
 
-    pub fn save_session(&mut self, task_id: i64, session: &AgentSession) -> Result<()> {
+    pub fn save_session(&mut self, task_id: i64, session: &mut AgentSession) -> Result<()> {
+        session.flush_memory_usage()?;
         self.storage
             .save_task_state(task_id, &session.persisted_state())
     }
@@ -75,25 +77,25 @@ impl UiAppBackend {
     ) -> Result<()> {
         let mut session = self.load_session(task_id)?;
         session.write_note_in_scope(SHARED_SCOPE.to_string(), note_id, content);
-        self.save_session(task_id, &session)
+        self.save_session(task_id, &mut session)
     }
 
     pub fn delete_note(&mut self, task_id: i64, note_id: &str) -> Result<()> {
         let mut session = self.load_session(task_id)?;
         session.remove_note_in_scope(SHARED_SCOPE.to_string(), note_id);
-        self.save_session(task_id, &session)
+        self.save_session(task_id, &mut session)
     }
 
     pub fn set_open_file_lock(&mut self, task_id: i64, path: PathBuf, locked: bool) -> Result<()> {
         let mut session = self.load_session(task_id)?;
         session.set_lock_file_in_scope(SHARED_SCOPE.to_string(), path, locked)?;
-        self.save_session(task_id, &session)
+        self.save_session(task_id, &mut session)
     }
 
     pub fn close_open_file(&mut self, task_id: i64, path: PathBuf) -> Result<()> {
         let mut session = self.load_session(task_id)?;
         session.close_file_in_scope(SHARED_SCOPE.to_string(), path)?;
-        self.save_session(task_id, &session)
+        self.save_session(task_id, &mut session)
     }
 
     pub fn open_files(&mut self, task_id: i64, paths: Vec<PathBuf>) -> Result<()> {
@@ -101,7 +103,7 @@ impl UiAppBackend {
         for path in paths {
             session.open_file_in_scope(SHARED_SCOPE.to_string(), path)?;
         }
-        self.save_session(task_id, &session)
+        self.save_session(task_id, &mut session)
     }
 
     pub fn workspace_snapshot(
@@ -324,8 +326,8 @@ impl UiAppBackend {
         self.storage
             .update_task_working_directory(task_id, working_directory)?;
         let task = self.storage.load_task(task_id)?;
-        let session = AgentSession::restore(ui_agent_config(), task)?;
-        self.save_session(task_id, &session)?;
+        let mut session = AgentSession::restore(ui_agent_config(), task)?;
+        self.save_session(task_id, &mut session)?;
         self.workspace_snapshot(Some(task_id))
     }
 
@@ -447,6 +449,18 @@ impl UiAppBackend {
         &self.workspace_path
     }
 
+    pub fn task_working_directories(&self) -> Result<Vec<PathBuf>> {
+        let mut directories = self
+            .storage
+            .list_tasks()?
+            .into_iter()
+            .map(|task| clean_path(task.working_directory))
+            .collect::<Vec<_>>();
+        directories.sort();
+        directories.dedup();
+        Ok(directories)
+    }
+
     pub fn list_memories(
         &mut self,
         request: UiListMemoriesRequest,
@@ -469,7 +483,7 @@ impl UiAppBackend {
         let working_directory = self.working_directory_for_task(Some(task_id))?;
         let mut manager = MemoryManager::load(&working_directory)?;
         manager
-            .recall(&request.id, session.active_agent_name())
+            .peek(&request.id, session.active_agent_name())
             .map(UiMemoryDetailView::from)
     }
 

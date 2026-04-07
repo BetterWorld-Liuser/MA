@@ -126,6 +126,7 @@ struct ModelCapabilities {
     supports_audio: bool,        // 音频输入（预留）
     supports_pdf: bool,          // PDF 原生输入（预留）
     server_tools: Vec<ServerToolConfig>,  // provider 原生 server-side tools
+    reasoning: Option<ReasoningCapability>, // None 表示不支持 reasoning；详见 reasoning.md
 }
 
 /// Provider 原生的 server-side tool 配置

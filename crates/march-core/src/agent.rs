@@ -94,6 +94,7 @@ pub struct AgentSession {
     config: AgentConfig,
     watcher: FileWatcherService,
     agent_profiles: IndexMap<String, AgentProfile>,
+    task_name: String,
     active_agent: String,
     history: ConversationHistory,
     notes: IndexMap<String, IndexMap<String, NoteEntry>>,
@@ -330,6 +331,7 @@ mod tests {
 
         let mut session = AgentSession::new(
             AgentConfig::default(),
+            "default",
             ConversationHistory::default(),
             [],
             workspace,
@@ -374,6 +376,7 @@ mod tests {
 
         let mut session = AgentSession::new(
             AgentConfig::default(),
+            "default",
             ConversationHistory::default(),
             [],
             std::env::current_dir().expect("current dir"),
@@ -627,6 +630,7 @@ mod tests {
         runtime.block_on(async {
             let mut session = AgentSession::new(
                 AgentConfig::default(),
+                "default",
                 ConversationHistory::default(),
                 [],
                 std::env::current_dir().expect("current dir"),

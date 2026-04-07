@@ -17,6 +17,7 @@
 | [ui-chat.md](ui-chat.md) | 聊天区、等待态、工具调用展示、输入框交互、运行反馈 |
 | [ui-events.md](ui-events.md) | 聊天运行事件模型、事件字段、状态机、前端聚合方式 |
 | [provider.md](provider.md) | genai 选型理由、与上下文管理的分工、cache_control 映射 |
+| [reasoning.md](reasoning.md) | Reasoning 模型支持：各家 wire format 归一化、thinking block 透传规则、task 级运行参数、UI 展示 |
 | [browser.md](browser.md) | 截图策略、CDP 浏览器操作、桌面 GUI 操作 |
 | [march-md.md](march-md.md) | 自研 Markdown 渲染引擎：Sealed Prefix + Live Tail、Block Parser 状态机、Lenient Inline 解析 |
 | [turn-snapshot.md](turn-snapshot.md) | Turn 快照与回退：git stash create 快照、文件 diff 展示、一键撤销此轮 |

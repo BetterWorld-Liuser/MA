@@ -114,7 +114,7 @@ impl UiAppBackend {
             .await?;
         }
         if let Err(error) = &result {
-            self.save_session(task_id, &session)?;
+            self.save_session(task_id, &mut session)?;
             if is_turn_cancelled_error(error) {
                 let task = Self::live_task_snapshot(
                     progress_task.clone(),
@@ -140,7 +140,7 @@ impl UiAppBackend {
         }
         let result = result?;
         let runtime = session.ui_runtime_snapshot(context_budget_tokens);
-        self.save_session(task_id, &session)?;
+        self.save_session(task_id, &mut session)?;
         if should_auto_title {
             let suggested_title = Self::suggest_auto_title(&provider, &content_text).await;
             self.apply_suggested_task_title(task_id, suggested_title)?;

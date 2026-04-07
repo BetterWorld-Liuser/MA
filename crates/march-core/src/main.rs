@@ -33,7 +33,13 @@ async fn main() -> Result<()> {
         (task_id, AgentSession::restore(config, task)?)
     } else {
         let task = storage.create_task("默认任务")?;
-        let session = AgentSession::new(config, ConversationHistory::default(), [], cwd.clone())?;
+        let session = AgentSession::new(
+            config,
+            task.name.clone(),
+            ConversationHistory::default(),
+            [],
+            cwd.clone(),
+        )?;
         storage.save_task_state(task.id, &session.persisted_state())?;
         (task.id, session)
     };
@@ -49,9 +55,11 @@ async fn main() -> Result<()> {
         {
             Ok(result) => {
                 print_agent_result(&result, debug_enabled, &debug_logs)?;
+                session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
             }
             Err(error) => {
+                session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
                 return Err(error);
             }
@@ -104,15 +112,18 @@ async fn main() -> Result<()> {
         {
             Ok(result) => {
                 print_agent_result(&result, debug_enabled, &debug_logs)?;
+                session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
             }
             Err(error) => {
                 eprintln!("\nError: {error:#}\n");
+                session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
             }
         }
     }
 
+    session.flush_memory_usage()?;
     storage.save_task_state(task_id, &session.persisted_state())?;
     Ok(())
 }
