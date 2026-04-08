@@ -194,6 +194,10 @@ import moonIcon from '@iconify-icons/lucide/moon-star';
 import serverIcon from '@iconify-icons/lucide/server-cog';
 import sunIcon from '@iconify-icons/lucide/sun-medium';
 import type { ThemeMode } from '@/composables/useAppearanceSettings';
+import { useSettingsAgentForm } from '@/composables/settings/useSettingsAgentForm';
+import { useSettingsModelForm } from '@/composables/settings/useSettingsModelForm';
+import { useSettingsProviderForm } from '@/composables/settings/useSettingsProviderForm';
+import { providerTypeLabel } from '@/composables/settings/settingsShared';
 import type { BackendMemoryDetailView, ProviderSettingsView } from '@/data/mock';
 import AgentSettingsSection from '@/components/settings/AgentSettingsSection.vue';
 import AppearanceSettingsSection from '@/components/settings/AppearanceSettingsSection.vue';
@@ -201,10 +205,6 @@ import MemorySettingsSection from '@/components/settings/MemorySettingsSection.v
 import ModelSettingsSection from '@/components/settings/ModelSettingsSection.vue';
 import ProviderChannelsSection from '@/components/settings/ProviderChannelsSection.vue';
 import { Button } from '@/components/ui/button';
-import {
-  defaultProviderBaseUrl,
-  resolveProviderRequestPreview,
-} from '@/lib/providerBaseUrl';
 
 const props = defineProps<{
   theme: ThemeMode;
@@ -263,32 +263,6 @@ const emit = defineEmits<{
 }>();
 
 const activeSection = ref<'appearance' | 'models' | 'providers' | 'agents' | 'memory'>('appearance');
-const activeEditorId = ref<number | null>(null);
-const providerType = ref('openai_compat');
-const providerName = ref('');
-const providerBaseUrl = ref('');
-const providerApiKey = ref('');
-const providerProbeModel = ref('');
-const providerEditorOpen = ref(false);
-const modelEditorOpen = ref(false);
-const activeProviderModelId = ref<number | null>(null);
-const providerModelId = ref('');
-const providerModelDisplayName = ref('');
-const providerModelContextWindow = ref('256000');
-const providerModelMaxOutputTokens = ref('128000');
-const providerModelSupportsToolUse = ref(false);
-const providerModelSupportsVision = ref(false);
-const providerModelSupportsAudio = ref(false);
-const providerModelSupportsPdf = ref(false);
-const providerModelServerTools = ref<Record<string, string>>({});
-const activeAgentName = ref('');
-const agentName = ref('');
-const agentDisplayName = ref('');
-const agentDescription = ref('');
-const agentAvatarColor = ref('#64748B');
-const agentProviderIdString = ref('');
-const agentModelId = ref('');
-const agentSystemPrompt = ref('');
 
 const sectionOptions = [
   {
@@ -338,359 +312,131 @@ const themeOptions = [
   },
 ];
 
-const activeEditorProvider = computed(() =>
-  props.settings?.providers.find((provider) => provider.id === activeEditorId.value) ?? null,
-);
+const settingsRef = computed(() => props.settings);
+const probeModelsRef = computed(() => props.probeModels);
+const probeModelsLoadingRef = computed(() => props.probeModelsLoading);
 
-const editingBuiltInMarch = computed(() => activeAgentName.value === 'march');
-
-const providerTypeOptions = [
-  { value: 'openai_compat', label: 'OpenAI-compatible' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'fireworks', label: 'Fireworks' },
-  { value: 'together', label: 'Together' },
-  { value: 'groq', label: 'Groq' },
-  { value: 'mimo', label: 'Mimo' },
-  { value: 'nebius', label: 'Nebius' },
-  { value: 'xai', label: 'xAI' },
-  { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'zai', label: 'ZAI' },
-  { value: 'bigmodel', label: 'BigModel' },
-  { value: 'cohere', label: 'Cohere' },
-  { value: 'ollama', label: 'Ollama' },
-];
-
-const serverToolDefinitions = [
-  {
-    capability: 'web_search',
-    label: 'Web Search',
-    formats: ['anthropic', 'openai_responses', 'openai_chat_completions', 'gemini'],
-  },
-  {
-    capability: 'code_execution',
-    label: 'Code Execution',
-    formats: ['anthropic', 'openai_responses', 'openai_chat_completions', 'gemini'],
-  },
-  { capability: 'file_search', label: 'File Search', formats: ['openai_responses'] },
-] as const;
-
-const serverToolFormatLabels: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai_responses: 'OpenAI / Responses',
-  openai_chat_completions: 'OpenAI-compatible / Chat Completions',
-  gemini: 'Gemini',
-};
-
-const agentProviderOptions = computed(() => [
-  { value: '', label: '跟随任务默认' },
-  ...(props.settings?.providers ?? []).map((provider) => ({
-    value: String(provider.id),
-    label: provider.name,
-  })),
-]);
-
-const resolvedAgentName = computed(() => {
-  if (editingBuiltInMarch.value) {
-    return 'march';
-  }
-  const normalized = agentName.value.trim().toLowerCase().replaceAll(' ', '-');
-  return normalized || '';
+// 页面层只保留 section 切换和事件编排，三类编辑状态下沉到独立 composable。
+const {
+  activeEditorId,
+  providerType,
+  providerName,
+  providerBaseUrl,
+  providerApiKey,
+  providerProbeModel,
+  providerEditorOpen,
+  providerTypeOptions,
+  probeModelSelectPlaceholder,
+  providerNamePlaceholder,
+  baseUrlPlaceholder,
+  baseUrlPreview,
+  baseUrlHint,
+  apiKeyPlaceholder,
+  probeModelPlaceholder,
+  applyProviderEditorState,
+  requestProbeModelsNow,
+  requestProbeModelsIfNeeded,
+  startCreate: openCreateProviderEditor,
+  startEdit: openEditProviderEditor,
+  hydrateProviderContext,
+  closeProviderEditor,
+  resetForm,
+  submitProvider,
+  testProvider,
+} = useSettingsProviderForm({
+  settings: settingsRef,
+  probeModels: probeModelsRef,
+  probeModelsLoading: probeModelsLoadingRef,
+  onSaveProvider: (input) => emit('saveProvider', input),
+  onTestProvider: (input) => emit('testProvider', input),
+  onRequestProbeModels: (input) => emit('requestProbeModels', input),
 });
 
-const selectedAgentProvider = computed(() => {
-  const providerId = Number(agentProviderIdString.value);
-  if (!Number.isFinite(providerId) || providerId <= 0) {
-    return null;
-  }
-  return props.settings?.providers.find((provider) => provider.id === providerId) ?? null;
+const {
+  activeEditorProvider,
+  modelEditorOpen,
+  activeProviderModelId,
+  providerModelId,
+  providerModelDisplayName,
+  providerModelContextWindow,
+  providerModelMaxOutputTokens,
+  providerModelSupportsToolUse,
+  providerModelSupportsVision,
+  providerModelSupportsAudio,
+  providerModelSupportsPdf,
+  providerModelServerTools,
+  modelProviderOptions,
+  modelProviderIdString,
+  providerModelIdOptions,
+  serverToolDefinitions,
+  closeModelEditor,
+  clearProviderModelDraft,
+  startCreateProviderModel,
+  startEditProviderModel,
+  selectModelProvider,
+  resetProviderModelForm,
+  serverToolFormatOptions,
+  isServerToolEnabled,
+  setServerToolFormat,
+  onServerToolToggle,
+  submitProviderModel,
+  formatCapabilitiesSummary,
+} = useSettingsModelForm({
+  settings: settingsRef,
+  probeModels: probeModelsRef,
+  activeEditorId,
+  providerType,
+  applyProviderEditorState,
+  requestProbeModelsIfNeeded,
+  onSaveProviderModel: (input) => emit('saveProviderModel', input),
 });
 
-const agentModelOptions = computed(() => {
-  const provider = selectedAgentProvider.value;
-  if (!provider) {
-    return [];
-  }
-  return [
-    { value: '', label: '跟随任务默认' },
-    ...provider.models.map((model) => ({
-      value: model.modelId,
-      label: model.displayName || model.modelId,
-    })),
-  ];
-});
-
-const modelProviderOptions = computed(() =>
-  (props.settings?.providers ?? []).map((provider) => ({
-    value: String(provider.id),
-    label: `${provider.name} · ${providerTypeLabel(provider.providerType)}`,
-  })),
-);
-
-const modelProviderIdString = computed(() => (activeEditorId.value ? String(activeEditorId.value) : ''));
-
-const probeModelSelectPlaceholder = computed(() => {
-  if (props.probeModelsLoading) {
-    return '正在读取供应商模型列表…';
-  }
-  if (props.probeModels.length) {
-    return '从供应商模型列表中选择';
-  }
-  return '暂无可选列表，仍可先手动填写';
-});
-
-const providerModelIdOptions = computed(() => {
-  const configured = activeEditorProvider.value?.models.map((model) => model.modelId) ?? [];
-  const merged = Array.from(new Set([...props.probeModels, ...configured]))
-    .map((model) => model.trim())
-    .filter(Boolean);
-
-  return merged.map((model) => ({
-    value: model,
-    label: model,
-  }));
-});
-
-const providerNamePlaceholder = computed(() => {
-  if (providerType.value === 'openai_compat') {
-    return 'OpenRouter / Local vLLM';
-  }
-  return providerTypeLabel(providerType.value);
-});
-
-const baseUrlPlaceholder = computed(() => defaultProviderBaseUrl(providerType.value));
-
-const baseUrlPreview = computed(() => resolveProviderRequestPreview(providerType.value, providerBaseUrl.value));
-
-const baseUrlHint = computed(() => {
-  if (providerType.value === 'openai_compat') {
-    return '这个类型通常需要显式填写自定义端点，例如 OpenRouter、硅基流动或自建网关。';
-  }
-
-  return '可选。留空时使用该 provider 的默认官方端点；填写后会改走你指定的兼容入口。';
-});
-
-const apiKeyPlaceholder = computed(() => {
-  if (providerType.value === 'ollama') {
-    return activeEditorId.value ? '留空即可，当前类型默认不需要 API key' : '可留空';
-  }
-  return activeEditorId.value ? '留空则保持当前 API key' : 'sk-...';
-});
-
-const probeModelPlaceholder = computed(() => {
-  if (providerType.value === 'openai_compat') {
-    return '例如 gpt-4o-mini / kimi-k2 / qwen2.5-coder';
-  }
-  return '留空则使用内置建议模型';
+const {
+  activeAgentName,
+  agentName,
+  agentDisplayName,
+  agentDescription,
+  agentAvatarColor,
+  agentProviderIdString,
+  agentModelId,
+  agentSystemPrompt,
+  editingBuiltInMarch,
+  resolvedAgentName,
+  agentProviderOptions,
+  agentModelOptions,
+  startCreateAgent: resetAgentDraft,
+  startEditAgent: openAgentEditor,
+  resetAgentForm,
+  submitAgent,
+  formatAgentBinding,
+  formatAgentSource,
+} = useSettingsAgentForm({
+  settings: settingsRef,
+  onSaveAgent: (input) => emit('saveAgent', input),
 });
 
 function startCreate() {
   activeSection.value = 'providers';
-  providerEditorOpen.value = true;
-  applyProviderEditorState();
-  requestProbeModelsIfNeeded();
+  openCreateProviderEditor();
+  closeModelEditor();
+  clearProviderModelDraft();
+}
+
+function startEdit(provider: ProviderSettingsView['providers'][number]) {
+  activeSection.value = 'providers';
+  openEditProviderEditor(provider);
   closeModelEditor();
   clearProviderModelDraft();
 }
 
 function startCreateAgent() {
   activeSection.value = 'agents';
-  applyAgentEditorState();
+  resetAgentDraft();
 }
 
 function startEditAgent(agent: ProviderSettingsView['agents'][number]) {
   activeSection.value = 'agents';
-  applyAgentEditorState(agent);
-}
-
-function startEdit(provider: ProviderSettingsView['providers'][number]) {
-  activeSection.value = 'providers';
-  providerEditorOpen.value = true;
-  applyProviderEditorState(provider);
-  requestProbeModelsIfNeeded();
-  closeModelEditor();
-  clearProviderModelDraft();
-}
-
-function hydrateProviderContext(provider: ProviderSettingsView['providers'][number]) {
-  applyProviderEditorState(provider);
-}
-
-function closeProviderEditor() {
-  providerEditorOpen.value = false;
-  activeEditorId.value = null;
-  providerApiKey.value = '';
-  providerProbeModel.value = '';
-}
-
-function closeModelEditor() {
-  modelEditorOpen.value = false;
-  activeProviderModelId.value = null;
-}
-
-function selectModelProvider(providerIdString: string) {
-  const providerId = Number(providerIdString);
-  if (!Number.isFinite(providerId) || providerId <= 0) {
-    return;
-  }
-  const provider = props.settings?.providers.find((item) => item.id === providerId);
-  if (!provider) {
-    return;
-  }
-  applyProviderEditorState(provider);
-  if (!activeProviderModelId.value) {
-    providerModelServerTools.value = {};
-  }
-  requestProbeModelsIfNeeded();
-}
-
-function resetForm() {
-  if (activeEditorId.value) {
-    const provider = props.settings?.providers.find((item) => item.id === activeEditorId.value);
-    if (provider) {
-      startEdit(provider);
-      return;
-    }
-  }
-  startCreate();
-}
-
-function resetAgentForm() {
-  if (activeAgentName.value) {
-    const agent = props.settings?.agents.find((item) => item.name === activeAgentName.value);
-    if (agent) {
-      applyAgentEditorState(agent);
-      return;
-    }
-  }
-  startCreateAgent();
-}
-
-function applyProviderEditorState(provider?: ProviderSettingsView['providers'][number]) {
-  activeEditorId.value = provider?.id ?? null;
-  providerType.value = provider?.providerType ?? 'openai_compat';
-  providerName.value = provider?.name ?? '';
-  providerBaseUrl.value = provider?.baseUrl ?? '';
-  providerApiKey.value = provider?.apiKey ?? '';
-  providerProbeModel.value = '';
-}
-
-function applyAgentEditorState(agent?: ProviderSettingsView['agents'][number]) {
-  activeAgentName.value = agent?.name ?? '';
-  agentName.value = agent?.name ?? '';
-  agentDisplayName.value = agent?.displayName ?? '';
-  agentDescription.value = agent?.description ?? '';
-  agentAvatarColor.value = agent?.avatarColor || '#64748B';
-  agentProviderIdString.value = agent?.providerId ? String(agent.providerId) : '';
-  agentModelId.value = agent?.modelId ?? '';
-  agentSystemPrompt.value = agent?.systemPrompt ?? '';
-}
-
-function submitProvider() {
-  emit('saveProvider', {
-    id: activeEditorId.value ?? undefined,
-    providerType: providerType.value,
-    name: providerName.value,
-    baseUrl: providerBaseUrl.value,
-    apiKey: providerApiKey.value,
-  });
-}
-
-function submitAgent() {
-  if (!resolvedAgentName.value) {
-    return;
-  }
-
-  emit('saveAgent', {
-    name: resolvedAgentName.value,
-    displayName: agentDisplayName.value,
-    description: editingBuiltInMarch.value ? '' : agentDescription.value,
-    systemPrompt: agentSystemPrompt.value,
-    avatarColor: agentAvatarColor.value,
-    providerId: agentProviderIdString.value ? Number(agentProviderIdString.value) : null,
-    modelId: agentModelId.value.trim() || null,
-    useCustomMarchPrompt: editingBuiltInMarch.value ? true : undefined,
-  });
-}
-
-function startCreateProviderModel() {
-  modelEditorOpen.value = true;
-  if (!activeEditorId.value) {
-    const firstProvider = props.settings?.providers[0];
-    if (firstProvider) {
-      applyProviderEditorState(firstProvider);
-    }
-  }
-  requestProbeModelsIfNeeded();
-  clearProviderModelDraft();
-}
-
-function startEditProviderModel(model: NonNullable<typeof activeEditorProvider.value>['models'][number]) {
-  modelEditorOpen.value = true;
-  requestProbeModelsIfNeeded();
-  activeProviderModelId.value = model.id;
-  providerModelId.value = model.modelId;
-  providerModelDisplayName.value = model.displayName ?? '';
-  providerModelContextWindow.value = String(model.capabilities.contextWindow);
-  providerModelMaxOutputTokens.value = String(model.capabilities.maxOutputTokens);
-  providerModelSupportsToolUse.value = model.capabilities.supportsToolUse;
-  providerModelSupportsVision.value = model.capabilities.supportsVision;
-  providerModelSupportsAudio.value = model.capabilities.supportsAudio;
-  providerModelSupportsPdf.value = model.capabilities.supportsPdf;
-  providerModelServerTools.value = Object.fromEntries(
-    model.capabilities.serverTools.map((tool) => [tool.capability, tool.format]),
-  );
-}
-
-function resetProviderModelForm() {
-  startCreateProviderModel();
-}
-
-function clearProviderModelDraft() {
-  activeProviderModelId.value = null;
-  providerModelId.value = '';
-  providerModelDisplayName.value = '';
-  providerModelContextWindow.value = '256000';
-  providerModelMaxOutputTokens.value = '128000';
-  providerModelSupportsToolUse.value = false;
-  providerModelSupportsVision.value = false;
-  providerModelSupportsAudio.value = false;
-  providerModelSupportsPdf.value = false;
-  providerModelServerTools.value = {};
-}
-
-function submitProviderModel() {
-  if (!activeEditorProvider.value) {
-    return;
-  }
-
-  const serverTools = collectConfiguredServerTools();
-
-  emit('saveProviderModel', {
-    id: activeProviderModelId.value ?? undefined,
-    providerId: activeEditorProvider.value.id,
-    modelId: providerModelId.value,
-    displayName: providerModelDisplayName.value,
-    contextWindow: Math.max(1, Number(providerModelContextWindow.value) || 256000),
-    maxOutputTokens: Math.max(1, Number(providerModelMaxOutputTokens.value) || 128000),
-    supportsToolUse: providerModelSupportsToolUse.value || serverTools.length > 0,
-    supportsVision: providerModelSupportsVision.value,
-    supportsAudio: providerModelSupportsAudio.value,
-    supportsPdf: providerModelSupportsPdf.value,
-    serverTools,
-  });
-}
-
-function testProvider() {
-  emit('testProvider', {
-    id: activeEditorId.value ?? undefined,
-    providerType: providerType.value,
-    name: providerName.value,
-    baseUrl: providerBaseUrl.value,
-    apiKey: providerApiKey.value,
-    probeModel: providerProbeModel.value,
-  });
+  openAgentEditor(agent);
 }
 
 function submitDefaultModel(modelConfigId: number) {
@@ -701,195 +447,4 @@ function submitDefaultModel(modelConfigId: number) {
     modelConfigId,
   });
 }
-
-function providerTypeLabel(providerTypeValue: string) {
-  return providerTypeOptions.find((option) => option.value === providerTypeValue)?.label ?? providerTypeValue;
-}
-
-function formatAgentBinding(providerId?: number | null, modelId?: string | null) {
-  if (!providerId || !modelId) {
-    return '模型：跟随任务默认';
-  }
-  const provider = props.settings?.providers.find((item) => item.id === providerId);
-  return `模型：${provider?.name ?? providerId} / ${modelId}`;
-}
-
-function formatAgentSource(source: string) {
-  if (source === 'project') {
-    return '来源：项目';
-  }
-  if (source === 'built_in') {
-    return '来源：内置';
-  }
-  return '来源：用户';
-}
-
-function requestProbeModelsNow(forceRefresh = false) {
-  emit('requestProbeModels', {
-    id: activeEditorId.value ?? undefined,
-    providerType: providerType.value,
-    baseUrl: providerBaseUrl.value,
-    apiKey: providerApiKey.value,
-    probeModel: providerProbeModel.value,
-    forceRefresh,
-  });
-}
-
-function requestProbeModelsIfNeeded() {
-  requestProbeModelsNow(false);
-}
-
-function serverToolFormatOptions(capability: string) {
-  const definition = serverToolDefinitions.find((tool) => tool.capability === capability);
-  const formats = (definition?.formats ?? []).filter((format) =>
-    isServerToolFormatCompatibleWithProviderType(format, providerType.value),
-  );
-  return formats.map((format) => ({
-    value: format,
-    label: serverToolFormatOptionLabel(capability, format),
-  }));
-}
-
-function isServerToolFormatCompatibleWithProviderType(format: string, providerTypeValue: string) {
-  if (!providerTypeValue) {
-    return true;
-  }
-  if (format === 'openai_responses') {
-    return providerTypeValue === 'openai';
-  }
-  if (format === 'openai_chat_completions') {
-    return !['anthropic', 'gemini', 'openai'].includes(providerTypeValue);
-  }
-  return format === providerTypeValue;
-}
-
-function serverToolFormatOptionLabel(capability: string, format: string) {
-  const providerLabel = serverToolFormatLabels[format] ?? format;
-  if (capability === 'web_search' && format === 'openai_responses') {
-    return `${providerLabel} (web_search)`;
-  }
-  if (capability === 'web_search' && format === 'openai_chat_completions') {
-    return `${providerLabel} (web_search_preview)`;
-  }
-  if (capability === 'web_search' && format === 'anthropic') {
-    return `${providerLabel} (web_search_20250305)`;
-  }
-  if (capability === 'web_search' && format === 'gemini') {
-    return `${providerLabel} (google_search)`;
-  }
-  if (capability === 'code_execution' && format === 'openai_responses') {
-    return `${providerLabel} (code_interpreter)`;
-  }
-  if (capability === 'code_execution' && format === 'openai_chat_completions') {
-    return `${providerLabel} (code_interpreter)`;
-  }
-  if (capability === 'code_execution' && format === 'anthropic') {
-    return `${providerLabel} (code_execution_20250522)`;
-  }
-  if (capability === 'code_execution' && format === 'gemini') {
-    return `${providerLabel} (code_execution)`;
-  }
-  if (capability === 'file_search' && format === 'openai_responses') {
-    return `${providerLabel} (file_search)`;
-  }
-  return providerLabel;
-}
-
-function isServerToolEnabled(capability: string) {
-  return Boolean(providerModelServerTools.value[capability]);
-}
-
-function collectConfiguredServerTools() {
-  const supportedCapabilities = new Set(serverToolDefinitions.map((tool) => tool.capability));
-  return Object.entries(providerModelServerTools.value)
-    .map(([capability, format]) => ({
-      capability: capability.trim(),
-      format: String(format ?? '').trim(),
-    }))
-    .filter(
-      (tool) =>
-        tool.capability
-        && supportedCapabilities.has(tool.capability)
-        && tool.format,
-    );
-}
-
-function toggleServerTool(capability: string, enabled: boolean) {
-  if (enabled) {
-    const [firstFormat] = serverToolFormatOptions(capability);
-    if (firstFormat) {
-      providerModelServerTools.value = {
-        ...providerModelServerTools.value,
-        [capability]: providerModelServerTools.value[capability] || firstFormat.value,
-      };
-      providerModelSupportsToolUse.value = true;
-    }
-    return;
-  }
-
-  const next = { ...providerModelServerTools.value };
-  delete next[capability];
-  providerModelServerTools.value = next;
-}
-
-function setServerToolFormat(capability: string, format: string) {
-  if (!format) {
-    toggleServerTool(capability, false);
-    return;
-  }
-  providerModelServerTools.value = {
-    ...providerModelServerTools.value,
-    [capability]: format,
-  };
-}
-
-function onServerToolToggle(capability: string, enabled: boolean) {
-  toggleServerTool(capability, enabled);
-}
-
-function formatCapabilitiesSummary(capabilities: {
-  contextWindow: number;
-  maxOutputTokens: number;
-  supportsToolUse: boolean;
-  supportsVision: boolean;
-  supportsAudio: boolean;
-  supportsPdf: boolean;
-  serverTools: Array<{
-    capability: string;
-    format: string;
-  }>;
-}) {
-  const serverToolLabels = capabilities.serverTools.map((tool) => {
-    if (tool.capability === 'web_search') {
-      return '搜索';
-    }
-    if (tool.capability === 'code_execution') {
-      return '代码执行';
-    }
-    if (tool.capability === 'file_search') {
-      return '文件检索';
-    }
-    return tool.capability;
-  });
-  const featureLabels = [
-    capabilities.supportsToolUse ? '工具' : null,
-    capabilities.supportsVision ? '图片' : null,
-    capabilities.supportsAudio ? '音频' : null,
-    capabilities.supportsPdf ? 'PDF' : null,
-    ...serverToolLabels,
-  ].filter(Boolean);
-  const summary = featureLabels.length ? featureLabels.join(' · ') : '纯文本';
-  return `${formatTokenMetric(capabilities.contextWindow)} context · ${formatTokenMetric(capabilities.maxOutputTokens)} output · ${summary}`;
-}
-
-function formatTokenMetric(value: number) {
-  if (value >= 1_000_000) {
-    return `${Math.round(value / 100_000) / 10}M`;
-  }
-  if (value >= 1_000) {
-    return `${Math.round(value / 100) / 10}K`;
-  }
-  return String(value);
-}
-
 </script>
