@@ -1,12 +1,15 @@
 import { nextTick, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import type { BackendWorkspaceSnapshot, ChatMessage, LiveTurn } from '@/data/mock';
+import { toDebugRoundItem } from '@/data/mock';
+import { debugChat, summarizeLiveTurn, summarizeSnapshot } from '@/lib/chatDebug';
 import {
   augmentComposerMessage,
   extractBase64Payload,
   humanizeError,
   type ComposerPayload,
   type RunWorkspaceAction,
+  type TaskChatState,
   type WorkspaceSnapshotState,
 } from './types';
 
@@ -14,6 +17,7 @@ type ChatPaneHandle = { focusComposer: () => void };
 
 type MessageActionsOptions = {
   workspaceState: WorkspaceSnapshotState;
+  taskChatState: TaskChatState;
   liveTurns: Ref<Record<number, LiveTurn>>;
   sendingTaskId: Ref<number | null>;
   cancellingTaskId: Ref<number | null>;
@@ -38,6 +42,7 @@ type MessageActionsOptions = {
 
 export function createMessageActions({
   workspaceState,
+  taskChatState,
   liveTurns,
   sendingTaskId,
   cancellingTaskId,
@@ -60,17 +65,171 @@ export function createMessageActions({
     optimisticActiveTaskId,
     optimisticDeletedTaskIds,
     activeTaskIdNumber,
-    queueLocalComposerMessage,
-    clearLocalComposerMessages,
-    clearTaskComposerState,
+    hydrateTaskDebugTrace,
+    clearDeletedTaskOptimism,
   } = workspaceState;
+  const { appendTaskChatMessage, clearTaskChat } = taskChatState;
+
+  function applyCompletedTaskSnapshot(nextSnapshot: BackendWorkspaceSnapshot, taskId: number) {
+    debugChat('message-actions', 'apply-completed-snapshot:start', {
+      taskId,
+      next: summarizeSnapshot(nextSnapshot),
+      current: summarizeSnapshot(snapshot.value),
+    });
+    const currentSnapshot = snapshot.value;
+    const currentActiveTask = currentSnapshot?.active_task;
+    const nextActiveTask = nextSnapshot.active_task;
+
+    if (
+      !currentSnapshot
+      || !currentActiveTask
+      || !nextActiveTask
+      || currentActiveTask.task.id !== taskId
+      || nextActiveTask.task.id !== taskId
+    ) {
+      if (currentSnapshot) {
+        snapshot.value = {
+          ...currentSnapshot,
+          tasks: nextSnapshot.tasks,
+        };
+        debugChat('message-actions', 'apply-completed-snapshot:tasks-only', summarizeSnapshot(snapshot.value));
+      }
+      return;
+    }
+
+    hydrateTaskDebugTrace(taskId, nextActiveTask.debug_trace?.rounds.map(toDebugRoundItem) ?? []);
+
+    snapshot.value = {
+      ...currentSnapshot,
+      tasks: nextSnapshot.tasks,
+      active_task: {
+        ...currentActiveTask,
+        task: nextActiveTask.task,
+        active_agent: nextActiveTask.active_agent,
+        history: mergeCompletedTaskHistory(currentActiveTask.history, nextActiveTask.history),
+        notes: nextActiveTask.notes,
+        open_files: nextActiveTask.open_files,
+        hints: nextActiveTask.hints,
+        runtime: nextActiveTask.runtime ?? currentActiveTask.runtime,
+        debug_trace: nextActiveTask.debug_trace ?? currentActiveTask.debug_trace,
+      },
+    };
+    debugChat('message-actions', 'apply-completed-snapshot:merged', summarizeSnapshot(snapshot.value));
+  }
+
+  function finalizeSuccessfulSend(taskId: number, nextSnapshot: BackendWorkspaceSnapshot) {
+    applyCompletedTaskSnapshot(nextSnapshot, taskId);
+    // Let terminal progress events own the live-turn lifecycle so a fast invoke
+    // response does not clear the bubble before the final assistant event lands.
+    debugChat('message-actions', 'send:finalize-success', {
+      taskId,
+      liveTurn: summarizeLiveTurn(liveTurns.value[taskId]),
+      snapshot: summarizeSnapshot(snapshot.value),
+    });
+    errorMessage.value = '';
+  }
+
+  async function syncReferencedFiles(taskId: number, payload: ComposerPayload) {
+    const openFilePaths = Array.from(new Set([...payload.files, ...payload.skills]));
+    if (!openFilePaths.length) {
+      debugChat('message-actions', 'sync-referenced-files:skip-empty', {
+        taskId,
+      });
+      return;
+    }
+
+    debugChat('message-actions', 'sync-referenced-files:start', {
+      taskId,
+      paths: openFilePaths,
+    });
+    snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
+      input: {
+        taskId,
+        paths: openFilePaths,
+      },
+    });
+    debugChat('message-actions', 'sync-referenced-files:done', summarizeSnapshot(snapshot.value));
+  }
+
+  function beginPendingTurn(taskId: number, payload: ComposerPayload, content: string) {
+    debugChat('message-actions', 'send:begin-pending-turn', {
+      taskId,
+      contentLength: content.length,
+      directories: payload.directories.length,
+      files: payload.files.length,
+      skills: payload.skills.length,
+      images: payload.images.length,
+    });
+    appendTaskChatMessage(taskId, buildPendingUserMessage(content, payload));
+    upsertLiveTurn(taskId, {
+      turnId: `pending-${Date.now()}`,
+      author: 'March',
+      state: 'pending',
+      statusLabel: '已发送，正在准备',
+      content: '',
+      errorMessage: '',
+      tools: [],
+    });
+    sendingTaskId.value = taskId;
+  }
+
+  function finalizeFailedSend(taskId: number, error: unknown) {
+    debugChat('message-actions', 'send:finalize-failed', {
+      taskId,
+      error: humanizeError(error),
+      liveTurn: summarizeLiveTurn(liveTurns.value[taskId]),
+    });
+    const currentLiveTurn = liveTurns.value[taskId];
+    if (currentLiveTurn) {
+      const failedTurn: LiveTurn = {
+        ...currentLiveTurn,
+        state: 'error',
+        statusLabel: '本轮执行失败',
+        errorMessage: humanizeError(error),
+      };
+      upsertLiveTurn(taskId, failedTurn);
+      archiveFailedTurn(taskId, failedTurn);
+      clearLiveTurn(taskId);
+    }
+    errorMessage.value = humanizeError(error);
+  }
+
+  async function requestAssistantReply(taskId: number, payload: ComposerPayload, content: string) {
+    const requestId = `task-${taskId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    debugChat('message-actions', 'send:invoke-start', {
+      taskId,
+      requestId,
+      contentLength: content.length,
+      images: payload.images.length,
+    });
+    return invoke<BackendWorkspaceSnapshot>('send_message', {
+      input: {
+        taskId,
+        requestId,
+        contentBlocks: [
+          ...(content ? [{ type: 'text', text: content }] : []),
+          ...payload.images.map((image) => ({
+            type: 'image',
+            media_type: image.mediaType,
+            data_base64: extractBase64Payload(image.previewUrl),
+            source_path: image.sourcePath ?? null,
+            name: image.name,
+          })),
+        ],
+      },
+    });
+  }
 
   async function refreshWorkspace(activeTaskId?: number | null) {
+    debugChat('message-actions', 'refresh-workspace:start', {
+      activeTaskId: activeTaskId ?? null,
+    });
     await runWorkspaceAction(async () => {
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('load_workspace_snapshot', {
         activeTaskId: activeTaskId ?? undefined,
       });
     });
+    debugChat('message-actions', 'refresh-workspace:done', summarizeSnapshot(snapshot.value));
   }
 
   async function createTask(busy: Ref<boolean>) {
@@ -141,7 +300,8 @@ export function createMessageActions({
         clearTaskActivity(numericTaskId);
         clearArchivedFailedTurns(numericTaskId);
         clearArchivedIntermediateTurns(numericTaskId);
-        clearTaskComposerState(numericTaskId);
+        clearTaskChat(numericTaskId);
+        clearDeletedTaskOptimism(numericTaskId);
         if (sendingTaskId.value === numericTaskId) {
           sendingTaskId.value = null;
         }
@@ -152,76 +312,34 @@ export function createMessageActions({
 
   async function sendMessage(payload: ComposerPayload) {
     if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
+      debugChat('message-actions', 'send:skip', {
+        activeTaskId: activeTaskIdNumber.value,
+        sendingTaskId: sendingTaskId.value,
+      });
       return;
     }
 
     const taskId = activeTaskIdNumber.value;
     const content = augmentComposerMessage(payload);
-
-    queueLocalComposerMessage(taskId, buildPendingUserMessage(content, payload));
-    upsertLiveTurn(taskId, {
-      turnId: `pending-${Date.now()}`,
-      author: 'March',
-      state: 'pending',
-      statusLabel: '已发送，正在准备',
-      content: '',
-      errorMessage: '',
-      tools: [],
-    });
-    sendingTaskId.value = taskId;
+    beginPendingTurn(taskId, payload, content);
 
     try {
-      const openFilePaths = Array.from(new Set([...payload.files, ...payload.skills]));
-      if (openFilePaths.length) {
-        snapshot.value = await invoke<BackendWorkspaceSnapshot>('open_files', {
-          input: {
-            taskId,
-            paths: openFilePaths,
-          },
-        });
-      }
-
-      const nextSnapshot = await invoke<BackendWorkspaceSnapshot>('send_message', {
-        input: {
-          taskId,
-          contentBlocks: [
-            ...(content ? [{ type: 'text', text: content }] : []),
-            ...payload.images.map((image) => ({
-              type: 'image',
-              media_type: image.mediaType,
-              data_base64: extractBase64Payload(image.previewUrl),
-              source_path: image.sourcePath ?? null,
-              name: image.name,
-            })),
-          ],
-        },
+      await syncReferencedFiles(taskId, payload);
+      const nextSnapshot = await requestAssistantReply(taskId, payload, content);
+      debugChat('message-actions', 'send:invoke-done', {
+        taskId,
+        nextSnapshot: summarizeSnapshot(nextSnapshot),
       });
-      clearLocalComposerMessages(taskId);
-      clearLiveTurn(taskId);
-      if (snapshot.value?.active_task?.task.id === taskId) {
-        snapshot.value = nextSnapshot;
-      } else if (snapshot.value) {
-        snapshot.value = {
-          ...snapshot.value,
-          tasks: nextSnapshot.tasks,
-        };
-      }
-      errorMessage.value = '';
+      finalizeSuccessfulSend(taskId, nextSnapshot);
     } catch (error) {
-      const currentLiveTurn = liveTurns.value[taskId];
-      if (currentLiveTurn) {
-        const failedTurn: LiveTurn = {
-          ...currentLiveTurn,
-          state: 'error',
-          statusLabel: '本轮执行失败',
-          errorMessage: humanizeError(error),
-        };
-        upsertLiveTurn(taskId, failedTurn);
-        archiveFailedTurn(taskId, failedTurn);
-        clearLiveTurn(taskId);
-      }
-      errorMessage.value = humanizeError(error);
+      finalizeFailedSend(taskId, error);
     } finally {
+      debugChat('message-actions', 'send:finally', {
+        taskId,
+        sendingTaskId: sendingTaskId.value,
+        cancellingTaskId: cancellingTaskId.value,
+        liveTurn: summarizeLiveTurn(liveTurns.value[taskId]),
+      });
       if (sendingTaskId.value === taskId) {
         sendingTaskId.value = null;
       }
@@ -276,4 +394,11 @@ function buildPendingUserMessage(content: string, payload: ComposerPayload): Cha
     content,
     images: payload.images,
   };
+}
+
+function mergeCompletedTaskHistory(
+  currentHistory: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'],
+  nextHistory: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'],
+) {
+  return nextHistory.length >= currentHistory.length ? nextHistory : currentHistory;
 }

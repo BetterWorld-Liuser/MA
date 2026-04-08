@@ -7,9 +7,11 @@ import { useMemoryDialog } from '@/composables/useMemoryDialog';
 import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
 import { useSettingsMemories } from '@/composables/useSettingsMemories';
 import { useProviderSettings } from '@/composables/useProviderSettings';
-import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot } from '@/data/mock';
+import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, ChatMessage, DebugRoundItem } from '@/data/mock';
+import { debugChat, summarizeAgentEvent, summarizeSnapshot } from '@/lib/chatDebug';
 import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
 import { useWorkspaceSnapshotState } from '@/composables/workspaceApp/useWorkspaceSnapshotState';
+import { useTaskChatState } from '@/composables/workspaceApp/useTaskChatState';
 import { useWorkspaceTaskActions } from '@/composables/workspaceApp/useWorkspaceTaskActions';
 import {
   humanizeError,
@@ -20,17 +22,32 @@ import {
 
 export type { ChatPaneHandle, MemoryEditorDialogHandle, NoteEditorDialogHandle } from '@/composables/workspaceApp/types';
 
+type BackendNotice = {
+  id: string;
+  level: 'error' | 'warning';
+  source: string;
+  message: string;
+  timestamp: number;
+};
+
 export function useWorkspaceApp() {
   const appTitle = 'March';
   const busy = ref(false);
   const sendingTaskId = ref<number | null>(null);
   const cancellingTaskId = ref<number | null>(null);
   const errorMessage = ref('');
+  const backendNotices = ref<BackendNotice[]>([]);
   const chatPaneRef = ref<ChatPaneHandle | null>(null);
   const noteDialogRef = ref<NoteEditorDialogHandle | null>(null);
   const memoryDialogRef = ref<MemoryEditorDialogHandle | null>(null);
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
   const workspacePath = computed(() => snapshot.value?.workspace_path);
+  let appendTaskChatMessage = (_taskId: number, _message: ChatMessage) => {};
+  let appendTaskDebugRound = (_taskId: number, _round: DebugRoundItem) => {};
+  let setTaskRuntimeSnapshot = (
+    _taskId: number,
+    _runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+  ) => {};
   const {
     isMaximized,
     initializeWindowState,
@@ -42,6 +59,7 @@ export function useWorkspaceApp() {
 
   let unlistenAgentProgress: UnlistenFn | null = null;
   let unlistenMemoryChanged: UnlistenFn | null = null;
+  let unlistenBackendNotice: UnlistenFn | null = null;
 
   const {
     liveTurns,
@@ -60,15 +78,26 @@ export function useWorkspaceApp() {
     sendingTaskId,
     errorMessage,
     workspacePath,
+    appendTaskChatMessage: (taskId, message) => appendTaskChatMessage(taskId, message),
+    appendTaskDebugRound: (taskId, round) => appendTaskDebugRound(taskId, round),
+    setTaskRuntimeSnapshot: (taskId, runtime) => setTaskRuntimeSnapshot(taskId, runtime),
   });
 
   const workspaceState = useWorkspaceSnapshotState({
     snapshot,
     liveTurns,
-    archivedFailedTurns,
-    archivedIntermediateTurns,
     taskActivityStatuses,
   });
+  setTaskRuntimeSnapshot = workspaceState.setTaskRuntimeSnapshot;
+  const taskChatState = useTaskChatState({
+    snapshot,
+    activeTaskIdNumber: workspaceState.activeTaskIdNumber,
+    liveTurns,
+    archivedFailedTurns,
+    archivedIntermediateTurns,
+  });
+  appendTaskChatMessage = taskChatState.appendTaskChatMessage;
+  appendTaskDebugRound = workspaceState.appendTaskDebugRound;
 
   const {
     noteDialogOpen,
@@ -138,6 +167,7 @@ export function useWorkspaceApp() {
     refreshSkills,
   } = useWorkspaceTaskActions({
     workspaceState,
+    taskChatState,
     liveTurns,
     sendingTaskId,
     cancellingTaskId,
@@ -219,23 +249,45 @@ export function useWorkspaceApp() {
   );
 
   async function initialize() {
+    debugChat('workspace-app', 'initialize:start');
     await initializeWindowState();
     unlistenAgentProgress = await listen<BackendAgentProgressEvent>('march://agent-progress', (event) => {
+      debugChat('workspace-app', 'event:received', summarizeAgentEvent(event.payload));
       applyAgentProgress(event.payload);
     });
     unlistenMemoryChanged = await listen('march://memory-changed', async () => {
+      debugChat('workspace-app', 'memory-changed:received', {
+        busy: busy.value,
+        activeTaskId: workspaceState.activeTaskIdNumber.value,
+      });
       if (!busy.value) {
+        debugChat('workspace-app', 'memory-changed:refreshWorkspace:start', {
+          activeTaskId: workspaceState.activeTaskIdNumber.value,
+        });
         await refreshWorkspace(workspaceState.activeTaskIdNumber.value);
+        debugChat('workspace-app', 'memory-changed:refreshWorkspace:done', summarizeSnapshot(snapshot.value));
         if (settingsOpen.value) {
           await refreshSettingsMemories();
         }
       }
     });
+    unlistenBackendNotice = await listen<{
+      level: 'error' | 'warning';
+      source: string;
+      message: string;
+      timestamp: number;
+    }>('march://backend-notice', (event) => {
+      pushBackendNotice(event.payload);
+    });
+    debugChat('workspace-app', 'refreshWorkspace:init:start');
     await refreshWorkspace();
+    debugChat('workspace-app', 'refreshWorkspace:init:done', summarizeSnapshot(snapshot.value));
     await refreshProviderSettings();
+    debugChat('workspace-app', 'initialize:done');
   }
 
   function dispose() {
+    debugChat('workspace-app', 'dispose:start');
     if (unlistenAgentProgress) {
       unlistenAgentProgress();
       unlistenAgentProgress = null;
@@ -244,7 +296,49 @@ export function useWorkspaceApp() {
       unlistenMemoryChanged();
       unlistenMemoryChanged = null;
     }
+    if (unlistenBackendNotice) {
+      unlistenBackendNotice();
+      unlistenBackendNotice = null;
+    }
     disposeWindowState();
+    debugChat('workspace-app', 'dispose:done');
+  }
+
+  function pushBackendNotice(payload: {
+    level: 'error' | 'warning';
+    source: string;
+    message: string;
+    timestamp: number;
+  }) {
+    const normalizedMessage = payload.message.trim();
+    if (!normalizedMessage) {
+      return;
+    }
+
+    const latest = backendNotices.value[0];
+    if (
+      latest
+      && latest.level === payload.level
+      && latest.message === normalizedMessage
+      && Math.abs(latest.timestamp - payload.timestamp) < 1500
+    ) {
+      return;
+    }
+
+    backendNotices.value = [
+      {
+        id: `${payload.timestamp}:${payload.level}:${payload.source}:${normalizedMessage}`,
+        level: payload.level,
+        source: payload.source,
+        message: normalizedMessage,
+        timestamp: payload.timestamp,
+      },
+      ...backendNotices.value,
+    ].slice(0, 8);
+  }
+
+  function dismissBackendNotice(id: string) {
+    backendNotices.value = backendNotices.value.filter((notice) => notice.id !== id);
   }
 
   async function handleOpenSettings() {
@@ -303,11 +397,16 @@ export function useWorkspaceApp() {
     appTitle,
     busy,
     errorMessage,
+    backendNotices,
     isMaximized,
     chatPaneRef,
     noteDialogRef,
     memoryDialogRef,
     workspace: workspaceState.resolvedWorkspace,
+    taskListView: workspaceState.taskListView,
+    chatView: taskChatState.chatView,
+    composerView: workspaceState.composerView,
+    contextView: workspaceState.contextView,
     activeTaskIdNumber: workspaceState.activeTaskIdNumber,
     hasPendingSend,
     isActiveTaskSending,
@@ -344,6 +443,7 @@ export function useWorkspaceApp() {
     confirmDialogLabel,
     initialize,
     dispose,
+    dismissBackendNotice,
     createTask,
     selectTask,
     deleteTask,

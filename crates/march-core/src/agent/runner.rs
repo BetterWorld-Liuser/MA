@@ -262,6 +262,7 @@ impl AgentSession {
                                     .map(|summary| summary.summary.clone())
                                     .unwrap_or_else(|| tool_summary.clone()),
                                 preview: preview_tool_result(&outcome.result_text),
+                                detail: Some(outcome.result_text.clone()),
                             },
                         )?;
                         outcome
@@ -275,6 +276,7 @@ impl AgentSession {
                                 status: AgentToolStatus::Error,
                                 summary: tool_summary.clone(),
                                 preview: preview_tool_result(&result_text),
+                                detail: Some(result_text.clone()),
                             },
                         )?;
                         ToolOutcome {

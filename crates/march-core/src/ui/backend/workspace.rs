@@ -86,9 +86,15 @@ impl UiAppBackend {
         self.save_session(task_id, &mut session)
     }
 
-    pub fn set_open_file_lock(&mut self, task_id: i64, path: PathBuf, locked: bool) -> Result<()> {
+    pub fn set_open_file_lock(
+        &mut self,
+        task_id: i64,
+        scope: impl Into<String>,
+        path: PathBuf,
+        locked: bool,
+    ) -> Result<()> {
         let mut session = self.load_session(task_id)?;
-        session.set_lock_file_in_scope(SHARED_SCOPE.to_string(), path, locked)?;
+        session.set_lock_file_in_scope(scope, path, locked)?;
         self.save_session(task_id, &mut session)
     }
 
@@ -242,7 +248,7 @@ impl UiAppBackend {
         request: UiToggleOpenFileLockRequest,
     ) -> Result<UiWorkspaceSnapshot> {
         let task_id = self.resolve_or_create_task_id(request.task_id)?;
-        self.set_open_file_lock(task_id, request.path, request.locked)?;
+        self.set_open_file_lock(task_id, request.scope, request.path, request.locked)?;
         self.workspace_snapshot(Some(task_id))
     }
 
@@ -251,7 +257,9 @@ impl UiAppBackend {
         request: UiCloseOpenFileRequest,
     ) -> Result<UiWorkspaceSnapshot> {
         let task_id = self.resolve_or_create_task_id(request.task_id)?;
-        self.close_open_file(task_id, request.path)?;
+        let mut session = self.load_session(task_id)?;
+        session.close_file_in_scope(request.scope, request.path)?;
+        self.save_session(task_id, &mut session)?;
         self.workspace_snapshot(Some(task_id))
     }
 

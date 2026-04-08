@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -134,6 +135,47 @@ pub struct UiTurnView {
     pub images: Vec<UiImageAttachmentView>,
     pub tool_summaries: Vec<UiToolSummaryView>,
     pub timestamp: i64,
+}
+
+impl UiTurnView {
+    pub fn assistant_message(
+        agent: impl Into<String>,
+        agent_display_name: impl Into<String>,
+        content: impl Into<String>,
+        tool_summaries: Vec<UiToolSummaryView>,
+        timestamp: i64,
+    ) -> Self {
+        Self {
+            role: UiRoleView::Assistant,
+            agent: agent.into(),
+            agent_display_name: agent_display_name.into(),
+            content: content.into(),
+            images: Vec::new(),
+            tool_summaries,
+            timestamp,
+        }
+    }
+
+    pub fn from_system_time(
+        agent: impl Into<String>,
+        agent_display_name: impl Into<String>,
+        content: impl Into<String>,
+        tool_summaries: Vec<UiToolSummaryView>,
+        timestamp: SystemTime,
+    ) -> Self {
+        Self::assistant_message(
+            agent,
+            agent_display_name,
+            content,
+            tool_summaries,
+            timestamp
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .try_into()
+                .unwrap_or(i64::MAX),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

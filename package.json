@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
     "typecheck": "tsc",
     "check:shadow-js": "node ./scripts/check-shadow-js.mjs",
     "check": "npm run typecheck && npm run check:shadow-js",
@@ -12,6 +13,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:reuse-web": "tauri dev --no-dev-server",
     "tauri:build": "tauri build"
   },
   "dependencies": {

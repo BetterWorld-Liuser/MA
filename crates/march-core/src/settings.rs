@@ -6,18 +6,18 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
 mod agents;
-mod normalize;
 mod migrations;
 mod models;
+mod normalize;
 mod providers;
 mod types;
 
+pub(crate) use normalize::normalize_provider_base_url;
 pub use types::{
     AgentProfileRecord, ModelConfigRecord, ProviderModelRecord, ProviderRecord,
     ProviderSettingsSnapshot, ProviderType, ServerToolCapability, ServerToolConfig,
     ServerToolFormat,
 };
-pub(crate) use normalize::normalize_provider_base_url;
 
 use normalize::{
     normalize_agent_description, normalize_agent_name, normalize_avatar_color,

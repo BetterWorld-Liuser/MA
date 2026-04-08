@@ -159,7 +159,6 @@ impl ProviderClient {
             response.content.unwrap_or_default(),
         ))
     }
-
 }
 
 #[derive(Debug, Clone)]

@@ -184,7 +184,7 @@ export function createContextItemActions({
     });
   }
 
-  async function toggleOpenFileLock(path: string, locked: boolean) {
+  async function toggleOpenFileLock(scope: string, path: string, locked: boolean) {
     if (!activeTaskIdNumber.value) {
       return;
     }
@@ -193,6 +193,7 @@ export function createContextItemActions({
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('toggle_open_file_lock', {
         input: {
           taskId: activeTaskIdNumber.value,
+          scope,
           path,
           locked,
         },
@@ -200,7 +201,7 @@ export function createContextItemActions({
     });
   }
 
-  async function closeOpenFile(path: string) {
+  async function closeOpenFile(scope: string, path: string) {
     if (!activeTaskIdNumber.value) {
       return;
     }
@@ -209,6 +210,7 @@ export function createContextItemActions({
       snapshot.value = await invoke<BackendWorkspaceSnapshot>('close_open_file', {
         input: {
           taskId: activeTaskIdNumber.value,
+          scope,
           path,
         },
       });

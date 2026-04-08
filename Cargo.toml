@@ -1,3 +1,8 @@
 [workspace]
 members = ["crates/march-core", "src-tauri"]
 resolver = "3"
+
+[profile.dev]
+# Keep dev builds incremental, but reduce debug symbol volume so Windows
+# linking and app relaunches stay snappier during `tauri dev`.
+debug = 1

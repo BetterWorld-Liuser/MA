@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Result, bail};
 use indexmap::IndexMap;
@@ -23,6 +23,7 @@ use crate::ui::{
 use crate::watcher::FileWatcherService;
 
 mod editing;
+mod file_diffs;
 mod prompting;
 mod runner;
 mod runtime_views;
@@ -129,6 +130,7 @@ impl Default for AgentConfig {
 pub struct CommandRequest {
     pub command: String,
     pub shell: CommandShell,
+    pub timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +143,7 @@ pub struct CommandExecution {
     pub stderr: String,
     pub started_at: SystemTime,
     pub finished_at: SystemTime,
+    pub duration: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +169,7 @@ pub enum AgentProgressEvent {
         status: AgentToolStatus,
         summary: String,
         preview: Option<String>,
+        detail: Option<String>,
     },
     AssistantTextPreview {
         agent: String,
@@ -271,7 +275,7 @@ mod tests {
         AGENTS_FILENAME, AgentConfig, AgentSession, CommandRequest, CommandShell, TurnCancellation,
         append_assistant_tool_call_message, base_instructions, decode_command_output,
         default_march_prompt, default_system_core, is_turn_cancelled_error,
-        normalize_open_files_for_workspace,
+        normalize_open_files_for_workspace, session::DEFAULT_RUN_COMMAND_TIMEOUT,
     };
     use crate::agents::{MARCH_AGENT_NAME, SHARED_SCOPE};
     use crate::context::{ConversationHistory, Hint};
@@ -655,13 +659,104 @@ mod tests {
 
             let result = timeout(
                 Duration::from_secs(2),
-                session.run_command(CommandRequest { command, shell }, cancellation.as_ref()),
+                session.run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: DEFAULT_RUN_COMMAND_TIMEOUT,
+                    },
+                    cancellation.as_ref(),
+                ),
             )
             .await
             .expect("cancelled command should return promptly");
 
             let error = result.expect_err("cancelled command should fail");
             assert!(is_turn_cancelled_error(&error));
+        });
+    }
+
+    #[test]
+    fn run_command_times_out_and_reports_timeout_clearly() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                "default",
+                ConversationHistory::default(),
+                [],
+                std::env::current_dir().expect("current dir"),
+            )
+            .expect("create agent session");
+
+            let (shell, command) = if cfg!(windows) {
+                (
+                    CommandShell::PowerShell,
+                    "Start-Sleep -Seconds 5".to_string(),
+                )
+            } else {
+                (CommandShell::Sh, "sleep 5".to_string())
+            };
+
+            let error = session
+                .run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: Duration::from_secs(1),
+                    },
+                    TurnCancellation::never(),
+                )
+                .await
+                .expect_err("timed out command should fail");
+
+            let message = error.to_string();
+            assert!(message.contains("command timed out after 1.000s"));
+        });
+    }
+
+    #[test]
+    fn run_command_timeout_preserves_partial_output() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                "default",
+                ConversationHistory::default(),
+                [],
+                std::env::current_dir().expect("current dir"),
+            )
+            .expect("create agent session");
+
+            let (shell, command) = if cfg!(windows) {
+                (
+                    CommandShell::PowerShell,
+                    "Write-Output 'Need to install the following packages:'; Write-Output 'agent-browser@0.25.3'; Write-Output 'Ok to proceed? (y)'; Start-Sleep -Seconds 5".to_string(),
+                )
+            } else {
+                (
+                    CommandShell::Sh,
+                    "printf 'Need to install the following packages:\\nagent-browser@0.25.3\\nOk to proceed? (y)\\n'; sleep 5".to_string(),
+                )
+            };
+
+            let error = session
+                .run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: Duration::from_secs(1),
+                    },
+                    TurnCancellation::never(),
+                )
+                .await
+                .expect_err("timed out command should fail");
+
+            let message = error.to_string();
+            assert!(message.contains("command timed out after 1.000s"));
+            assert!(message.contains("Partial stdout:"));
+            assert!(message.contains("agent-browser@0.25.3"));
+            assert!(message.contains("Ok to proceed? (y)"));
         });
     }
 

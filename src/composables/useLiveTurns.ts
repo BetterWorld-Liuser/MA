@@ -3,15 +3,24 @@ import type {
   BackendAgentProgressEvent,
   BackendWorkspaceSnapshot,
   ChatMessage,
+  DebugRoundItem,
   LiveTurn,
   TaskActivityStatus,
 } from '@/data/mock';
+import { debugChat, summarizeAgentEvent, summarizeLiveTurn, summarizeSnapshot } from '@/lib/chatDebug';
+import { toChatMessage, toDebugRoundItem } from '@/data/mock';
 
 type UseLiveTurnsOptions = {
   snapshot: Ref<BackendWorkspaceSnapshot | null>;
   sendingTaskId: Ref<number | null>;
   errorMessage: Ref<string>;
   workspacePath: Ref<string | undefined>;
+  appendTaskChatMessage: (taskId: number, message: ChatMessage) => void;
+  appendTaskDebugRound: (taskId: number, round: DebugRoundItem) => void;
+  setTaskRuntimeSnapshot: (
+    taskId: number,
+    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+  ) => void;
 };
 
 type ArchivedFailedTurn = {
@@ -27,11 +36,21 @@ type ArchivedIntermediateTurn = {
   message: ChatMessage;
 };
 
-export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspacePath }: UseLiveTurnsOptions) {
+export function useLiveTurns({
+  snapshot,
+  sendingTaskId,
+  errorMessage,
+  workspacePath,
+  appendTaskChatMessage,
+  appendTaskDebugRound,
+  setTaskRuntimeSnapshot,
+}: UseLiveTurnsOptions) {
   const liveTurns = ref<Record<number, LiveTurn>>({});
   const archivedFailedTurns = ref<Record<number, ArchivedFailedTurn[]>>({});
   const archivedIntermediateTurns = ref<Record<number, ArchivedIntermediateTurn[]>>({});
   const taskActivityStatuses = ref<Record<number, TaskActivityStatus>>({});
+  const closedLiveTurnIds = ref<Record<number, string>>({});
+  const previewLogCounts: Record<string, number> = {};
 
   watch(
     workspacePath,
@@ -43,8 +62,14 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
   );
 
   function applyAgentProgress(event: BackendAgentProgressEvent) {
+    logAgentProgress(event);
+
     switch (event.kind) {
       case 'turn_started':
+        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+          return;
+        }
         setTaskActivity(event.task_id, 'working');
         upsertLiveTurn(event.task_id, {
           turnId: event.turn_id,
@@ -57,8 +82,12 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'status':
+        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+          return;
+        }
         setTaskActivity(event.task_id, 'working');
-        mergeActiveTaskRuntime(event.task_id, event.runtime);
+        setTaskRuntimeSnapshot(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -71,8 +100,12 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'tool_started':
+        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+          return;
+        }
         setTaskActivity(event.task_id, 'working');
-        mergeActiveTaskRuntime(event.task_id, event.runtime);
+        setTaskRuntimeSnapshot(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -91,8 +124,12 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'tool_finished':
+        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+          return;
+        }
         setTaskActivity(event.task_id, 'working');
-        mergeActiveTaskRuntime(event.task_id, event.runtime);
+        setTaskRuntimeSnapshot(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -112,8 +149,12 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'assistant_text_preview':
+        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+          return;
+        }
         setTaskActivity(event.task_id, 'working');
-        mergeActiveTaskRuntime(event.task_id, event.runtime);
+        setTaskRuntimeSnapshot(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -128,8 +169,12 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         });
         return;
       case 'assistant_message_checkpoint':
+        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+          return;
+        }
         setTaskActivity(event.task_id, 'working');
-        mergeActiveTaskRuntime(event.task_id, event.runtime);
+        setTaskRuntimeSnapshot(event.task_id, event.runtime);
         ensureLiveTurn(event.task_id, event.turn_id);
         if (!liveTurns.value[event.task_id]) {
           return;
@@ -152,23 +197,16 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         }
         return;
       case 'final_assistant_message':
+        sealLiveTurn(event.task_id, event.turn_id);
         setTaskActivity(event.task_id, 'review');
-        if (snapshot.value?.active_task?.task.id === event.task_id) {
-          snapshot.value = {
-            ...snapshot.value,
-            active_task: event.task,
-          };
-        }
+        appendTaskChatMessage(event.task_id, toChatMessage(event.assistant_message));
+        mergeActiveTaskSnapshot(event.task_id, event.task, event.assistant_message);
         clearLiveTurn(event.task_id);
         return;
       case 'round_complete':
         setTaskActivity(event.task_id, 'review');
-        if (snapshot.value?.active_task?.task.id === event.task_id) {
-          snapshot.value = {
-            ...snapshot.value,
-            active_task: event.task,
-          };
-        }
+        appendTaskDebugRound(event.task_id, toDebugRoundItem(event.debug_round));
+        mergeActiveTaskSnapshot(event.task_id, event.task);
         return;
       case 'turn_failed':
         clearTaskActivity(event.task_id);
@@ -184,6 +222,7 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         };
         upsertLiveTurn(event.task_id, failedTurn);
         archiveFailedTurn(event.task_id, failedTurn);
+        sealLiveTurn(event.task_id, event.turn_id);
         if (sendingTaskId.value === event.task_id) {
           sendingTaskId.value = null;
         }
@@ -193,12 +232,8 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
         return;
       case 'turn_cancelled':
         clearTaskActivity(event.task_id);
-        if (snapshot.value?.active_task?.task.id === event.task_id) {
-          snapshot.value = {
-            ...snapshot.value,
-            active_task: event.task,
-          };
-        }
+        mergeActiveTaskSnapshot(event.task_id, event.task);
+        sealLiveTurn(event.task_id, event.turn_id);
         clearLiveTurn(event.task_id);
         if (sendingTaskId.value === event.task_id) {
           sendingTaskId.value = null;
@@ -208,28 +243,19 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
     }
   }
 
-  function mergeActiveTaskRuntime(
-    taskId: number,
-    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
-  ) {
-    if (snapshot.value?.active_task?.task.id !== taskId) {
-      return;
-    }
-
-    snapshot.value = {
-      ...snapshot.value,
-      active_task: {
-        ...snapshot.value.active_task,
-        runtime,
-      },
-    };
-  }
-
   function ensureLiveTurn(taskId: number, turnId: string) {
     if (liveTurns.value[taskId]?.turnId === turnId) {
+      debugChat('live-turns', 'ensure-live-turn:reuse-existing', {
+        taskId,
+        turnId,
+      });
       return;
     }
 
+    debugChat('live-turns', 'ensure-live-turn:create', {
+      taskId,
+      turnId,
+    });
     upsertLiveTurn(taskId, {
       turnId,
       author: 'March',
@@ -242,11 +268,43 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
     });
   }
 
+  function shouldIgnoreClosedLiveTurnEvent(taskId: number, turnId: string) {
+    return closedLiveTurnIds.value[taskId] === turnId;
+  }
+
+  function sealLiveTurn(taskId: number, turnId: string) {
+    if (closedLiveTurnIds.value[taskId] === turnId) {
+      debugChat('live-turns', 'seal-live-turn:skip-duplicate', {
+        taskId,
+        turnId,
+      });
+      return;
+    }
+
+    // The invoke response and the progress event stream are delivered through
+    // different channels. A status event from an already-finished turn can land
+    // after the final assistant message and would otherwise recreate the live
+    // bubble as "正在调用模型". Once a turn has closed its live bubble, later
+    // live-turn mutations for the same turn id must be ignored.
+    closedLiveTurnIds.value = {
+      ...closedLiveTurnIds.value,
+      [taskId]: turnId,
+    };
+    debugChat('live-turns', 'seal-live-turn', {
+      taskId,
+      turnId,
+    });
+  }
+
   function upsertLiveTurn(taskId: number, turn: LiveTurn) {
     liveTurns.value = {
       ...liveTurns.value,
       [taskId]: turn,
     };
+    debugChat('live-turns', 'upsert-live-turn', {
+      taskId,
+      ...summarizeLiveTurn(turn),
+    });
   }
 
   function archiveFailedTurn(taskId: number, turn: LiveTurn) {
@@ -289,6 +347,46 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
       ...taskActivityStatuses.value,
       [taskId]: status,
     };
+  }
+
+  function mergeActiveTaskSnapshot(
+    taskId: number,
+    nextTask: NonNullable<BackendWorkspaceSnapshot['active_task']>,
+    finalAssistantMessage?: BackendWorkspaceSnapshot['active_task'] extends infer ActiveTask
+      ? ActiveTask extends { history: Array<infer Turn> }
+        ? Turn
+        : never
+      : never,
+  ) {
+    if (!snapshot.value?.active_task || snapshot.value.active_task.task.id !== taskId) {
+      debugChat('live-turns', 'merge-task-snapshot:skip-inactive-task', {
+        taskId,
+        activeTaskId: snapshot.value?.active_task?.task.id ?? null,
+      });
+      return;
+    }
+
+    const currentTask = snapshot.value.active_task;
+    const mergedHistory = mergeHistoryTurns(
+      currentTask.history,
+      nextTask.history,
+      finalAssistantMessage ?? null,
+    );
+    snapshot.value = {
+      ...snapshot.value,
+      active_task: {
+        ...currentTask,
+        task: nextTask.task,
+        active_agent: nextTask.active_agent,
+        history: mergedHistory,
+        notes: nextTask.notes,
+        open_files: nextTask.open_files,
+        hints: nextTask.hints,
+        runtime: nextTask.runtime ?? currentTask.runtime,
+        debug_trace: nextTask.debug_trace ?? currentTask.debug_trace,
+      },
+    };
+    debugChat('live-turns', 'merge-task-snapshot:applied', summarizeSnapshot(snapshot.value));
   }
 
   function clearTaskActivity(taskId: number) {
@@ -342,9 +440,16 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
 
   function clearLiveTurn(taskId: number) {
     if (!(taskId in liveTurns.value)) {
+      debugChat('live-turns', 'clear-live-turn:skip-missing', {
+        taskId,
+      });
       return;
     }
 
+    debugChat('live-turns', 'clear-live-turn', {
+      taskId,
+      ...summarizeLiveTurn(liveTurns.value[taskId]),
+    });
     const nextTurns = { ...liveTurns.value };
     delete nextTurns[taskId];
     liveTurns.value = nextTurns;
@@ -386,6 +491,23 @@ export function useLiveTurns({ snapshot, sendingTaskId, errorMessage, workspaceP
     clearArchivedFailedTurns,
     clearArchivedIntermediateTurns,
   };
+
+  function logAgentProgress(event: BackendAgentProgressEvent) {
+    if (event.kind !== 'assistant_text_preview') {
+      debugChat('live-turns', 'event:apply', summarizeAgentEvent(event));
+      return;
+    }
+
+    const key = `${event.task_id}:${event.turn_id}`;
+    const nextCount = (previewLogCounts[key] ?? 0) + 1;
+    previewLogCounts[key] = nextCount;
+    if (nextCount === 1 || nextCount % 20 === 0) {
+      debugChat('live-turns', 'event:apply-preview', {
+        ...summarizeAgentEvent(event),
+        previewCount: nextCount,
+      });
+    }
+  }
 }
 
 function storageKey(workspacePath?: string) {
@@ -394,6 +516,26 @@ function storageKey(workspacePath?: string) {
 
 function intermediateStorageKey(workspacePath?: string) {
   return workspacePath ? `ma:archived-intermediate-turns:${workspacePath}` : '';
+}
+
+function mergeHistoryTurns(
+  currentHistory: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'],
+  nextHistory: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'],
+  finalAssistantMessage: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'][number] | null,
+) {
+  const merged = [...nextHistory];
+  const hasFinalAssistantMessage = finalAssistantMessage
+    ? merged.some((turn) =>
+      turn.role === finalAssistantMessage.role
+      && turn.timestamp === finalAssistantMessage.timestamp
+      && turn.content === finalAssistantMessage.content)
+    : false;
+
+  if (finalAssistantMessage && !hasFinalAssistantMessage) {
+    merged.push(finalAssistantMessage);
+  }
+
+  return merged.length >= currentHistory.length ? merged : currentHistory;
 }
 
 function loadArchivedFailedTurns(workspacePath?: string) {

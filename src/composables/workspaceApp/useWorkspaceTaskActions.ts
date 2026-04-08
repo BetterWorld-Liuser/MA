@@ -1,6 +1,6 @@
 import type { Ref } from 'vue';
 import type { BackendMemoryDetailView, LiveTurn } from '@/data/mock';
-import type { ComposerPayload, WorkspaceSnapshotState } from './types';
+import type { ComposerPayload, TaskChatState, WorkspaceSnapshotState } from './types';
 import { createContextItemActions } from './contextItemActions';
 import { createMessageActions } from './messageActions';
 import { createTaskSettingsActions } from './taskSettingsActions';
@@ -8,6 +8,7 @@ import { createWorkspaceActionRunner } from './workspaceActionRunner';
 
 type UseWorkspaceTaskActionsOptions = {
   workspaceState: WorkspaceSnapshotState;
+  taskChatState: TaskChatState;
   liveTurns: Ref<Record<number, LiveTurn>>;
   sendingTaskId: Ref<number | null>;
   cancellingTaskId: Ref<number | null>;
@@ -62,6 +63,7 @@ type UseWorkspaceTaskActionsOptions = {
 
 export function useWorkspaceTaskActions({
   workspaceState,
+  taskChatState,
   liveTurns,
   sendingTaskId,
   cancellingTaskId,
@@ -95,6 +97,7 @@ export function useWorkspaceTaskActions({
 
   const messageActions = createMessageActions({
     workspaceState,
+    taskChatState,
     liveTurns,
     sendingTaskId,
     cancellingTaskId,
@@ -191,8 +194,8 @@ export function useWorkspaceTaskActions({
     handleSubmitMemoryDialog: () => contextItemActions.handleSubmitMemoryDialog(),
     deleteNote: (noteId: string) => contextItemActions.deleteNote(noteId),
     deleteMemory: (memoryId: string) => contextItemActions.deleteMemory(memoryId),
-    toggleOpenFileLock: (path: string, locked: boolean) => contextItemActions.toggleOpenFileLock(path, locked),
-    closeOpenFile: (path: string) => contextItemActions.closeOpenFile(path),
+    toggleOpenFileLock: (scope: string, path: string, locked: boolean) => contextItemActions.toggleOpenFileLock(scope, path, locked),
+    closeOpenFile: (scope: string, path: string) => contextItemActions.closeOpenFile(scope, path),
     openFilesFromComposer: (paths: string[]) => contextItemActions.openFilesFromComposer(paths),
     setTaskModel,
     setTaskModelSettings,

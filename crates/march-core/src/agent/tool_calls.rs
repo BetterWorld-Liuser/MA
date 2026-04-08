@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -11,9 +12,13 @@ use crate::provider::ProviderToolCall;
 use crate::settings::SettingsStorage;
 
 use super::editing::{delete_line_range, edit_lines, insert_line_block, replace_line_range};
+use super::file_diffs::format_file_diff;
 use super::prompting::format_tool_output;
 use super::shells::{AvailableShell, parse_shell};
-use super::{AgentSession, CommandRequest, CommandShell, ToolOutcome, TurnCancellation};
+use super::{
+    AgentSession, CommandRequest, CommandShell, ToolOutcome, TurnCancellation,
+    session::DEFAULT_RUN_COMMAND_TIMEOUT,
+};
 
 impl AgentSession {
     pub(super) async fn execute_tool_call(
@@ -31,11 +36,18 @@ impl AgentSession {
         match tool_call.name.as_str() {
             "run_command" => {
                 let args = parse_run_command_args(args, &tool_call.arguments_json)?;
+                let timeout_secs = args
+                    .timeout_secs
+                    .unwrap_or(DEFAULT_RUN_COMMAND_TIMEOUT.as_secs());
+                if timeout_secs == 0 {
+                    bail!("invalid run_command args: timeout_secs must be at least 1");
+                }
                 let execution = self
                     .run_command(
                         CommandRequest {
                             command: args.command,
                             shell: parse_shell(&args.shell)?,
+                            timeout: Duration::from_secs(timeout_secs),
                         },
                         cancellation,
                     )
@@ -77,6 +89,14 @@ impl AgentSession {
                 let args: WriteFileArgs =
                     serde_json::from_value(args).context("invalid write_file args")?;
                 let path = self.resolve_path(args.path);
+                let before = if path.exists() {
+                    Some(
+                        fs::read_to_string(&path)
+                            .with_context(|| format!("failed to read {}", path.display()))?,
+                    )
+                } else {
+                    None
+                };
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)
                         .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -86,11 +106,12 @@ impl AgentSession {
                 } else {
                     None
                 };
-                fs::write(&path, args.content)
+                fs::write(&path, &args.content)
                     .with_context(|| format!("failed to write {}", path.display()))?;
                 self.track_written_file(&path)?;
+                let diff = format_file_diff(&path, before.as_deref().unwrap_or(""), &args.content);
                 Ok(simple_tool(
-                    format!("wrote {}", path.display()),
+                    diff.rendered,
                     "write_file",
                     format!("写入了 {}", path.display()),
                 ))
@@ -99,17 +120,13 @@ impl AgentSession {
                 let args: ReplaceLinesArgs =
                     serde_json::from_value(args).context("invalid replace_lines args")?;
                 let path = self.resolve_path(args.path);
-                edit_lines(&path, |lines| {
+                let edit_result = edit_lines(&path, |lines| {
                     replace_line_range(lines, args.start_line, args.end_line, &args.new_content)
                 })?;
                 self.refresh_if_watched(&path)?;
+                let diff = format_file_diff(&path, &edit_result.before, &edit_result.after);
                 Ok(simple_tool(
-                    format!(
-                        "replaced lines {}-{} in {}",
-                        args.start_line,
-                        args.end_line,
-                        path.display()
-                    ),
+                    diff.rendered,
                     "replace_lines",
                     format!(
                         "修改了 {} 第 {}-{} 行",
@@ -123,12 +140,13 @@ impl AgentSession {
                 let args: InsertLinesArgs =
                     serde_json::from_value(args).context("invalid insert_lines args")?;
                 let path = self.resolve_path(args.path);
-                edit_lines(&path, |lines| {
+                let edit_result = edit_lines(&path, |lines| {
                     insert_line_block(lines, args.after_line, &args.new_content)
                 })?;
                 self.refresh_if_watched(&path)?;
+                let diff = format_file_diff(&path, &edit_result.before, &edit_result.after);
                 Ok(simple_tool(
-                    format!("inserted after {} in {}", args.after_line, path.display()),
+                    diff.rendered,
                     "insert_lines",
                     format!("在 {} 第 {} 行后插入内容", path.display(), args.after_line),
                 ))
@@ -137,17 +155,13 @@ impl AgentSession {
                 let args: DeleteLinesArgs =
                     serde_json::from_value(args).context("invalid delete_lines args")?;
                 let path = self.resolve_path(args.path);
-                edit_lines(&path, |lines| {
+                let edit_result = edit_lines(&path, |lines| {
                     delete_line_range(lines, args.start_line, args.end_line)
                 })?;
                 self.refresh_if_watched(&path)?;
+                let diff = format_file_diff(&path, &edit_result.before, &edit_result.after);
                 Ok(simple_tool(
-                    format!(
-                        "deleted lines {}-{} in {}",
-                        args.start_line,
-                        args.end_line,
-                        path.display()
-                    ),
+                    diff.rendered,
                     "delete_lines",
                     format!(
                         "删除了 {} 第 {}-{} 行",
@@ -412,8 +426,14 @@ pub(super) fn summarize_tool_call(name: &str, arguments_json: &str) -> String {
         "run_command" => {
             let shell = args.get("shell").and_then(Value::as_str).unwrap_or("shell");
             let command = args.get("command").and_then(Value::as_str).unwrap_or("");
+            let timeout_secs = args.get("timeout_secs").and_then(Value::as_u64);
             if command.is_empty() {
                 "run_command".to_string()
+            } else if let Some(timeout_secs) = timeout_secs {
+                format!(
+                    "run_command {} {} (timeout {}s)",
+                    shell, command, timeout_secs
+                )
             } else {
                 format!("run_command {} {}", shell, command)
             }
@@ -549,6 +569,7 @@ fn looks_like_multiple_json_objects(value: &str) -> bool {
 struct RunCommandArgs {
     shell: String,
     command: String,
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -673,6 +694,7 @@ mod tests {
 
         assert_eq!(args.shell, "powershell");
         assert_eq!(args.command, "Get-ChildItem");
+        assert_eq!(args.timeout_secs, None);
     }
 
     #[test]
@@ -685,6 +707,24 @@ mod tests {
 
         assert_eq!(args.shell, "powershell");
         assert_eq!(args.command, "Get-ChildItem");
+        assert_eq!(args.timeout_secs, None);
+    }
+
+    #[test]
+    fn parse_run_command_args_accepts_optional_timeout() {
+        let args = parse_run_command_args(
+            json!({
+                "shell": "powershell",
+                "command": "Get-ChildItem",
+                "timeout_secs": 42,
+            }),
+            r#"{"shell":"powershell","command":"Get-ChildItem","timeout_secs":42}"#,
+        )
+        .expect("timeout should parse");
+
+        assert_eq!(args.shell, "powershell");
+        assert_eq!(args.command, "Get-ChildItem");
+        assert_eq!(args.timeout_secs, Some(42));
     }
 
     #[test]

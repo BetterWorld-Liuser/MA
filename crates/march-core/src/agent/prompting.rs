@@ -223,11 +223,12 @@ pub(super) fn append_assistant_tool_call_message(
 
 pub(super) fn format_tool_output(execution: &CommandExecution) -> String {
     let mut text = format!(
-        "Command: {}\nShell: {:?}\nWorking directory: {}\nExit code: {}\nStarted at: {:?}\nFinished at: {:?}",
+        "Command: {}\nShell: {:?}\nWorking directory: {}\nExit code: {}\nDuration: {:.3}s\nStarted at: {:?}\nFinished at: {:?}",
         execution.command,
         execution.shell,
         execution.working_directory.display(),
         execution.exit_code,
+        execution.duration.as_secs_f64(),
         execution.started_at,
         execution.finished_at
     );

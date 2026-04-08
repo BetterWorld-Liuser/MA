@@ -20,8 +20,8 @@
         :busy="busy"
         :expanded-keys="expandedKeys"
         @toggle-directory="toggleDirectory"
-        @toggle-file-lock="(path, locked) => $emit('toggle-file-lock', path, locked)"
-        @close-file="$emit('close-file', $event)"
+        @toggle-file-lock="(scope, path, locked) => $emit('toggle-file-lock', scope, path, locked)"
+        @close-file="(scope, path) => $emit('close-file', scope, path)"
       />
     </div>
 
@@ -44,8 +44,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  'toggle-file-lock': [path: string, locked: boolean];
-  'close-file': [path: string];
+  'toggle-file-lock': [scope: string, path: string, locked: boolean];
+  'close-file': [scope: string, path: string];
 }>();
 
 const storageKey = computed(() => {

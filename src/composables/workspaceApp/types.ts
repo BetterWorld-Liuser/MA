@@ -3,6 +3,15 @@ import type {
   BackendWorkspaceSnapshot,
   ChatImageAttachment,
   ChatMessage,
+  ContextUsage,
+  DebugRoundItem,
+  HintItem,
+  LiveTurn,
+  MemoryItem,
+  NoteItem,
+  OpenFileItem,
+  SkillItem,
+  TaskItem,
   WorkspaceView,
 } from '@/data/mock';
 
@@ -28,19 +37,66 @@ export type ComposerPayload = {
 
 export type RunWorkspaceAction = (action: () => Promise<void>) => Promise<boolean>;
 
+export type WorkspaceTaskListView = {
+  tasks: TaskItem[];
+  activeTaskId: string;
+};
+
+export type WorkspaceChatView = {
+  chat: ChatMessage[];
+  liveTurn?: LiveTurn;
+};
+
+export type WorkspaceComposerView = {
+  selectedModel?: string;
+  selectedTemperature?: number;
+  selectedTopP?: number;
+  selectedPresencePenalty?: number;
+  selectedFrequencyPenalty?: number;
+  selectedMaxOutputTokens?: number;
+  workingDirectory?: string;
+  workspacePath?: string;
+};
+
+export type WorkspaceContextView = {
+  notes: NoteItem[];
+  openFiles: OpenFileItem[];
+  workingDirectory?: string;
+  hints: HintItem[];
+  skills: SkillItem[];
+  memories: MemoryItem[];
+  memoryWarnings: string[];
+  contextUsage: ContextUsage;
+  debugRounds: DebugRoundItem[];
+};
+
 export type WorkspaceSnapshotState = {
   snapshot: Ref<BackendWorkspaceSnapshot | null>;
   workspacePath: Readonly<Ref<string | undefined>>;
   workspace: Readonly<Ref<WorkspaceView>>;
   resolvedWorkspace: Readonly<Ref<WorkspaceView>>;
+  taskListView: Readonly<Ref<WorkspaceTaskListView>>;
+  composerView: Readonly<Ref<WorkspaceComposerView>>;
+  contextView: Readonly<Ref<WorkspaceContextView>>;
   optimisticTaskId: Ref<string | null>;
   optimisticActiveTaskId: Ref<string | null>;
   optimisticDeletedTaskIds: Ref<Set<string>>;
-  localComposerMessages: Ref<Record<number, ChatMessage[]>>;
   activeTaskIdNumber: Readonly<Ref<number | null>>;
-  queueLocalComposerMessage: (taskId: number, message: ChatMessage) => void;
-  clearLocalComposerMessages: (taskId: number) => void;
-  clearTaskComposerState: (taskId: number) => void;
+  setTaskRuntimeSnapshot: (
+    taskId: number,
+    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+  ) => void;
+  hydrateTaskDebugTrace: (taskId: number, rounds: DebugRoundItem[]) => void;
+  appendTaskDebugRound: (taskId: number, round: DebugRoundItem) => void;
+  clearDeletedTaskOptimism: (taskId: number) => void;
+};
+
+export type TaskChatState = {
+  chatView: Readonly<Ref<WorkspaceChatView>>;
+  appendTaskChatMessage: (taskId: number, message: ChatMessage) => void;
+  hydrateTaskChat: (taskId: number, messages: ChatMessage[]) => void;
+  clearTaskChat: (taskId: number) => void;
+  markTaskChatNeedsHydration: (taskId: number) => void;
 };
 
 export function humanizeError(error: unknown) {

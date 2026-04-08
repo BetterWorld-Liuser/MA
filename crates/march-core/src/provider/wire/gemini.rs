@@ -11,8 +11,8 @@ use crate::provider::messages::{
 use crate::provider::transport::provider_base_url;
 use crate::settings::{ServerToolConfig, ServerToolFormat};
 
-use super::{WireRequest, WireResponse, WireStreamDelta};
 use super::shared::{json_headers, parse_gemini_parts, serialize_gemini_parts};
+use super::{WireRequest, WireResponse, WireStreamDelta};
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
 
@@ -163,8 +163,7 @@ pub(super) fn parse_gemini_response(body: &Value) -> Result<WireResponse> {
 }
 
 pub(super) fn parse_gemini_stream_event(data: &str) -> Result<Vec<WireStreamDelta>> {
-    let body: Value =
-        serde_json::from_str(data).context("failed to decode gemini stream event")?;
+    let body: Value = serde_json::from_str(data).context("failed to decode gemini stream event")?;
     let parts = body
         .get("candidates")
         .and_then(Value::as_array)

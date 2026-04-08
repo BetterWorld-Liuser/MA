@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::runtime::{UiRuntimeSnapshot, UiTaskSnapshot};
+use super::runtime::{UiDebugRoundView, UiRuntimeSnapshot, UiTaskSnapshot, UiTurnView};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -36,6 +36,7 @@ pub enum UiAgentProgressEvent {
         status: UiAgentToolStatus,
         summary: String,
         preview: Option<String>,
+        detail: Option<String>,
         runtime: UiRuntimeSnapshot,
     },
     AssistantTextPreview {
@@ -59,11 +60,13 @@ pub enum UiAgentProgressEvent {
     FinalAssistantMessage {
         task_id: i64,
         turn_id: String,
+        assistant_message: UiTurnView,
         task: UiTaskSnapshot,
     },
     RoundComplete {
         task_id: i64,
         turn_id: String,
+        debug_round: UiDebugRoundView,
         task: UiTaskSnapshot,
     },
     TurnFailed {

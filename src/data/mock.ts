@@ -56,6 +56,7 @@ export type NoteItem = {
 };
 
 export type OpenFileItem = {
+  scope: string;
   path: string;
   tokenUsage: string;
   freshness: 'high' | 'medium' | 'low';
@@ -352,6 +353,7 @@ export type BackendAgentProgressEvent =
       status: 'success' | 'error';
       summary: string;
       preview?: string | null;
+      detail?: string | null;
       runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
@@ -378,12 +380,14 @@ export type BackendAgentProgressEvent =
       kind: 'final_assistant_message';
       task_id: number;
       turn_id: string;
+      assistant_message: BackendHistoryTurn;
       task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
     }
   | {
       kind: 'round_complete';
       task_id: number;
       turn_id: string;
+      debug_round: BackendDebugRoundView;
       task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
     }
   | {
@@ -473,6 +477,11 @@ export type TaskModelSelectorView = {
     modelId: string;
   }>;
 };
+
+export type BackendHistoryTurn = NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['history']>[number];
+export type BackendDebugRoundView = NonNullable<
+  NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['debug_trace']>['rounds']
+>[number];
 
 export type ProviderConnectionTestResult = {
   success: boolean;
@@ -595,10 +604,10 @@ export const mockWorkspace: WorkspaceView = {
     { id: 'plan', content: '1. 读现有结构 2. 拆接口层 3. 补测试' },
   ] satisfies NoteItem[],
   openFiles: [
-    { path: 'src/auth.rs', tokenUsage: '2.8k', freshness: 'high', locked: false },
-    { path: 'src/lib.rs', tokenUsage: '1.9k', freshness: 'high', locked: false },
-    { path: 'src/models.rs', tokenUsage: '0.9k', freshness: 'medium', locked: false },
-    { path: 'config/prod.toml', tokenUsage: '0.3k', freshness: 'low', locked: true },
+    { scope: 'shared', path: 'src/auth.rs', tokenUsage: '2.8k', freshness: 'high', locked: false },
+    { scope: 'shared', path: 'src/lib.rs', tokenUsage: '1.9k', freshness: 'high', locked: false },
+    { scope: 'shared', path: 'src/models.rs', tokenUsage: '0.9k', freshness: 'medium', locked: false },
+    { scope: 'shared', path: 'config/prod.toml', tokenUsage: '0.3k', freshness: 'low', locked: true },
   ] satisfies OpenFileItem[],
   hints: [
     { source: 'Telegram', content: 'foo: 部署好了吗？', timeLeft: '4m32s', turnsLeft: '3轮' },
@@ -661,6 +670,46 @@ export const mockWorkspace: WorkspaceView = {
   ] satisfies DebugRoundItem[],
 };
 
+export function createEmptyWorkspaceView(input?: {
+  title?: string;
+  workspacePath?: string;
+  workingDirectory?: string;
+  contextLimit?: string;
+}): WorkspaceView {
+  const workspacePath = input?.workspacePath;
+  const workingDirectory = input?.workingDirectory ?? workspacePath;
+
+  return {
+    title: input?.title ?? 'March',
+    tasks: [],
+    activeTaskId: '',
+    selectedModel: undefined,
+    selectedTemperature: undefined,
+    selectedTopP: undefined,
+    selectedPresencePenalty: undefined,
+    selectedFrequencyPenalty: undefined,
+    selectedMaxOutputTokens: undefined,
+    workingDirectory,
+    chat: [],
+    notes: [],
+    openFiles: [],
+    hints: [],
+    skills: [],
+    memories: [],
+    memoryWarnings: [],
+    contextUsage: {
+      percent: 0,
+      current: '0',
+      limit: input?.contextLimit ?? '128k',
+      sections: [],
+    },
+    debugRounds: [],
+    liveTurn: undefined,
+    workspacePath,
+    databasePath: undefined,
+  };
+}
+
 export function toWorkspaceView(snapshot: unknown): WorkspaceView {
   const workspace = snapshot as BackendWorkspaceSnapshot;
   const activeTask = workspace.active_task;
@@ -702,26 +751,10 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       activeTask?.task.model_max_output_tokens
       ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_max_output_tokens
       ?? undefined,
-    chat: activeTask?.history.map((turn) => ({
-      role: turn.role === 'User' ? 'user' : 'assistant',
-      author: turn.role === 'User' ? 'User' : (turn.agent_display_name || turn.agent || 'March'),
-      time: formatTime(turn.timestamp),
-      timestamp: turn.timestamp * 1000,
-      content: turn.content,
-      images: turn.images?.map((image) => ({
-        id: image.id,
-        name: image.name,
-        previewUrl: image.dataUrl,
-        mediaType: image.mediaType,
-        sourcePath: image.sourcePath ?? undefined,
-      })),
-      tools: turn.tool_summaries.map((tool) => ({
-        label: tool.name,
-        summary: tool.summary,
-      })),
-    })) ?? [],
+    chat: activeTask ? toChatMessages(activeTask.history) : [],
     notes: activeTask?.notes ?? [],
     openFiles: activeTask?.open_files.map((file) => ({
+      scope: file.scope ?? 'shared',
       path: normalizePath(file.path),
       tokenUsage: formatOpenFileTokenUsage(file.snapshot),
       freshness: file.locked ? 'low' : file.snapshot ? 'high' : 'medium',
@@ -749,19 +782,49 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
     })) ?? [],
     memoryWarnings: activeTask?.runtime?.memory_warnings ?? [],
     contextUsage: formatContextUsage(activeTask?.runtime?.context_usage),
-    debugRounds: activeTask?.debug_trace?.rounds.map((round) => ({
-      iteration: round.iteration,
-      contextPreview: round.context_preview,
-      providerRequestJson: round.provider_request_json,
-      providerResponseJson: round.provider_response_json,
-      providerResponseRaw: round.provider_response_raw,
-      toolCalls: round.tool_calls.map((toolCall) => ({
-        id: toolCall.id,
-        name: toolCall.name,
-        argumentsJson: toolCall.arguments_json,
-      })),
-      toolResults: round.tool_results,
-    })) ?? [],
+    debugRounds: activeTask?.debug_trace?.rounds.map(toDebugRoundItem) ?? [],
+  };
+}
+
+export function toChatMessages(history: BackendHistoryTurn[]): ChatMessage[] {
+  return history.map(toChatMessage);
+}
+
+export function toChatMessage(turn: BackendHistoryTurn): ChatMessage {
+  return {
+    id: buildHistoryMessageId(turn),
+    role: turn.role === 'User' ? 'user' : 'assistant',
+    author: turn.role === 'User' ? 'User' : (turn.agent_display_name || turn.agent || 'March'),
+    time: formatTime(turn.timestamp),
+    timestamp: turn.timestamp * 1000,
+    content: turn.content,
+    images: turn.images?.map((image) => ({
+      id: image.id,
+      name: image.name,
+      previewUrl: image.dataUrl,
+      mediaType: image.mediaType,
+      sourcePath: image.sourcePath ?? undefined,
+    })),
+    tools: turn.tool_summaries.map((tool) => ({
+      label: tool.name,
+      summary: tool.summary,
+    })),
+  };
+}
+
+export function toDebugRoundItem(round: BackendDebugRoundView): DebugRoundItem {
+  return {
+    iteration: round.iteration,
+    contextPreview: round.context_preview,
+    providerRequestJson: round.provider_request_json,
+    providerResponseJson: round.provider_response_json,
+    providerResponseRaw: round.provider_response_raw,
+    toolCalls: round.tool_calls.map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.name,
+      argumentsJson: toolCall.arguments_json,
+    })),
+    toolResults: round.tool_results,
   };
 }
 
@@ -770,6 +833,24 @@ function formatTime(timestamp: number) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function buildHistoryMessageId(turn: BackendHistoryTurn) {
+  return [
+    'history',
+    turn.role,
+    turn.timestamp,
+    turn.agent_display_name || turn.agent || '',
+    hashString(turn.content),
+  ].join(':');
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
 }
 
 function formatRelativeTime(timestamp: number) {
@@ -863,7 +944,12 @@ function formatContextUsage(
     : never,
 ): ContextUsage {
   if (!usage) {
-    return mockWorkspace.contextUsage;
+    return {
+      percent: 0,
+      current: '0',
+      limit: '128k',
+      sections: [],
+    };
   }
 
   return {

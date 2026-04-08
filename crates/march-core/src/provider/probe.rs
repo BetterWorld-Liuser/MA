@@ -1,6 +1,5 @@
 use super::{
-    DeliveryPath, MessageContent, ProviderClient, ProviderResponse, RequestMessage,
-    RequestOptions,
+    DeliveryPath, MessageContent, ProviderClient, ProviderResponse, RequestMessage, RequestOptions,
 };
 use crate::agent::TurnCancellation;
 use crate::settings::ProviderType;
@@ -158,9 +157,10 @@ impl ProviderClient {
                     }
                     anyhow::bail!("provider 没有返回可用模型，无法完成真实对话测试")
                 }
-                Err(error) => Err(
-                    error.context("failed to determine probe model for provider connection test")
-                ),
+                Err(error) => {
+                    Err(error
+                        .context("failed to determine probe model for provider connection test"))
+                }
             },
             _ => anyhow::bail!("provider probe model is empty"),
         }

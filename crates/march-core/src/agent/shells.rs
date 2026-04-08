@@ -2,6 +2,7 @@ use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use encoding_rs::GBK;
@@ -102,6 +103,7 @@ pub async fn shell_command_with_cancel(
     program: &str,
     command: &str,
     working_directory: &Path,
+    timeout: Duration,
     cancellation: &TurnCancellation,
 ) -> Result<std::process::Output> {
     let mut process = match shell {
@@ -136,11 +138,13 @@ pub async fn shell_command_with_cancel(
         .spawn()
         .with_context(|| format!("failed to spawn {}", shell.label()))?;
 
-    collect_child_output(child, cancellation).await
+    collect_child_output(child, command, timeout, cancellation).await
 }
 
 async fn collect_child_output(
     mut child: Child,
+    command: &str,
+    timeout: Duration,
     cancellation: &TurnCancellation,
 ) -> Result<std::process::Output> {
     let stdout = child.stdout.take();
@@ -165,7 +169,28 @@ async fn collect_child_output(
         _ = cancellation.cancelled() => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(anyhow::anyhow!("turn cancelled"));
+            let (stdout, stderr) = collect_terminated_output(stdout_task, stderr_task).await;
+            return Err(anyhow::anyhow!(format_command_interruption(
+                "turn cancelled",
+                command,
+                &stdout,
+                &stderr,
+            )));
+        }
+        _ = tokio::time::sleep(timeout) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let (stdout, stderr) = collect_terminated_output(stdout_task, stderr_task).await;
+            return Err(anyhow::anyhow!(format_command_interruption(
+                &format!(
+                    "command timed out after {:.3}s (timeout {:.3}s)",
+                    timeout.as_secs_f64(),
+                    timeout.as_secs_f64(),
+                ),
+                command,
+                &stdout,
+                &stderr,
+            )));
         }
         status = child.wait() => status.context("failed to wait for command completion")?,
     };
@@ -178,6 +203,34 @@ async fn collect_child_output(
         stdout,
         stderr,
     })
+}
+
+async fn collect_terminated_output(
+    stdout_task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+    stderr_task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) -> (String, String) {
+    let stdout = match join_output(stdout_task, "stdout").await {
+        Ok(bytes) => decode_command_output(&bytes),
+        Err(error) => format!("[failed to collect stdout: {error}]"),
+    };
+    let stderr = match join_output(stderr_task, "stderr").await {
+        Ok(bytes) => decode_command_output(&bytes),
+        Err(error) => format!("[failed to collect stderr: {error}]"),
+    };
+    (stdout, stderr)
+}
+
+fn format_command_interruption(reason: &str, command: &str, stdout: &str, stderr: &str) -> String {
+    let mut message = format!("{reason}: {command}");
+    if !stdout.is_empty() {
+        message.push_str("\nPartial stdout:\n");
+        message.push_str(stdout);
+    }
+    if !stderr.is_empty() {
+        message.push_str("\nPartial stderr:\n");
+        message.push_str(stderr);
+    }
+    message
 }
 
 async fn join_output(

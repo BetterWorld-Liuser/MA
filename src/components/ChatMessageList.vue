@@ -198,12 +198,14 @@ import checkIcon from '@iconify-icons/lucide/check';
 import copyIcon from '@iconify-icons/lucide/copy';
 import MarkdownRender from 'markstream-vue';
 import type { ChatImageAttachment, ChatMessage, LiveTurn } from '@/data/mock';
+import { debugChat, summarizeLiveTurn } from '@/lib/chatDebug';
 
 const props = defineProps<{
   chat: ChatMessage[];
   liveTurn?: LiveTurn;
   taskId?: number | null;
 }>();
+const listInstanceId = Math.random().toString(36).slice(2, 8);
 
 const scrollContainer = ref<HTMLElement | null>(null);
 const copiedContent = ref('');
@@ -242,6 +244,13 @@ const liveTurnContentKey = computed(() => {
 watch(
   chatLength,
   async (length, previousLength) => {
+    debugChat('chat-message-list', 'watch:chat-length', {
+      listInstanceId,
+      taskId: props.taskId ?? null,
+      previousLength: previousLength ?? null,
+      length,
+      shouldStickToBottom: shouldStickToBottom.value,
+    });
     if (!hasInitializedTaskPosition.value) {
       return;
     }
@@ -261,7 +270,14 @@ watch(
 
 watch(
   () => props.taskId,
-  async () => {
+  async (taskId, previousTaskId) => {
+    debugChat('chat-message-list', 'watch:task-id', {
+      listInstanceId,
+      previousTaskId: previousTaskId ?? null,
+      taskId: taskId ?? null,
+      chatLength: props.chat.length,
+      liveTurn: summarizeLiveTurn(props.liveTurn),
+    });
     hasInitializedTaskPosition.value = false;
     await nextTick();
     shouldStickToBottom.value = true;
@@ -272,8 +288,21 @@ watch(
 );
 
 watch(
-  () => props.liveTurn,
-  async (turn, previousTurn) => {
+  () => [props.liveTurn?.turnId, props.liveTurn?.state, props.liveTurn?.statusLabel] as const,
+  async ([turnId, state, statusLabel], [previousTurnId, previousState, previousStatusLabel]) => {
+    debugChat('chat-message-list', 'watch:live-turn-signature', {
+      listInstanceId,
+      taskId: props.taskId ?? null,
+      previousTurnId: previousTurnId ?? null,
+      turnId: turnId ?? null,
+      previousState: previousState ?? null,
+      state: state ?? null,
+      previousStatusLabel: previousStatusLabel ?? null,
+      statusLabel: statusLabel ?? null,
+      liveTurn: summarizeLiveTurn(props.liveTurn),
+    });
+    const turn = props.liveTurn;
+    const previousTurn = previousTurnId ? { turnId: previousTurnId, state: previousState, statusLabel: previousStatusLabel } : null;
     if (!turn) {
       return;
     }
@@ -285,15 +314,24 @@ watch(
     await nextTick();
     scrollToBottom('auto');
   },
-  { deep: true },
 );
 
 onMounted(async () => {
+  debugChat('chat-message-list', 'mounted', {
+    listInstanceId,
+    taskId: props.taskId ?? null,
+    chatLength: props.chat.length,
+    liveTurn: summarizeLiveTurn(props.liveTurn),
+  });
   await nextTick();
   updateStickToBottom();
 });
 
 onUnmounted(() => {
+  debugChat('chat-message-list', 'unmounted', {
+    listInstanceId,
+    taskId: props.taskId ?? null,
+  });
   if (copyFeedbackTimer) {
     clearTimeout(copyFeedbackTimer);
     copyFeedbackTimer = null;

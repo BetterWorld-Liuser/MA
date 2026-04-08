@@ -307,6 +307,7 @@ impl UiAppBackend {
                 status,
                 summary,
                 preview,
+                detail,
             } => on_progress(UiAgentProgressEvent::ToolFinished {
                 task_id,
                 turn_id: turn_id.to_string(),
@@ -314,6 +315,7 @@ impl UiAppBackend {
                 status: status.into(),
                 summary,
                 preview,
+                detail,
                 runtime: runtime.clone(),
             }),
             AgentProgressEvent::AssistantTextPreview { agent, message } => {
@@ -348,9 +350,13 @@ impl UiAppBackend {
                     progress_rounds,
                     context_budget_tokens,
                 )?;
+                let assistant_message = task.history.last().cloned().ok_or_else(|| {
+                    anyhow::anyhow!("final assistant message missing from task history")
+                })?;
                 on_progress(UiAgentProgressEvent::FinalAssistantMessage {
                     task_id,
                     turn_id: turn_id.to_string(),
+                    assistant_message,
                     task,
                 })
             }
@@ -365,6 +371,11 @@ impl UiAppBackend {
                 on_progress(UiAgentProgressEvent::RoundComplete {
                     task_id,
                     turn_id: turn_id.to_string(),
+                    debug_round: task
+                        .debug_trace
+                        .as_ref()
+                        .and_then(|trace| trace.rounds.last().cloned())
+                        .ok_or_else(|| anyhow::anyhow!("debug round missing from task snapshot"))?,
                     task,
                 })
             }

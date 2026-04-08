@@ -84,33 +84,35 @@ pub(super) fn serialize_openai_content(content: Option<&MessageContent>) -> Valu
 }
 
 pub(super) fn serialize_anthropic_blocks(content: Option<&MessageContent>) -> Result<Vec<Value>> {
-    Ok(match serialize_message_parts(
-        content,
-        false,
-        |text| {
-            json!({
+    Ok(
+        match serialize_message_parts(
+            content,
+            false,
+            |text| {
+                json!({
+                    "type": "text",
+                    "text": text,
+                })
+            },
+            |media_type, data_base64| {
+                json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data_base64,
+                    }
+                })
+            },
+        ) {
+            SerializedContent::Null => Vec::new(),
+            SerializedContent::Text(text) => vec![json!({
                 "type": "text",
                 "text": text,
-            })
+            })],
+            SerializedContent::Parts(parts) => parts,
         },
-        |media_type, data_base64| {
-            json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": data_base64,
-                }
-            })
-        },
-    ) {
-        SerializedContent::Null => Vec::new(),
-        SerializedContent::Text(text) => vec![json!({
-            "type": "text",
-            "text": text,
-        })],
-        SerializedContent::Parts(parts) => parts,
-    })
+    )
 }
 
 pub(super) fn serialize_gemini_parts(content: Option<&MessageContent>) -> Result<Vec<Value>> {

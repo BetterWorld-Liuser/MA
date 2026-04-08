@@ -25,7 +25,7 @@
         :disabled="busy"
         :aria-label="`Close ${node.name}`"
         :title="`Close ${node.name}`"
-        @click.stop="emit('close-file', node.fullPath)"
+        @click.stop="emit('close-file', node.scope, node.fullPath)"
       >
         <Icon :icon="xIcon" class="h-3.5 w-3.5 transition-transform duration-150 group-hover:scale-110" />
       </button>
@@ -53,7 +53,7 @@
         :disabled="busy"
         :aria-label="`${node.locked ? 'Unlock' : 'Lock'} ${node.name}`"
         :title="`${node.locked ? 'Unlock' : 'Lock'} ${node.name}`"
-        @click.stop="emit('toggle-file-lock', node.fullPath, !node.locked)"
+        @click.stop="emit('toggle-file-lock', node.scope, node.fullPath, !node.locked)"
       >
         <Icon :icon="node.locked ? lockIcon : unlockIcon" class="h-3.5 w-3.5" />
       </button>
@@ -68,8 +68,8 @@
         :busy="busy"
         :expanded-keys="expandedKeys"
         @toggle-directory="emit('toggle-directory', $event)"
-        @toggle-file-lock="(path, locked) => emit('toggle-file-lock', path, locked)"
-        @close-file="emit('close-file', $event)"
+        @toggle-file-lock="(scope, path, locked) => emit('toggle-file-lock', scope, path, locked)"
+        @close-file="(scope, path) => emit('close-file', scope, path)"
       />
     </div>
   </div>
@@ -92,8 +92,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'toggle-directory': [key: string];
-  'toggle-file-lock': [path: string, locked: boolean];
-  'close-file': [path: string];
+  'toggle-file-lock': [scope: string, path: string, locked: boolean];
+  'close-file': [scope: string, path: string];
 }>();
 
 const expanded = computed(() => props.node.type === 'directory' && props.expandedKeys.has(props.node.key));

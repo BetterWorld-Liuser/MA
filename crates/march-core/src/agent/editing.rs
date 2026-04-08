@@ -3,7 +3,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-pub fn edit_lines<F>(path: &Path, mutate: F) -> Result<()>
+pub struct FileEditResult {
+    pub before: String,
+    pub after: String,
+}
+
+pub fn edit_lines<F>(path: &Path, mutate: F) -> Result<FileEditResult>
 where
     F: FnOnce(&mut Vec<String>) -> Result<()>,
 {
@@ -26,8 +31,11 @@ where
     if trailing_newline {
         output.push('\n');
     }
-    fs::write(path, output).with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(())
+    fs::write(path, &output).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(FileEditResult {
+        before: content,
+        after: output,
+    })
 }
 
 pub fn replace_line_range(

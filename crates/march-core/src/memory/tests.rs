@@ -130,7 +130,9 @@ fn initialize_global_schema_migrates_legacy_memories_table_without_stable_id() {
         .expect("legacy memories table should migrate successfully");
 
     let stable_id: String = connection
-        .query_row("SELECT stable_id FROM memories WHERE id = 7", [], |row| row.get(0))
+        .query_row("SELECT stable_id FROM memories WHERE id = 7", [], |row| {
+            row.get(0)
+        })
         .expect("failed to read backfilled stable_id");
     assert_eq!(stable_id, "7");
 }

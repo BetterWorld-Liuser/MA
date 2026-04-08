@@ -26,6 +26,7 @@ pub struct UiDeleteTaskRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiSendMessageRequest {
     pub task_id: Option<i64>,
+    pub request_id: Option<String>,
     pub content_blocks: Vec<UiComposerContentBlock>,
 }
 
@@ -145,6 +146,7 @@ pub struct UiDeleteMemoryRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiToggleOpenFileLockRequest {
     pub task_id: Option<i64>,
+    pub scope: String,
     pub path: PathBuf,
     pub locked: bool,
 }
@@ -153,6 +155,7 @@ pub struct UiToggleOpenFileLockRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UiCloseOpenFileRequest {
     pub task_id: Option<i64>,
+    pub scope: String,
     pub path: PathBuf,
 }
 

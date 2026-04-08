@@ -3,6 +3,7 @@ import type { OpenFileItem } from '@/data/mock';
 export type OpenFileTreeFileNode = {
   type: 'file';
   key: string;
+  scope: string;
   name: string;
   displayPath: string;
   fullPath: string;
@@ -59,9 +60,10 @@ export function buildOpenFilesTree(openFiles: OpenFileItem[], workspaceRoot?: st
       ? ensureDirectoryPath(externalRoot, parentSegments, externalRoot.key)
       : ensureDirectoryPath(internalRoot, parentSegments, '');
 
-    parent.children.set(`file:${normalizedPath}`, {
+    parent.children.set(`file:${file.scope}:${normalizedPath}`, {
       type: 'file',
-      key: `file:${normalizedPath}`,
+      key: `file:${file.scope}:${normalizedPath}`,
+      scope: file.scope,
       name: fileName,
       displayPath: placement.displayPath,
       fullPath: normalizedPath,

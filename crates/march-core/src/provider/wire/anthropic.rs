@@ -10,8 +10,8 @@ use crate::provider::messages::{
 use crate::provider::transport::provider_base_url;
 use crate::settings::{ServerToolConfig, ServerToolFormat};
 
-use super::{WireRequest, WireResponse, WireStreamDelta, WireToolCall};
 use super::shared::{json_headers, serialize_anthropic_blocks};
+use super::{WireRequest, WireResponse, WireStreamDelta, WireToolCall};
 
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
 
@@ -28,17 +28,14 @@ pub(super) fn build_anthropic_request(
     let mut body_messages = Vec::new();
 
     for message in messages {
-      match message.role.as_str() {
-            "system" => {
-                system_blocks.extend(serialize_anthropic_blocks(message.content.as_ref())?)
-            }
+        match message.role.as_str() {
+            "system" => system_blocks.extend(serialize_anthropic_blocks(message.content.as_ref())?),
             "user" => body_messages.push(json!({
                 "role": "user",
                 "content": serialize_anthropic_blocks(message.content.as_ref())?,
             })),
             "assistant" => {
-                let mut blocks: Vec<Value> =
-                    serialize_anthropic_blocks(message.content.as_ref())?;
+                let mut blocks: Vec<Value> = serialize_anthropic_blocks(message.content.as_ref())?;
                 for tool_call in &message.tool_calls {
                     blocks.push(json!({
                         "type": "tool_use",

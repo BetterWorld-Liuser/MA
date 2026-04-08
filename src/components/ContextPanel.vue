@@ -18,8 +18,8 @@
         :open-files="openFiles"
         :workspace-root="workingDirectory"
         :busy="busy"
-        @toggle-file-lock="(path, locked) => $emit('toggle-file-lock', path, locked)"
-        @close-file="$emit('close-file', $event)"
+        @toggle-file-lock="(scope, path, locked) => $emit('toggle-file-lock', scope, path, locked)"
+        @close-file="(scope, path) => $emit('close-file', scope, path)"
       />
       <ContextNotesSection
         :notes="notes"
@@ -335,8 +335,8 @@ defineEmits<{
   'add-memory': [];
   'edit-memory': [memoryId: string];
   'delete-memory': [memoryId: string];
-  'toggle-file-lock': [path: string, locked: boolean];
-  'close-file': [path: string];
+  'toggle-file-lock': [scope: string, path: string, locked: boolean];
+  'close-file': [scope: string, path: string];
   'refresh-skills': [];
   'open-skill': [path: string];
 }>();

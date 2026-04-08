@@ -15,18 +15,16 @@ use super::messages::{
     validate_messages,
 };
 use super::transport::provider_base_url;
-use shared::{
-    apply_bearer_auth, insert_optional_json_field, json_headers, openai_message_text,
-    parse_openai_tool_calls, serialize_openai_message, should_use_openai_responses_api,
-};
+use anthropic::{build_anthropic_request, parse_anthropic_response, parse_anthropic_stream_event};
+use gemini::{build_gemini_request, parse_gemini_response, parse_gemini_stream_event};
 use openai::{
     build_openai_responses_request, openai_chat_function_tool, parse_openai_responses_response,
     parse_openai_responses_stream_event,
 };
-use anthropic::{
-    build_anthropic_request, parse_anthropic_response, parse_anthropic_stream_event,
+use shared::{
+    apply_bearer_auth, insert_optional_json_field, json_headers, openai_message_text,
+    parse_openai_tool_calls, serialize_openai_message, should_use_openai_responses_api,
 };
-use gemini::{build_gemini_request, parse_gemini_response, parse_gemini_stream_event};
 
 pub(super) struct WireRequest {
     pub url: String,

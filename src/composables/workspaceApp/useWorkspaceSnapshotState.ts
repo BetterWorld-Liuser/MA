@@ -1,9 +1,10 @@
-import { computed, ref, type Ref } from 'vue';
+import { computed, ref, watch, type Ref } from 'vue';
 import {
-  mockWorkspace,
+  createEmptyWorkspaceView,
+  toDebugRoundItem,
   toWorkspaceView,
   type BackendWorkspaceSnapshot,
-  type ChatMessage,
+  type DebugRoundItem,
   type LiveTurn,
   type TaskActivityStatus,
   type WorkspaceView,
@@ -12,16 +13,12 @@ import type { WorkspaceSnapshotState } from './types';
 
 type UseWorkspaceSnapshotStateOptions = {
   liveTurns: Readonly<{ value: Record<number, LiveTurn> }>;
-  archivedFailedTurns: Readonly<{ value: Record<number, Array<{ message: ChatMessage }>> }>;
-  archivedIntermediateTurns: Readonly<{ value: Record<number, Array<{ message: ChatMessage }>> }>;
   taskActivityStatuses: Readonly<{ value: Record<number, TaskActivityStatus> }>;
 };
 
 export function useWorkspaceSnapshotState({
   snapshot,
   liveTurns,
-  archivedFailedTurns,
-  archivedIntermediateTurns,
   taskActivityStatuses,
 }: UseWorkspaceSnapshotStateOptions & {
   snapshot: Ref<BackendWorkspaceSnapshot | null>;
@@ -29,26 +26,25 @@ export function useWorkspaceSnapshotState({
   const optimisticTaskId = ref<string | null>(null);
   const optimisticActiveTaskId = ref<string | null>(null);
   const optimisticDeletedTaskIds = ref<Set<string>>(new Set());
-  const localComposerMessages = ref<Record<number, ChatMessage[]>>({});
+  const taskRuntimeSnapshots = ref<Record<number, NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>>>({});
+  const taskDebugTraces = ref<Record<number, DebugRoundItem[]>>({});
+  const hydratedDebugTaskIds = ref<Set<number>>(new Set());
   const workspacePath = computed(() => snapshot.value?.workspace_path);
+  const lastResolvedWorkspace = ref<WorkspaceView>(
+    createEmptyWorkspaceView({
+      workspacePath: workspacePath.value,
+      workingDirectory: workspacePath.value,
+    }),
+  );
 
   const workspace = computed<WorkspaceView>(() => {
     const activeTaskId = snapshot.value?.active_task?.task.id ?? (snapshot.value?.tasks[0]?.id ?? null);
 
     if (!snapshot.value) {
-      return mockWorkspace;
+      return lastResolvedWorkspace.value;
     }
 
     const baseWorkspace = toWorkspaceView(snapshot.value);
-    const intermediateMessages = activeTaskId
-      ? (archivedIntermediateTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
-      : [];
-    const archivedMessages = activeTaskId
-      ? (archivedFailedTurns.value[activeTaskId] ?? []).map((entry) => entry.message)
-      : [];
-    const mergedChat = [...baseWorkspace.chat, ...intermediateMessages, ...archivedMessages].sort(
-      (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
-    );
 
     return {
       ...baseWorkspace,
@@ -60,10 +56,33 @@ export function useWorkspaceSnapshotState({
           activityStatus: task.id === String(activeTaskId) ? undefined : activityStatus,
         };
       }),
-      chat: mergeChatWithComposerMessages(localComposerMessages.value, activeTaskId ?? undefined, mergedChat),
       liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
     };
   });
+
+  watch(
+    workspace,
+    (nextWorkspace) => {
+      lastResolvedWorkspace.value = nextWorkspace;
+    },
+    { immediate: true },
+  );
+
+  watch(
+    () => snapshot.value?.active_task,
+    (activeTask) => {
+      if (!activeTask) {
+        return;
+      }
+
+      const taskId = activeTask.task.id;
+      if (!hydratedDebugTaskIds.value.has(taskId)) {
+        hydrateTaskDebugTrace(taskId, activeTask.debug_trace?.rounds.map(toDebugRoundItem) ?? []);
+        hydratedDebugTaskIds.value = new Set([...hydratedDebugTaskIds.value, taskId]);
+      }
+    },
+    { immediate: true },
+  );
 
   const resolvedWorkspace = computed<WorkspaceView>(() => {
     const baseWorkspace = workspace.value;
@@ -134,25 +153,74 @@ export function useWorkspaceSnapshotState({
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   });
 
-  function queueLocalComposerMessage(taskId: number, message: ChatMessage) {
-    localComposerMessages.value = {
-      ...localComposerMessages.value,
-      [taskId]: [...(localComposerMessages.value[taskId] ?? []), message],
+  const taskListView = computed(() => ({
+    tasks: resolvedWorkspace.value.tasks,
+    activeTaskId: resolvedWorkspace.value.activeTaskId,
+  }));
+
+  const composerView = computed(() => ({
+    selectedModel: resolvedWorkspace.value.selectedModel,
+    selectedTemperature: resolvedWorkspace.value.selectedTemperature,
+    selectedTopP: resolvedWorkspace.value.selectedTopP,
+    selectedPresencePenalty: resolvedWorkspace.value.selectedPresencePenalty,
+    selectedFrequencyPenalty: resolvedWorkspace.value.selectedFrequencyPenalty,
+    selectedMaxOutputTokens: resolvedWorkspace.value.selectedMaxOutputTokens,
+    workingDirectory: resolvedWorkspace.value.workingDirectory,
+    workspacePath: resolvedWorkspace.value.workspacePath,
+  }));
+
+  const contextView = computed(() => ({
+    ...(buildContextWorkspaceView(
+      snapshot.value,
+      activeTaskIdNumber.value,
+      taskRuntimeSnapshots.value,
+      resolvedWorkspace.value,
+    )),
+    debugRounds: activeTaskIdNumber.value ? (taskDebugTraces.value[activeTaskIdNumber.value] ?? []) : [],
+  }));
+
+  function setTaskRuntimeSnapshot(
+    taskId: number,
+    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+  ) {
+    taskRuntimeSnapshots.value = {
+      ...taskRuntimeSnapshots.value,
+      [taskId]: runtime,
     };
   }
 
-  function clearLocalComposerMessages(taskId: number) {
-    if (!(taskId in localComposerMessages.value)) {
+  function hydrateTaskDebugTrace(taskId: number, rounds: DebugRoundItem[]) {
+    taskDebugTraces.value = {
+      ...taskDebugTraces.value,
+      [taskId]: rounds.map((round) => ({
+        ...round,
+        toolCalls: round.toolCalls.map((toolCall) => ({ ...toolCall })),
+        toolResults: [...round.toolResults],
+      })),
+    };
+  }
+
+  function appendTaskDebugRound(taskId: number, round: DebugRoundItem) {
+    const current = taskDebugTraces.value[taskId] ?? [];
+    const last = current[current.length - 1];
+    if (last?.iteration === round.iteration) {
       return;
     }
 
-    const nextMessages = { ...localComposerMessages.value };
-    delete nextMessages[taskId];
-    localComposerMessages.value = nextMessages;
+    taskDebugTraces.value = {
+      ...taskDebugTraces.value,
+      [taskId]: [
+        ...current,
+        {
+          ...round,
+          toolCalls: round.toolCalls.map((toolCall) => ({ ...toolCall })),
+          toolResults: [...round.toolResults],
+        },
+      ],
+    };
   }
 
-  function clearTaskComposerState(taskId: number) {
-    clearLocalComposerMessages(taskId);
+  function clearDeletedTaskOptimism(taskId: number) {
     optimisticDeletedTaskIds.value = new Set(
       [...optimisticDeletedTaskIds.value].filter((id) => id !== String(taskId)),
     );
@@ -163,14 +231,61 @@ export function useWorkspaceSnapshotState({
     workspacePath,
     workspace,
     resolvedWorkspace,
+    taskListView,
+    composerView,
+    contextView,
     optimisticTaskId,
     optimisticActiveTaskId,
     optimisticDeletedTaskIds,
-    localComposerMessages,
     activeTaskIdNumber,
-    queueLocalComposerMessage,
-    clearLocalComposerMessages,
-    clearTaskComposerState,
+    setTaskRuntimeSnapshot,
+    hydrateTaskDebugTrace,
+    appendTaskDebugRound,
+    clearDeletedTaskOptimism,
+  };
+}
+
+function buildContextWorkspaceView(
+  snapshot: BackendWorkspaceSnapshot | null,
+  activeTaskId: number | null,
+  taskRuntimeSnapshots: Record<number, NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>>,
+  fallbackWorkspace: WorkspaceView,
+) {
+  if (!snapshot?.active_task || !activeTaskId) {
+    return {
+      notes: fallbackWorkspace.notes,
+      openFiles: fallbackWorkspace.openFiles,
+      workingDirectory: fallbackWorkspace.workingDirectory,
+      hints: fallbackWorkspace.hints,
+      skills: fallbackWorkspace.skills,
+      memories: fallbackWorkspace.memories,
+      memoryWarnings: fallbackWorkspace.memoryWarnings,
+      contextUsage: fallbackWorkspace.contextUsage,
+    };
+  }
+
+  const runtimeOverride = taskRuntimeSnapshots[activeTaskId];
+  const activeTask = snapshot.active_task.task.id === activeTaskId && runtimeOverride
+    ? {
+        ...snapshot.active_task,
+        runtime: runtimeOverride,
+      }
+    : snapshot.active_task;
+
+  const workspaceWithContext = toWorkspaceView({
+    ...snapshot,
+    active_task: activeTask,
+  });
+
+  return {
+    notes: workspaceWithContext.notes,
+    openFiles: workspaceWithContext.openFiles,
+    workingDirectory: workspaceWithContext.workingDirectory,
+    hints: workspaceWithContext.hints,
+    skills: workspaceWithContext.skills,
+    memories: workspaceWithContext.memories,
+    memoryWarnings: workspaceWithContext.memoryWarnings,
+    contextUsage: workspaceWithContext.contextUsage,
   };
 }
 
@@ -205,7 +320,7 @@ function buildEmptyTaskWorkspace(
     contextUsage: {
       percent: 0,
       current: '0',
-      limit: workspace.contextUsage.limit,
+      limit: workspace.contextUsage.limit || '128k',
       sections: [],
     },
     debugRounds: [],
@@ -241,57 +356,10 @@ function applyOptimisticActiveTask(workspace: WorkspaceView, optimisticTaskId: s
     contextUsage: {
       percent: 0,
       current: '0',
-      limit: workspace.contextUsage.limit,
+      limit: workspace.contextUsage.limit || '128k',
       sections: [],
     },
     debugRounds: [],
     liveTurn: undefined,
   };
-}
-
-function mergeChatWithComposerMessages(
-  localComposerMessages: Record<number, ChatMessage[]>,
-  taskId: number | undefined,
-  chat: ChatMessage[],
-) {
-  if (!taskId) {
-    return chat;
-  }
-
-  const localMessages = localComposerMessages[taskId] ?? [];
-  if (!localMessages.length) {
-    return chat;
-  }
-
-  const merged = chat.map((message) => ({
-    ...message,
-    images: message.images ? [...message.images] : undefined,
-  }));
-  const usedIndices = new Set<number>();
-  const unmatched: ChatMessage[] = [];
-
-  for (const localMessage of localMessages) {
-    const matchIndex = merged.findIndex((message, index) =>
-      !usedIndices.has(index)
-      && message.role === localMessage.role
-      && message.content === localMessage.content
-      && Math.abs((message.timestamp ?? 0) - (localMessage.timestamp ?? 0)) < 120000,
-    );
-
-    if (matchIndex >= 0) {
-      usedIndices.add(matchIndex);
-      if (localMessage.images?.length) {
-        merged[matchIndex] = {
-          ...merged[matchIndex],
-          images: localMessage.images,
-        };
-      }
-    } else {
-      unmatched.push(localMessage);
-    }
-  }
-
-  return [...merged, ...unmatched].sort(
-    (left, right) => (left.timestamp ?? Number.MAX_SAFE_INTEGER) - (right.timestamp ?? Number.MAX_SAFE_INTEGER),
-  );
 }

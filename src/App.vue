@@ -9,19 +9,44 @@
     />
 
     <div class="mx-auto flex h-[calc(100%-2.5rem)] min-h-0 max-w-[1920px] flex-col gap-2 px-2 py-2 lg:px-3 lg:py-3">
-      <div
-        v-if="errorMessage"
-        class="bg-[rgba(224,82,82,0.06)] px-4 py-3 text-sm text-text"
-        style="border-bottom: 1px solid rgba(224, 82, 82, 0.28)"
-      >
-        {{ errorMessage }}
+      <div v-if="backendNotices.length || errorMessage" class="space-y-2">
+        <div
+          v-for="notice in backendNotices"
+          :key="notice.id"
+          class="flex items-start justify-between gap-3 rounded-xl px-4 py-3 text-sm text-text"
+          :style="notice.level === 'error'
+            ? 'background: rgba(224,82,82,0.06); border: 1px solid rgba(224,82,82,0.28);'
+            : 'background: rgba(230,168,23,0.06); border: 1px solid rgba(230,168,23,0.24);'"
+        >
+          <div class="min-w-0">
+            <p class="text-[11px] uppercase tracking-[0.12em]" :class="notice.level === 'error' ? 'text-error' : 'text-warning'">
+              {{ notice.level }} · {{ notice.source }}
+            </p>
+            <p class="mt-1 whitespace-pre-wrap break-words text-sm text-text">{{ notice.message }}</p>
+          </div>
+          <button
+            class="shrink-0 rounded-md px-2 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
+            type="button"
+            @click="dismissBackendNotice(notice.id)"
+          >
+            关闭
+          </button>
+        </div>
+
+        <div
+          v-if="!backendNotices.length && errorMessage"
+          class="bg-[rgba(224,82,82,0.06)] px-4 py-3 text-sm text-text"
+          style="border-bottom: 1px solid rgba(224, 82, 82, 0.28)"
+        >
+          {{ errorMessage }}
+        </div>
       </div>
 
       <main class="grid min-h-0 flex-1 overflow-hidden gap-0 lg:grid-cols-[256px_minmax(0,1fr)_332px]">
         <TaskList
           title="任务"
-          :tasks="workspace.tasks"
-          :active-task-id="workspace.activeTaskId"
+          :tasks="taskListView.tasks"
+          :active-task-id="taskListView.activeTaskId"
           :busy="busy"
           @select="selectTask"
           @create="createTask"
@@ -30,17 +55,17 @@
         />
         <ChatPane
           ref="chatPaneRef"
-          :chat="workspace.chat"
-          :live-turn="workspace.liveTurn"
+          :chat="chatView.chat"
+          :live-turn="chatView.liveTurn"
           :task-id="activeTaskIdNumber"
-          :selected-model="workspace.selectedModel"
-          :selected-temperature="workspace.selectedTemperature"
-          :selected-top-p="workspace.selectedTopP"
-          :selected-presence-penalty="workspace.selectedPresencePenalty"
-          :selected-frequency-penalty="workspace.selectedFrequencyPenalty"
-          :selected-max-output-tokens="workspace.selectedMaxOutputTokens"
-          :working-directory="workspace.workingDirectory"
-          :workspace-path="workspace.workspacePath"
+          :selected-model="composerView.selectedModel"
+          :selected-temperature="composerView.selectedTemperature"
+          :selected-top-p="composerView.selectedTopP"
+          :selected-presence-penalty="composerView.selectedPresencePenalty"
+          :selected-frequency-penalty="composerView.selectedFrequencyPenalty"
+          :selected-max-output-tokens="composerView.selectedMaxOutputTokens"
+          :working-directory="composerView.workingDirectory"
+          :workspace-path="composerView.workspacePath"
           :settings-open="settingsOpen"
           :disabled="!activeTaskIdNumber"
           :sending="isActiveTaskSending"
@@ -53,15 +78,15 @@
           @set-working-directory="setTaskWorkingDirectory"
         />
         <ContextPanel
-          :notes="workspace.notes"
-          :open-files="workspace.openFiles"
-          :working-directory="workspace.workingDirectory"
-          :hints="workspace.hints"
-          :skills="workspace.skills"
-          :memories="workspace.memories"
-          :memory-warnings="workspace.memoryWarnings"
-          :usage="workspace.contextUsage"
-          :debug-rounds="workspace.debugRounds"
+          :notes="contextView.notes"
+          :open-files="contextView.openFiles"
+          :working-directory="contextView.workingDirectory"
+          :hints="contextView.hints"
+          :skills="contextView.skills"
+          :memories="contextView.memories"
+          :memory-warnings="contextView.memoryWarnings"
+          :usage="contextView.contextUsage"
+          :debug-rounds="contextView.debugRounds"
           :busy="busy"
           @add-note="addNote"
           @edit-note="editNote"
@@ -176,19 +201,25 @@ import MemoryEditorDialog from '@/components/MemoryEditorDialog.vue';
 import NoteEditorDialog from '@/components/NoteEditorDialog.vue';
 import SettingsPage from '@/components/SettingsPage.vue';
 import TaskList from '@/components/TaskList.vue';
+import { debugChat } from '@/lib/chatDebug';
 import { useWorkspaceApp } from '@/composables/useWorkspaceApp';
 
 const workspaceApp = useWorkspaceApp();
+const appInstanceId = Math.random().toString(36).slice(2, 8);
 
 const {
   appTitle,
   busy,
   errorMessage,
+  backendNotices,
   isMaximized,
   chatPaneRef,
   noteDialogRef,
   memoryDialogRef,
-  workspace,
+  taskListView,
+  chatView,
+  composerView,
+  contextView,
   activeTaskIdNumber,
   hasPendingSend,
   isActiveTaskSending,
@@ -225,6 +256,7 @@ const {
   confirmDialogLabel,
   initialize,
   dispose,
+  dismissBackendNotice,
   createTask,
   selectTask,
   deleteTask,
@@ -273,10 +305,16 @@ const {
 } = workspaceApp;
 
 onMounted(() => {
+  debugChat('app', 'mounted', {
+    appInstanceId,
+  });
   void initialize();
 });
 
 onUnmounted(() => {
+  debugChat('app', 'unmounted', {
+    appInstanceId,
+  });
   dispose();
 });
 </script>

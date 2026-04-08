@@ -109,6 +109,12 @@ fn run_command_tool(
                 required: true,
                 description: "The exact command text to execute in that shell.",
             },
+            ToolParameter {
+                name: "timeout_secs",
+                kind: "integer",
+                required: false,
+                description: "Optional command timeout in seconds. If omitted, March defaults to 10 seconds.",
+            },
         ],
         notes: vec![
             format!(
@@ -119,8 +125,10 @@ fn run_command_tool(
                 "Current working directory for every run_command call: {}.",
                 working_directory.display()
             ),
+            "Default timeout for run_command is 10 seconds.".to_string(),
+            "Set timeout_secs when the command is expected to take longer or should fail faster.".to_string(),
             "Only choose a shell from the available-shell list above.".to_string(),
-            "Each run_command tool call may execute exactly one command. The arguments must be a single JSON object with exactly two fields: shell and command.".to_string(),
+            "Each run_command tool call may execute exactly one command. The arguments must be a single JSON object with required fields shell and command, plus optional timeout_secs.".to_string(),
             "If you need to run two commands, emit two separate run_command tool calls instead of concatenating commands or JSON objects.".to_string(),
             "Use run_command when you need external environment capabilities such as git, compilers, test runners, shell pipelines, or existing CLI tools.".to_string(),
             "Do not use run_command just to read a file that is already present in the open-files context layer; use that watcher-backed snapshot directly.".to_string(),
@@ -185,6 +193,7 @@ fn write_file_tool() -> ToolDefinition {
         notes: vec![
             "Prefer write_file for creating a new file or replacing a file wholesale.".to_string(),
             "After write_file, the file is tracked and its snapshot in the open-files context reflects the written content.".to_string(),
+            "On success, write_file returns a unified diff immediately so you can verify the change within the same turn without reopening the file.".to_string(),
             "Use line-based edit tools (replace_lines, insert_lines, delete_lines) instead when only a small region needs to change — they save tokens by only outputting the diff.".to_string(),
         ],
     }
@@ -224,6 +233,7 @@ fn replace_lines_tool() -> ToolDefinition {
             "Use replace_lines for in-place edits where you only need to output the changed lines, saving tokens compared to write_file.".to_string(),
             "The new_content may differ in line count from the replaced range — subsequent line numbers shift accordingly.".to_string(),
             "If the file was modified externally after you last saw it, the watcher will detect the change and warn before the edit is applied.".to_string(),
+            "On success, replace_lines returns a unified diff immediately so you can verify the exact hunk without reopening the file.".to_string(),
         ],
     }
 }
@@ -255,6 +265,7 @@ fn insert_lines_tool() -> ToolDefinition {
         notes: vec![
             "Use insert_lines for purely additive edits — adding new functions, imports, or blocks without touching existing lines.".to_string(),
             "Subsequent line numbers shift down by the number of inserted lines.".to_string(),
+            "On success, insert_lines returns a unified diff immediately so you can inspect the inserted hunk without reopening the file.".to_string(),
         ],
     }
 }
@@ -287,6 +298,7 @@ fn delete_lines_tool() -> ToolDefinition {
             "Use delete_lines for pure removal — dropping imports, dead code, or empty blocks."
                 .to_string(),
             "Subsequent line numbers shift up by the number of deleted lines.".to_string(),
+            "On success, delete_lines returns a unified diff immediately so you can confirm the removed hunk without reopening the file.".to_string(),
         ],
     }
 }
@@ -655,6 +667,8 @@ mod tests {
         assert!(prompt.contains("## run_command"));
 
         assert!(prompt.contains("Available shells in this session: powershell (pwsh), cmd."));
+        assert!(prompt.contains("Default timeout for run_command is 10 seconds."));
+        assert!(prompt.contains("timeout_secs"));
         assert!(prompt.contains("Each run_command tool call may execute exactly one command."));
         assert!(prompt.contains("emit two separate run_command tool calls"));
         assert!(prompt.contains("## open_file"));

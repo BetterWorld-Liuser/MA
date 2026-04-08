@@ -1,4 +1,8 @@
+use std::time::Duration;
+
 use super::*;
+
+pub const DEFAULT_RUN_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl AgentSession {
     pub fn new(
@@ -266,10 +270,10 @@ impl AgentSession {
             &selected_shell.program,
             &request.command,
             &self.working_directory,
+            request.timeout,
             cancellation,
         )
-        .await?;
-        let finished_at = SystemTime::now();
+        .await;
 
         for path in tracked_paths {
             if path.exists() {
@@ -283,6 +287,10 @@ impl AgentSession {
             }
         }
 
+        let output = output?;
+        let finished_at = SystemTime::now();
+        let duration = finished_at.duration_since(started_at).unwrap_or_default();
+
         Ok(CommandExecution {
             command: request.command,
             working_directory: self.working_directory.clone(),
@@ -292,6 +300,7 @@ impl AgentSession {
             stderr: decode_command_output(&output.stderr),
             started_at,
             finished_at,
+            duration,
         })
     }
 
