@@ -1,29 +1,9 @@
 import { computed, ref, type Ref } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
-import type {
-  ChatImageAttachment,
-  MentionTargetView,
-  SearchSkillView,
-  WorkspaceEntryView,
-  WorkspaceImageView,
-} from '@/data/mock';
+import type { ComposerImageAttachment, MentionItem } from './chatComposerShared';
+import { useComposerImageAttachments } from './useComposerImageAttachments';
+import { useComposerMentions } from './useComposerMentions';
 
-export type MentionKind = 'file' | 'directory' | 'skill';
-
-export type MentionItem = {
-  path: string;
-  kind: MentionKind;
-  label: string;
-  description?: string;
-};
-
-export type ComposerImageAttachment = ChatImageAttachment;
-
-type ComposerSearchResult = MentionTargetView | SearchSkillView;
-
-type SearchMode = 'smart' | 'file' | 'directory' | 'skill';
-
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+export type { ComposerImageAttachment, MentionItem } from './chatComposerShared';
 
 export function useChatComposer(options: {
   disabled: Ref<boolean>;
@@ -39,41 +19,58 @@ export function useChatComposer(options: {
   } = options;
 
   const draft = ref('');
-  const mentions = ref<MentionItem[]>([]);
-  const imageAttachments = ref<ComposerImageAttachment[]>([]);
   const composerRef = ref<HTMLTextAreaElement | null>(null);
   const composerRootRef = ref<HTMLElement | null>(null);
   const imageInputRef = ref<HTMLInputElement | null>(null);
-  const composerMaxHeight = 160;
-  const activeSearchQuery = ref('');
-  const searchResults = ref<ComposerSearchResult[]>([]);
-  const searchLoading = ref(false);
-  const highlightedResultIndex = ref(0);
-  const searchPanelOpen = ref(false);
-  const searchMode = ref<SearchMode>('smart');
-  const searchQueryRange = ref<{ start: number; end: number } | null>(null);
   const plusMenuOpen = ref(false);
-  const lastSearchQuery = ref('');
-  const lastSearchMode = ref<SearchMode | null>(null);
   const composerNotice = ref('');
-  const dragActive = ref(false);
+  const composerMaxHeight = 160;
   let composerNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const {
+    imageAttachments,
+    dragActive,
+    removeImageAttachment,
+    clearImageAttachments,
+    attachWorkspaceImage,
+    handleImageFileSelection,
+    handlePaste,
+    handleDrop,
+    handleDragOver,
+    handleDragLeave: handleImageDragLeave,
+  } = useComposerImageAttachments({
+    taskId,
+    supportsVision,
+    showComposerNotice,
+  });
+
+  const {
+    mentions,
+    activeSearchQuery,
+    searchResults,
+    searchLoading,
+    highlightedResultIndex,
+    searchPanelOpen,
+    searchPanelLabel,
+    updateMentionQueryFromCursor,
+    openSearchFromMenu,
+    selectWorkspaceEntry,
+    removeMention,
+    clearMentions,
+    closeSearchPanel,
+  } = useComposerMentions({
+    disabled,
+    taskId,
+    draft,
+    composerRef,
+    plusMenuOpen,
+    attachWorkspaceImage,
+    showComposerNotice,
+  });
 
   const composerIsEmpty = computed(() =>
     !draft.value.trim() && mentions.value.length === 0 && imageAttachments.value.length === 0,
   );
-  const searchPanelLabel = computed(() => {
-    if (searchMode.value === 'file') {
-      return '选择文件';
-    }
-    if (searchMode.value === 'directory') {
-      return '选择目录';
-    }
-    if (searchMode.value === 'skill') {
-      return '选择技能';
-    }
-    return '@ 引用';
-  });
 
   function handleDraftInput() {
     syncComposerHeight();
@@ -113,195 +110,16 @@ export function useChatComposer(options: {
       return;
     }
 
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !sending.value) {
       event.preventDefault();
       submit();
     }
   }
 
-  async function updateMentionQueryFromCursor() {
-    const textarea = composerRef.value;
-    if (!textarea) {
-      return;
-    }
-
-    if (searchMode.value === 'file' || searchMode.value === 'directory') {
-      return;
-    }
-
-    const cursor = textarea.selectionStart ?? draft.value.length;
-    const prefix = draft.value.slice(0, cursor);
-
-    const mentionMatch = prefix.match(/(^|\s)@([^\s@]*)$/);
-    if (mentionMatch && typeof mentionMatch.index === 'number') {
-      const query = mentionMatch[2] ?? '';
-      const atIndex = mentionMatch.index + mentionMatch[1].length;
-      searchQueryRange.value = { start: atIndex, end: cursor };
-      activeSearchQuery.value = query;
-      await loadSearchResults(query, 'smart');
-      return;
-    }
-
-    const slashMatch = prefix.match(/(^|\s)\/([^\s/]*)$/);
-    if (slashMatch && typeof slashMatch.index === 'number') {
-      const query = slashMatch[2] ?? '';
-      const slashIndex = slashMatch.index + slashMatch[1].length;
-      searchQueryRange.value = { start: slashIndex, end: cursor };
-      activeSearchQuery.value = query;
-      await loadSearchResults(query, 'skill');
-      return;
-    }
-
-    closeSearchPanel();
-    activeSearchQuery.value = '';
-  }
-
-  async function loadSearchResults(query: string, mode: SearchMode) {
-    if (disabled.value || !taskId.value) {
-      return;
-    }
-
-    if (
-      searchPanelOpen.value
-      && lastSearchQuery.value === query
-      && lastSearchMode.value === mode
-      && searchResults.value.length > 0
-    ) {
-      return;
-    }
-
-    searchMode.value = mode;
-    searchPanelOpen.value = true;
-    plusMenuOpen.value = false;
-    searchLoading.value = true;
-    try {
-      if (mode === 'smart') {
-        searchResults.value = await invoke<MentionTargetView[]>('search_mentions', {
-          input: {
-            taskId: taskId.value,
-            query,
-            limit: 12,
-          },
-        });
-      } else if (mode === 'skill') {
-        searchResults.value = await invoke<SearchSkillView[]>('search_skills', {
-          input: {
-            taskId: taskId.value,
-            query,
-            limit: 12,
-          },
-        });
-      } else {
-        const entries = await invoke<WorkspaceEntryView[]>('search_workspace_entries', {
-          input: {
-            taskId: taskId.value,
-            query,
-            kind: mode,
-            limit: 12,
-          },
-        });
-        searchResults.value = entries;
-      }
-      lastSearchQuery.value = query;
-      lastSearchMode.value = mode;
-      highlightedResultIndex.value = 0;
-    } finally {
-      searchLoading.value = false;
-    }
-  }
-
-  function openSearchFromMenu(mode: 'file' | 'directory' | 'skill') {
-    activeSearchQuery.value = '';
-    searchQueryRange.value = null;
-    void loadSearchResults('', mode);
-  }
-
-  async function selectWorkspaceEntry(entry: ComposerSearchResult) {
-    if (entry.kind === 'skill') {
-      if (mentions.value.some((item) => item.path === entry.path && item.kind === 'skill')) {
-        closeSearchPanel();
-        return;
-      }
-
-      mentions.value = [
-        ...mentions.value,
-        {
-          path: entry.path,
-          kind: 'skill',
-          label: entry.name,
-          description: entry.description,
-        },
-      ];
-      removeSearchQueryFromDraft();
-      closeSearchPanel();
-      return;
-    }
-
-    if (entry.kind === 'agent') {
-      insertAgentMention(entry.name);
-      closeSearchPanel();
-      return;
-    }
-
-    if (entry.kind === 'file' && isImagePath(entry.path)) {
-      if (!supportsVision.value) {
-        showComposerNotice('当前模型不支持图片输入');
-        removeSearchQueryFromDraft();
-        closeSearchPanel();
-        return;
-      }
-
-      if (!taskId.value) {
-        return;
-      }
-
-      const image = await invoke<WorkspaceImageView>('load_workspace_image', {
-        input: {
-          taskId: taskId.value,
-          path: entry.path,
-        },
-      });
-      addImageAttachment({
-        id: `workspace:${image.path}`,
-        name: image.name,
-        previewUrl: image.dataUrl,
-        mediaType: image.mediaType,
-        sourcePath: image.path,
-      });
-      removeSearchQueryFromDraft();
-      closeSearchPanel();
-      return;
-    }
-
-    if (mentions.value.some((item) => item.path === entry.path && item.kind === entry.kind)) {
-      closeSearchPanel();
-      return;
-    }
-
-    mentions.value = [
-      ...mentions.value,
-      {
-        path: entry.path,
-        kind: entry.kind,
-        label: entry.path,
-      },
-    ];
-    removeSearchQueryFromDraft();
-    closeSearchPanel();
-  }
-
-  function removeMention(path: string, kind: MentionKind) {
-    mentions.value = mentions.value.filter((item) => !(item.path === path && item.kind === kind));
-  }
-
-  function removeImageAttachment(id: string) {
-    imageAttachments.value = imageAttachments.value.filter((item) => item.id !== id);
-  }
-
   function togglePlusMenu() {
     plusMenuOpen.value = !plusMenuOpen.value;
     if (plusMenuOpen.value) {
-      searchPanelOpen.value = false;
+      closeSearchPanel();
     }
   }
 
@@ -314,58 +132,8 @@ export function useChatComposer(options: {
     imageInputRef.value?.click();
   }
 
-  async function handleImageFileSelection(event: Event) {
-    const target = event.target as HTMLInputElement | null;
-    const files = Array.from(target?.files ?? []);
-    await attachImageFiles(files);
-    if (target) {
-      target.value = '';
-    }
-  }
-
-  async function handlePaste(event: ClipboardEvent) {
-    const files = extractImageFiles(event.clipboardData?.items);
-    if (!files.length) {
-      return;
-    }
-
-    event.preventDefault();
-    await attachImageFiles(files);
-  }
-
-  async function handleDrop(event: DragEvent) {
-    dragActive.value = false;
-    const files = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith('image/'));
-    if (!files.length) {
-      return;
-    }
-
-    event.preventDefault();
-    await attachImageFiles(files);
-  }
-
-  function handleDragOver(event: DragEvent) {
-    if (!hasImageFile(event.dataTransfer?.items)) {
-      dragActive.value = false;
-      return;
-    }
-
-    event.preventDefault();
-    dragActive.value = true;
-  }
-
   function handleDragLeave(event: DragEvent) {
-    if (!composerRootRef.value?.contains(event.relatedTarget as Node | null)) {
-      dragActive.value = false;
-    }
-  }
-
-  function closeSearchPanel() {
-    searchPanelOpen.value = false;
-    searchQueryRange.value = null;
-    lastSearchQuery.value = '';
-    lastSearchMode.value = null;
-    searchMode.value = 'smart';
+    handleImageDragLeave(event, composerRootRef);
   }
 
   function closeAllMenus() {
@@ -408,9 +176,8 @@ export function useChatComposer(options: {
 
   function resetComposer() {
     draft.value = '';
-    mentions.value = [];
-    imageAttachments.value = [];
-    dragActive.value = false;
+    clearMentions();
+    clearImageAttachments();
     composerNotice.value = '';
     closeAllMenus();
     syncComposerHeight(true);
@@ -425,87 +192,6 @@ export function useChatComposer(options: {
       composerNotice.value = '';
       composerNoticeTimer = null;
     }, 2200);
-  }
-
-  async function attachImageFiles(files: File[]) {
-    if (!files.length) {
-      return;
-    }
-    if (!supportsVision.value) {
-      showComposerNotice('当前模型不支持图片输入');
-      return;
-    }
-
-    const imageFiles = files.filter((file) => file.type.startsWith('image/') || isImagePath(file.name));
-    const attachments = await Promise.all(imageFiles.map(fileToImageAttachment));
-    attachments.forEach(addImageAttachment);
-  }
-
-  function addImageAttachment(attachment: ComposerImageAttachment) {
-    if (imageAttachments.value.some((item) => item.id === attachment.id)) {
-      return;
-    }
-    imageAttachments.value = [...imageAttachments.value, attachment];
-  }
-
-  function removeSearchQueryFromDraft() {
-    if (!searchQueryRange.value) {
-      return;
-    }
-
-    const { start, end } = searchQueryRange.value;
-    draft.value = `${draft.value.slice(0, start)}${draft.value.slice(end)}`.replace(/\s{2,}/g, ' ').trimStart();
-    composerRef.value?.focus();
-    composerRef.value?.setSelectionRange(start, start);
-    searchQueryRange.value = null;
-  }
-
-  function insertAgentMention(name: string) {
-    const mention = `@${name}`;
-    if (!searchQueryRange.value) {
-      draft.value = appendToken(draft.value, mention);
-      return;
-    }
-
-    const { start, end } = searchQueryRange.value;
-    const prefix = draft.value.slice(0, start);
-    const suffix = draft.value.slice(end).replace(/^\s*/, '');
-    draft.value = `${prefix}${mention} ${suffix}`.trimEnd();
-    const cursor = prefix.length + mention.length + 1;
-    composerRef.value?.focus();
-    composerRef.value?.setSelectionRange(cursor, cursor);
-    searchQueryRange.value = null;
-  }
-
-  async function fileToImageAttachment(file: File): Promise<ComposerImageAttachment> {
-    const previewUrl = await readFileAsDataUrl(file);
-    return {
-      id: `upload:${file.name}:${file.size}:${file.lastModified}`,
-      name: file.name,
-      previewUrl,
-      mediaType: file.type || inferImageMediaType(file.name),
-    };
-  }
-
-  function extractImageFiles(items?: DataTransferItemList | null) {
-    if (!items) {
-      return [];
-    }
-    return Array.from(items)
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => !!file);
-  }
-
-  function hasImageFile(items?: DataTransferItemList | null) {
-    if (!items) {
-      return false;
-    }
-    return Array.from(items).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
-  }
-
-  function isModifierOnlyKey(key: string) {
-    return key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta';
   }
 
   return {
@@ -548,49 +234,6 @@ export function useChatComposer(options: {
   };
 }
 
-function isImagePath(path: string) {
-  const normalized = path.trim().toLowerCase();
-  const extension = normalized.split('.').pop();
-  return !!extension && IMAGE_EXTENSIONS.has(extension);
-}
-
-function inferImageMediaType(name: string) {
-  const extension = name.trim().toLowerCase().split('.').pop();
-  switch (extension) {
-    case 'png':
-      return 'image/png';
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    case 'gif':
-      return 'image/gif';
-    case 'webp':
-      return 'image/webp';
-    case 'bmp':
-      return 'image/bmp';
-    case 'svg':
-      return 'image/svg+xml';
-    default:
-      return 'image/png';
-  }
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error(`failed to read image file ${file.name}`));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error(`failed to read image file ${file.name}`));
-    reader.readAsDataURL(file);
-  });
-}
-
-function appendToken(content: string, token: string) {
-  const trimmedEnd = content.replace(/\s+$/, '');
-  return trimmedEnd ? `${trimmedEnd} ${token} ` : `${token} `;
+function isModifierOnlyKey(key: string) {
+  return key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta';
 }
