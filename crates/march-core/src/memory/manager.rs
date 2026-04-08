@@ -7,8 +7,7 @@ use super::search::{
 use super::storage::{
     MemorySourceRevision, capture_source_revision, infer_level, initialize_global_schema,
     load_global_memories, load_project_memories, normalize_scope, normalize_stable_id,
-    normalize_tags, parse_global_numeric_id, persist_global_memory, persist_project_memory,
-    validate_record,
+    normalize_tags, persist_global_memory, persist_project_memory, validate_record,
 };
 
 pub struct MemoryManager {
@@ -349,7 +348,12 @@ impl MemoryManager {
                 connection
                     .execute(
                         "DELETE FROM memories WHERE id = ?1",
-                        params![parse_global_numeric_id(&memory.id)?],
+                        params![memory.id.parse::<i64>().with_context(|| {
+                            format!(
+                                "invalid internal numeric id {} for global memory {}",
+                                memory.id, memory.stable_id
+                            )
+                        })?],
                     )
                     .context("failed to delete global memory")?;
             }
@@ -486,7 +490,10 @@ impl MemoryManager {
             return self.project_memories.get(raw_id);
         }
         if let Some(raw_id) = trimmed.strip_prefix("g:") {
-            return self.global_memories.get(raw_id);
+            return self
+                .global_memories
+                .values()
+                .find(|memory| memory.stable_id == raw_id);
         }
         None
     }

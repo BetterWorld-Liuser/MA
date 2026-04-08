@@ -65,7 +65,7 @@ pub struct MemoryRecord {
 
 impl MemoryRecord {
     pub fn prefixed_id(&self) -> String {
-        format!("{}:{}", self.level.prefix(), self.id)
+        format!("{}:{}", self.level.prefix(), self.stable_id)
     }
 
     pub(super) fn normalized_tags(&self) -> HashSet<String> {
@@ -104,13 +104,17 @@ impl MemoryIndexView {
 
         let mut output = String::new();
         output.push_str(&format!(
-            "Matched {} relevant memories. Use recall_memory(id) for full details.\n\n",
+            "Matched {} relevant memories.\n",
             self.entries.len()
         ));
+        output.push_str(
+            "Memory ids are authoritative. When changing an existing memory, reuse the shown id and prefer update_memory(id=...) over creating a near-duplicate with memorize.\n",
+        );
+        output.push_str("Use recall_memory(id) for full details before editing when needed.\n\n");
 
         for entry in &self.entries {
             output.push_str(&format!(
-                "  {:<24} [{:<10}] {:<12} {}\n",
+                "  id={:<24} type={:<12} topic={:<14} title={}\n",
                 entry.id, entry.memory_type, entry.topic, entry.title
             ));
         }

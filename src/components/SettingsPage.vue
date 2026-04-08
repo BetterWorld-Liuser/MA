@@ -172,6 +172,15 @@
           @reset-agent-form="resetAgentForm"
         />
 
+        <MemorySettingsSection
+          v-else-if="activeSection === 'memory'"
+          :memories="memories"
+          :loading="memoriesLoading"
+          @create-memory="emit('createMemory')"
+          @edit-memory="emit('editMemory', $event)"
+          @delete-memory="emit('deleteMemory', $event)"
+        />
+
       </div>
     </div>
   </section>
@@ -185,9 +194,10 @@ import moonIcon from '@iconify-icons/lucide/moon-star';
 import serverIcon from '@iconify-icons/lucide/server-cog';
 import sunIcon from '@iconify-icons/lucide/sun-medium';
 import type { ThemeMode } from '@/composables/useAppearanceSettings';
-import type { ProviderSettingsView } from '@/data/mock';
+import type { BackendMemoryDetailView, ProviderSettingsView } from '@/data/mock';
 import AgentSettingsSection from '@/components/settings/AgentSettingsSection.vue';
 import AppearanceSettingsSection from '@/components/settings/AppearanceSettingsSection.vue';
+import MemorySettingsSection from '@/components/settings/MemorySettingsSection.vue';
 import ModelSettingsSection from '@/components/settings/ModelSettingsSection.vue';
 import ProviderChannelsSection from '@/components/settings/ProviderChannelsSection.vue';
 import { Button } from '@/components/ui/button';
@@ -206,6 +216,8 @@ const props = defineProps<{
   providerTestLoading?: boolean;
   providerTestMessage?: string;
   providerTestSuccess?: boolean;
+  memories: BackendMemoryDetailView[];
+  memoriesLoading?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -231,6 +243,9 @@ const emit = defineEmits<{
   testProvider: [input: { id?: number; providerType: string; name: string; baseUrl: string; apiKey: string; probeModel?: string }];
   deleteProvider: [providerId: number];
   deleteProviderModel: [providerModelId: number];
+  createMemory: [];
+  editMemory: [memoryId: string];
+  deleteMemory: [memoryId: string];
   saveAgent: [input: {
     name: string;
     displayName: string;
@@ -247,7 +262,7 @@ const emit = defineEmits<{
   requestProbeModels: [input: { id?: number; providerType: string; baseUrl: string; apiKey: string; probeModel?: string; forceRefresh?: boolean }];
 }>();
 
-const activeSection = ref<'appearance' | 'models' | 'providers' | 'agents'>('appearance');
+const activeSection = ref<'appearance' | 'models' | 'providers' | 'agents' | 'memory'>('appearance');
 const activeEditorId = ref<number | null>(null);
 const providerType = ref('openai_compat');
 const providerName = ref('');
@@ -298,6 +313,12 @@ const sectionOptions = [
     value: 'agents' as const,
     label: '角色',
     description: 'March 与自定义 agent',
+    icon: serverIcon,
+  },
+  {
+    value: 'memory' as const,
+    label: '记忆',
+    description: '长期知识与偏好管理',
     icon: serverIcon,
   },
 ];

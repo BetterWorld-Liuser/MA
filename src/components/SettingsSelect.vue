@@ -13,7 +13,7 @@
       <Icon :icon="chevronDownIcon" class="h-4 w-4 shrink-0 text-text-dim" />
     </button>
 
-    <Teleport to="body">
+    <Teleport v-if="teleportToBody" to="body">
       <div
         v-if="open"
         ref="panelRef"
@@ -36,7 +36,8 @@
           class="settings-select-option"
           :class="option.value === modelValue ? 'settings-select-option-active' : ''"
           type="button"
-          @mousedown.prevent="select(option.value)"
+          @pointerdown.stop
+          @click="select(option.value)"
         >
           <span class="truncate">{{ option.label }}</span>
           <span v-if="option.value === modelValue" class="text-accent">✓</span>
@@ -46,6 +47,38 @@
         </div>
       </div>
     </Teleport>
+    <div
+      v-else-if="open"
+      ref="panelRef"
+      class="settings-select-menu absolute left-0 right-0 top-[calc(100%+0.5rem)] z-[90]"
+      :style="inlinePanelStyle"
+    >
+      <div v-if="searchable" class="settings-select-search-wrap">
+        <input
+          ref="searchInputRef"
+          v-model="searchQuery"
+          class="settings-select-search"
+          type="text"
+          :placeholder="searchPlaceholder"
+          @keydown.esc.stop.prevent="open = false"
+        />
+      </div>
+      <button
+        v-for="option in filteredOptions"
+        :key="option.value"
+        class="settings-select-option"
+        :class="option.value === modelValue ? 'settings-select-option-active' : ''"
+        type="button"
+        @pointerdown.stop
+        @click="select(option.value)"
+      >
+        <span class="truncate">{{ option.label }}</span>
+        <span v-if="option.value === modelValue" class="text-accent">✓</span>
+      </button>
+      <div v-if="!filteredOptions.length" class="settings-select-empty">
+        没有匹配的结果
+      </div>
+    </div>
   </div>
 </template>
 
@@ -59,14 +92,17 @@ type OptionItem = {
   label: string;
 };
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: string;
   options: OptionItem[];
   placeholder?: string;
   disabled?: boolean;
   searchable?: boolean;
   searchPlaceholder?: string;
-}>();
+  teleportToBody?: boolean;
+}>(), {
+  teleportToBody: true,
+});
 
 const emit = defineEmits<{
   'update:modelValue': [value: string];
@@ -90,6 +126,10 @@ const filteredOptions = computed(() => {
   }
   return props.options.filter((option) => option.label.toLowerCase().includes(query));
 });
+
+const inlinePanelStyle = computed(() => ({
+  maxHeight: panelStyle.value.maxHeight ?? '320px',
+}));
 
 watch(open, async (nextOpen) => {
   if (!nextOpen) {
@@ -150,6 +190,18 @@ function select(value: string) {
 
 function syncPosition() {
   if (!open.value || !anchorRef.value) {
+    return;
+  }
+
+  if (!props.teleportToBody) {
+    const viewportHeight = window.innerHeight;
+    const rect = anchorRef.value.getBoundingClientRect();
+    const viewportPadding = 20;
+    const gap = 8;
+    const availableHeight = Math.max(160, Math.min(320, viewportHeight - rect.bottom - viewportPadding - gap));
+    panelStyle.value = {
+      maxHeight: `${availableHeight}px`,
+    };
     return;
   }
 

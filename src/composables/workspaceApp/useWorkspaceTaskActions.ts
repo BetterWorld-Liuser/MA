@@ -66,6 +66,7 @@ type UseWorkspaceTaskActionsOptions = {
     }) => Promise<void>,
     focus: { id: () => void; content: () => void },
   ) => Promise<void>;
+  onMemoryMutated?: () => Promise<void>;
 };
 
 export function useWorkspaceTaskActions({
@@ -92,6 +93,7 @@ export function useWorkspaceTaskActions({
   openCreateMemoryDialog,
   openEditMemoryDialog,
   submitMemoryDialog,
+  onMemoryMutated,
 }: UseWorkspaceTaskActionsOptions) {
   const {
     snapshot,
@@ -407,6 +409,7 @@ export function useWorkspaceTaskActions({
         },
       });
     });
+    await onMemoryMutated?.();
   }
 
   async function deleteNote(noteId: string) {
@@ -452,6 +455,7 @@ export function useWorkspaceTaskActions({
             },
           });
         });
+        await onMemoryMutated?.();
         closeConfirmDialog();
       },
     });

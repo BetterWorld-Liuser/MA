@@ -171,6 +171,8 @@ export default {
 
 这是 Ma 的差异化区域，把 AI 内部状态投影成可操作的界面元素。
 
+- 分区顺序应尽量贴近 AI 本轮真实收到的上下文顺序，而不是按“操作方便”或视觉分组随意摆放；当前已有分区应按 `Skills（injections） → Open Files → Notes → Memory → Runtime / Context Usage → Hints` 排列，`Debug` 属于观测区，固定放在最底部，不参与上下文顺序本身。
+
 ### 笔记区
 
 ```text

@@ -10,48 +10,8 @@ pub(super) struct MemorySourceRevision {
 pub(super) fn initialize_global_schema(db_path: &Path) -> Result<()> {
     let connection = Connection::open(db_path)
         .with_context(|| format!("failed to open {}", db_path.display()))?;
-    connection
-        .execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS memories (
-                id           INTEGER PRIMARY KEY,
-                stable_id    TEXT,
-                scope        TEXT    NOT NULL DEFAULT 'shared',
-                memory_type  TEXT    NOT NULL,
-                topic        TEXT    NOT NULL,
-                title        TEXT    NOT NULL,
-                content      TEXT    NOT NULL,
-                tags         TEXT    NOT NULL DEFAULT '',
-                access_count INTEGER NOT NULL DEFAULT 0,
-                skip_count   INTEGER NOT NULL DEFAULT 0,
-                created_at   INTEGER NOT NULL,
-                updated_at   INTEGER NOT NULL
-            );
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_stable_id ON memories(stable_id);
-            CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
-            CREATE INDEX IF NOT EXISTS idx_memories_topic ON memories(topic);
-            ",
-        )
+    ensure_global_memories_schema(&connection)
         .context("failed to initialize memories schema in settings db")?;
-
-    if !table_has_column(&connection, "memories", "stable_id")? {
-        connection
-            .execute("ALTER TABLE memories ADD COLUMN stable_id TEXT", [])
-            .context("failed to add memories.stable_id column")?;
-    }
-
-    connection
-        .execute_batch(
-            "
-            UPDATE memories
-               SET stable_id = CAST(id AS TEXT)
-             WHERE stable_id IS NULL OR trim(stable_id) = '';
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_stable_id ON memories(stable_id);
-            ",
-        )
-        .context("failed to backfill global memory stable ids")?;
 
     Ok(())
 }
@@ -142,43 +102,8 @@ pub(super) fn load_project_memories(memory_dir: &Path) -> Result<IndexMap<String
 pub(super) fn load_global_memories(db_path: &Path) -> Result<IndexMap<String, MemoryRecord>> {
     let connection = Connection::open(db_path)
         .with_context(|| format!("failed to open {}", db_path.display()))?;
-    connection
-        .execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS memories (
-                id           INTEGER PRIMARY KEY,
-                stable_id    TEXT,
-                scope        TEXT    NOT NULL DEFAULT 'shared',
-                memory_type  TEXT    NOT NULL,
-                topic        TEXT    NOT NULL,
-                title        TEXT    NOT NULL,
-                content      TEXT    NOT NULL,
-                tags         TEXT    NOT NULL DEFAULT '',
-                access_count INTEGER NOT NULL DEFAULT 0,
-                skip_count   INTEGER NOT NULL DEFAULT 0,
-                created_at   INTEGER NOT NULL,
-                updated_at   INTEGER NOT NULL
-            );
-            ",
-        )
+    ensure_global_memories_schema(&connection)
         .context("failed to ensure global memories table exists")?;
-
-    if !table_has_column(&connection, "memories", "stable_id")? {
-        connection
-            .execute("ALTER TABLE memories ADD COLUMN stable_id TEXT", [])
-            .context("failed to add memories.stable_id column")?;
-    }
-    connection
-        .execute_batch(
-            "
-            UPDATE memories
-               SET stable_id = CAST(id AS TEXT)
-             WHERE stable_id IS NULL OR trim(stable_id) = '';
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_stable_id ON memories(stable_id);
-            ",
-        )
-        .context("failed to ensure global memory stable ids exist")?;
 
     let mut statement = connection
         .prepare(
@@ -351,43 +276,8 @@ pub(super) fn persist_project_memory(memory_dir: &Path, memory: &MemoryRecord) -
 pub(super) fn persist_global_memory(db_path: &Path, memory: &MemoryRecord) -> Result<()> {
     let connection = Connection::open(db_path)
         .with_context(|| format!("failed to open {}", db_path.display()))?;
-    connection
-        .execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS memories (
-                id           INTEGER PRIMARY KEY,
-                stable_id    TEXT,
-                scope        TEXT    NOT NULL DEFAULT 'shared',
-                memory_type  TEXT    NOT NULL,
-                topic        TEXT    NOT NULL,
-                title        TEXT    NOT NULL,
-                content      TEXT    NOT NULL,
-                tags         TEXT    NOT NULL DEFAULT '',
-                access_count INTEGER NOT NULL DEFAULT 0,
-                skip_count   INTEGER NOT NULL DEFAULT 0,
-                created_at   INTEGER NOT NULL,
-                updated_at   INTEGER NOT NULL
-            );
-            ",
-        )
+    ensure_global_memories_schema(&connection)
         .context("failed to ensure global memories table exists")?;
-
-    if !table_has_column(&connection, "memories", "stable_id")? {
-        connection
-            .execute("ALTER TABLE memories ADD COLUMN stable_id TEXT", [])
-            .context("failed to add memories.stable_id column")?;
-    }
-    connection
-        .execute_batch(
-            "
-            UPDATE memories
-               SET stable_id = CAST(id AS TEXT)
-             WHERE stable_id IS NULL OR trim(stable_id) = '';
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_stable_id ON memories(stable_id);
-            ",
-        )
-        .context("failed to ensure global memory stable ids exist")?;
 
     let stable_id = normalize_stable_id(memory.level, &memory.stable_id);
     let numeric_id = connection
@@ -549,12 +439,6 @@ pub(super) fn validate_record(memory: &MemoryRecord) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn parse_global_numeric_id(raw: &str) -> Result<i64> {
-    raw.trim()
-        .parse::<i64>()
-        .with_context(|| format!("invalid global memory id {}", raw))
-}
-
 fn table_has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
     Ok(connection
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -565,6 +449,49 @@ fn table_has_column(connection: &Connection, table: &str, column: &str) -> Resul
         .with_context(|| format!("failed to decode columns for {table}"))?
         .into_iter()
         .any(|name| name == column))
+}
+
+fn ensure_global_memories_schema(connection: &Connection) -> Result<()> {
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS memories (
+                id           INTEGER PRIMARY KEY,
+                stable_id    TEXT,
+                scope        TEXT    NOT NULL DEFAULT 'shared',
+                memory_type  TEXT    NOT NULL,
+                topic        TEXT    NOT NULL,
+                title        TEXT    NOT NULL,
+                content      TEXT    NOT NULL,
+                tags         TEXT    NOT NULL DEFAULT '',
+                access_count INTEGER NOT NULL DEFAULT 0,
+                skip_count   INTEGER NOT NULL DEFAULT 0,
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL
+            );
+            ",
+        )
+        .context("failed to create memories table")?;
+
+    if !table_has_column(connection, "memories", "stable_id")? {
+        connection
+            .execute("ALTER TABLE memories ADD COLUMN stable_id TEXT", [])
+            .context("failed to add memories.stable_id column")?;
+    }
+
+    connection
+        .execute_batch(
+            "
+            UPDATE memories
+               SET stable_id = CAST(id AS TEXT)
+             WHERE stable_id IS NULL OR trim(stable_id) = '';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_stable_id ON memories(stable_id);
+            CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
+            CREATE INDEX IF NOT EXISTS idx_memories_topic ON memories(topic);
+            ",
+        )
+        .context("failed to finalize memories schema")
 }
 
 pub(super) fn unix_timestamp(time: SystemTime) -> Result<i64> {

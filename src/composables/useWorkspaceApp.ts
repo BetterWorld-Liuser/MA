@@ -5,6 +5,7 @@ import { useLiveTurns } from '@/composables/useLiveTurns';
 import { useNoteDialog } from '@/composables/useNoteDialog';
 import { useMemoryDialog } from '@/composables/useMemoryDialog';
 import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
+import { useSettingsMemories } from '@/composables/useSettingsMemories';
 import { useProviderSettings } from '@/composables/useProviderSettings';
 import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot } from '@/data/mock';
 import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
@@ -159,6 +160,11 @@ export function useWorkspaceApp() {
     memoryDialogRef,
     submitNoteDialog,
     submitMemoryDialog,
+    onMemoryMutated: async () => {
+      if (settingsOpen.value) {
+        await refreshSettingsMemories();
+      }
+    },
   });
 
   const {
@@ -189,6 +195,21 @@ export function useWorkspaceApp() {
     humanizeError,
   });
 
+  const {
+    settingsMemories,
+    settingsMemoriesLoading,
+    refreshSettingsMemories,
+    createMemoryFromSettings,
+    editMemoryFromSettings,
+    deleteMemoryFromSettings,
+  } = useSettingsMemories({
+    snapshot,
+    activeTaskIdNumber: workspaceState.activeTaskIdNumber,
+    runWorkspaceAction,
+    openCreateMemoryDialog,
+    openEditMemoryDialog,
+  });
+
   const hasPendingSend = computed(() => sendingTaskId.value !== null);
   const isActiveTaskSending = computed(() =>
     !!workspaceState.activeTaskIdNumber.value && sendingTaskId.value === workspaceState.activeTaskIdNumber.value,
@@ -205,6 +226,9 @@ export function useWorkspaceApp() {
     unlistenMemoryChanged = await listen('march://memory-changed', async () => {
       if (!busy.value) {
         await refreshWorkspace(workspaceState.activeTaskIdNumber.value);
+        if (settingsOpen.value) {
+          await refreshSettingsMemories();
+        }
       }
     });
     await refreshWorkspace();
@@ -228,6 +252,7 @@ export function useWorkspaceApp() {
       return;
     }
     await openSettings();
+    await refreshSettingsMemories();
   }
 
   async function requestProbeModels(input: {
@@ -296,6 +321,8 @@ export function useWorkspaceApp() {
     providerTestLoading,
     providerTestMessage,
     providerTestSuccess,
+    settingsMemories,
+    settingsMemoriesLoading,
     noteDialogOpen,
     noteDialogMode,
     noteDraftId,
@@ -343,6 +370,9 @@ export function useWorkspaceApp() {
     setTaskWorkingDirectory,
     handleOpenSettings,
     closeSettings,
+    createMemoryFromSettings,
+    editMemoryFromSettings,
+    deleteMemoryFromSettings,
     setTheme,
     saveProvider,
     testProviderConnection,

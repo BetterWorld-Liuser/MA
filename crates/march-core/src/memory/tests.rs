@@ -1,6 +1,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use super::*;
+use rusqlite::Connection;
 
 lazy_static! {
     static ref TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -62,6 +63,79 @@ fn memory_body_parsing_extracts_heading_as_title() {
 }
 
 #[test]
+fn memory_index_render_emphasizes_update_ids() {
+    let view = MemoryIndexView {
+        entries: vec![MemoryIndexEntry {
+            id: "g:2".to_string(),
+            memory_type: "preference".to_string(),
+            topic: "interaction".to_string(),
+            title: "User identity preference: user's boss".to_string(),
+            level: MemoryLevel::Global,
+            score: 0.9,
+        }],
+        topic_warnings: Vec::new(),
+    };
+
+    let rendered = view.render_for_prompt();
+
+    assert!(rendered.contains("Memory ids are authoritative."));
+    assert!(rendered.contains("prefer update_memory(id=...)"));
+    assert!(rendered.contains("id=g:2"));
+    assert!(rendered.contains("type=preference"));
+    assert!(rendered.contains("topic=interaction"));
+}
+
+#[test]
+fn initialize_global_schema_migrates_legacy_memories_table_without_stable_id() {
+    let (_manager, _guard, _project_root) = with_test_manager("legacy-global-schema");
+    let settings_dir = march_settings_dir().expect("failed to resolve test settings dir");
+    let db_path = settings_dir.join("settings.db");
+    let connection = Connection::open(&db_path).expect("failed to reopen settings db");
+
+    connection
+        .execute_batch(
+            "
+            DROP INDEX IF EXISTS idx_memories_stable_id;
+            DROP INDEX IF EXISTS idx_memories_scope;
+            DROP INDEX IF EXISTS idx_memories_topic;
+            DROP TABLE IF EXISTS memories;
+
+            CREATE TABLE memories (
+                id           INTEGER PRIMARY KEY,
+                scope        TEXT    NOT NULL DEFAULT 'shared',
+                memory_type  TEXT    NOT NULL,
+                topic        TEXT    NOT NULL,
+                title        TEXT    NOT NULL,
+                content      TEXT    NOT NULL,
+                tags         TEXT    NOT NULL DEFAULT '',
+                access_count INTEGER NOT NULL DEFAULT 0,
+                skip_count   INTEGER NOT NULL DEFAULT 0,
+                created_at   INTEGER NOT NULL,
+                updated_at   INTEGER NOT NULL
+            );
+
+            INSERT INTO memories (
+                id, scope, memory_type, topic, title, content, tags,
+                access_count, skip_count, created_at, updated_at
+            ) VALUES (
+                7, 'shared', 'preference', 'style', 'Keep comments sparse',
+                'Only comment non-obvious paths.', 'style comments',
+                0, 0, 1700000000, 1700000000
+            );
+            ",
+        )
+        .expect("failed to seed legacy memories table");
+
+    storage::initialize_global_schema(&db_path)
+        .expect("legacy memories table should migrate successfully");
+
+    let stable_id: String = connection
+        .query_row("SELECT stable_id FROM memories WHERE id = 7", [], |row| row.get(0))
+        .expect("failed to read backfilled stable_id");
+    assert_eq!(stable_id, "7");
+}
+
+#[test]
 fn global_memorize_reuses_string_stable_id() {
     let (mut manager, _guard, _project_root) = with_test_manager("global-stable-id");
 
@@ -110,6 +184,42 @@ fn global_memorize_reuses_string_stable_id() {
     );
     assert_eq!(globals[0].title, "Prefer sparse comments");
     assert_eq!(globals[0].stable_id, "user-style");
+    assert_eq!(globals[0].prefixed_id(), "g:user-style");
+}
+
+#[test]
+fn global_memories_use_stable_prefixed_ids_for_lookup_and_delete() {
+    let (mut manager, _guard, _project_root) = with_test_manager("global-prefixed-stable-id");
+
+    manager
+        .memorize(
+            MemorizeRequest {
+                id: "user-style".to_string(),
+                memory_type: "preference".to_string(),
+                topic: "style".to_string(),
+                title: "Prefer sparse comments".to_string(),
+                content: "Comments should stay rare and intentional.".to_string(),
+                tags: vec!["style".to_string(), "comments".to_string()],
+                scope: None,
+                level: Some("global".to_string()),
+            },
+            "march",
+        )
+        .expect("failed to create global memory");
+
+    let loaded = manager
+        .peek("g:user-style", "march")
+        .expect("global memory should be addressable by stable prefixed id");
+    assert_eq!(loaded.prefixed_id(), "g:user-style");
+    assert_eq!(loaded.stable_id, "user-style");
+
+    manager
+        .forget("g:user-style")
+        .expect("global memory should be deletable by stable prefixed id");
+    assert!(
+        manager.peek("g:user-style", "march").is_err(),
+        "deleted global memory should no longer be addressable by stable prefixed id"
+    );
 }
 
 #[test]

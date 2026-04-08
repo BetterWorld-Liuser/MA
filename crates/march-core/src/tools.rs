@@ -446,7 +446,9 @@ fn memorize_tool() -> ToolDefinition {
             },
         ],
         notes: vec![
-            "Prefer reusing a stable id when the new content updates the same long-term fact or preference.".to_string(),
+            "Before calling memorize, check whether the same memory already exists in the Memory Index. If it does, reuse that exact id.".to_string(),
+            "Prefer update_memory for changing an existing durable fact or preference. Use memorize only when you are creating a genuinely new memory slot.".to_string(),
+            "Do not create near-duplicate memories with fresh ids when an indexed memory already represents the same fact, preference, or decision.".to_string(),
             "Use memories for durable project knowledge, decisions, workflows, and user preferences — not for short-lived task state.".to_string(),
         ],
     }
@@ -460,7 +462,7 @@ fn recall_memory_tool() -> ToolDefinition {
             name: "id",
             kind: "string",
             required: true,
-            description: "Memory id from the memory index, usually prefixed like p:auth-policy or g:12.",
+            description: "Memory id from the memory index, usually prefixed like p:auth-policy or g:user-style.",
         }],
         notes: vec![
             "recall_memory increments the memory's access count and resets its skip count."
@@ -512,7 +514,9 @@ fn update_memory_tool() -> ToolDefinition {
             },
         ],
         notes: vec![
+            "When the Memory Index already shows the target memory, treat its displayed id as the source of truth for edits.".to_string(),
             "Use update_memory when the same durable fact still exists but needs a cleaner title, fresher content, or new retrieval tags.".to_string(),
+            "Prefer update_memory over memorize whenever the new information replaces or refines an existing memory instead of introducing a separate one.".to_string(),
         ],
     }
 }
@@ -656,6 +660,8 @@ mod tests {
         assert!(prompt.contains("## open_file"));
         assert!(prompt.contains("Prefer open_file over run_command"));
         assert!(prompt.contains("Do not use run_command just to read a file"));
+        assert!(prompt.contains("Prefer update_memory over memorize"));
+        assert!(prompt.contains("Do not create near-duplicate memories with fresh ids"));
         assert!(prompt.contains("## close_file"));
         assert!(prompt.contains("## replace_lines"));
         assert!(prompt.contains("## write_note"));

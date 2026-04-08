@@ -8,14 +8,12 @@
     </div>
 
     <div class="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-2">
-      <ContextNotesSection
-        :notes="notes"
+      <ContextSkillsSection
+        :skills="skills"
         :busy="busy"
-        @add-note="$emit('add-note')"
-        @edit-note="$emit('edit-note', $event)"
-        @delete-note="$emit('delete-note', $event)"
+        @refresh="$emit('refresh-skills')"
+        @open-skill="$emit('open-skill', $event)"
       />
-
       <ContextOpenFilesSection
         :open-files="openFiles"
         :workspace-root="workingDirectory"
@@ -23,8 +21,13 @@
         @toggle-file-lock="(path, locked) => $emit('toggle-file-lock', path, locked)"
         @close-file="$emit('close-file', $event)"
       />
-
-      <ContextHintsSection v-if="hints.length" :hints="hints" />
+      <ContextNotesSection
+        :notes="notes"
+        :busy="busy"
+        @add-note="$emit('add-note')"
+        @edit-note="$emit('edit-note', $event)"
+        @delete-note="$emit('delete-note', $event)"
+      />
       <ContextMemoriesSection
         :memories="memories"
         :warnings="memoryWarnings"
@@ -33,13 +36,8 @@
         @edit-memory="$emit('edit-memory', $event)"
         @delete-memory="$emit('delete-memory', $event)"
       />
-      <ContextSkillsSection
-        :skills="skills"
-        :busy="busy"
-        @refresh="$emit('refresh-skills')"
-        @open-skill="$emit('open-skill', $event)"
-      />
 
+      <!-- Keep panel sections aligned with the actual AgentContext layering; Debug stays last because it is inspection-only. -->
       <section class="space-y-3">
         <div class="flex items-center justify-between gap-3">
           <div class="flex items-center gap-1.5">
@@ -67,6 +65,8 @@
           </li>
         </ul>
       </section>
+
+      <ContextHintsSection v-if="hints.length" :hints="hints" />
 
       <section class="space-y-1.5">
         <div class="flex items-center justify-between gap-3">

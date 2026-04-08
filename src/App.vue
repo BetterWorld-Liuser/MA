@@ -92,6 +92,8 @@
         :provider-test-loading="providerTestLoading"
         :provider-test-message="providerTestMessage"
         :provider-test-success="providerTestSuccess"
+        :memories="settingsMemories"
+        :memories-loading="settingsMemoriesLoading"
         @close="closeSettings"
         @update-theme="setTheme"
         @save-provider="saveProvider"
@@ -100,6 +102,9 @@
         @test-provider="testProviderConnection"
         @delete-provider="confirmDeleteProvider"
         @delete-provider-model="deleteProviderModel"
+        @create-memory="createMemoryFromSettings"
+        @edit-memory="editMemoryFromSettings"
+        @delete-memory="deleteMemoryFromSettings"
         @delete-agent="confirmDeleteAgent"
         @restore-march-prompt="restoreMarchPrompt"
         @save-default-model="saveDefaultModel"
@@ -133,6 +138,7 @@
       :draft-tags="memoryDraftTags"
       :draft-scope="memoryDraftScope"
       :draft-level="memoryDraftLevel"
+      :available-agents="providerSettings?.agents ?? []"
       :busy="busy"
       @update:open="handleMemoryDialogOpenChange"
       @update:draft-id="memoryDraftId = $event"
@@ -196,6 +202,8 @@ const {
   providerTestLoading,
   providerTestMessage,
   providerTestSuccess,
+  settingsMemories,
+  settingsMemoriesLoading,
   noteDialogOpen,
   noteDialogMode,
   noteDraftId,
@@ -243,6 +251,9 @@ const {
   setTaskWorkingDirectory,
   handleOpenSettings,
   closeSettings,
+  createMemoryFromSettings,
+  editMemoryFromSettings,
+  deleteMemoryFromSettings,
   setTheme,
   saveProvider,
   saveProviderModel,

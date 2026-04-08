@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.015)),rgba(10,10,10,0.94)]">
+    <DialogContent class="overflow-visible bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.015)),rgba(10,10,10,0.94)]">
       <form class="contents" @submit.prevent="emit('submit')">
         <DialogHeader class="gap-0 px-5 pb-3 pt-5 text-left">
           <DialogTitle class="text-[18px] font-semibold tracking-[-0.01em] text-text">
@@ -45,11 +45,13 @@
             </div>
             <div class="dialog-field">
               <label class="dialog-label" for="memory-level">Level</label>
-              <Input
+              <SettingsSelect
                 id="memory-level"
                 :model-value="draftLevel"
-                placeholder="project"
-                @update:model-value="emit('update:draft-level', String($event))"
+                :options="levelOptions"
+                :teleport-to-body="false"
+                placeholder="选择层级"
+                @update:model-value="emit('update:draft-level', $event)"
               />
             </div>
           </div>
@@ -74,11 +76,15 @@
             </div>
             <div class="dialog-field">
               <label class="dialog-label" for="memory-scope">Scope</label>
-              <Input
+              <SettingsSelect
                 id="memory-scope"
                 :model-value="draftScope"
-                placeholder="shared"
-                @update:model-value="emit('update:draft-scope', String($event))"
+                :options="scopeOptions"
+                :searchable="scopeOptions.length > 8"
+                :teleport-to-body="false"
+                search-placeholder="搜索角色"
+                placeholder="选择作用范围"
+                @update:model-value="emit('update:draft-scope', $event)"
               />
             </div>
           </div>
@@ -103,18 +109,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { Button } from '@/components/ui/button';
+import SettingsSelect from '@/components/SettingsSelect.vue';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import type { ProviderSettingsView } from '@/data/mock';
 
 type FocusableField = {
   focus: () => void;
   select: () => void;
 };
 
-defineProps<{
+const props = defineProps<{
   open: boolean;
   mode: 'create' | 'edit';
   draftId: string;
@@ -125,6 +133,7 @@ defineProps<{
   draftTags: string;
   draftScope: string;
   draftLevel: string;
+  availableAgents: ProviderSettingsView['agents'];
   busy: boolean;
 }>();
 
@@ -144,6 +153,35 @@ const emit = defineEmits<{
 
 const idInputRef = ref<FocusableField | null>(null);
 const contentInputRef = ref<FocusableField | null>(null);
+
+const levelOptions = [
+  { value: 'project', label: 'Project · 随项目保存' },
+  { value: 'global', label: 'Global · 跨项目可见' },
+];
+
+const scopeOptions = computed(() => {
+  const options = [
+    { value: 'shared', label: 'Shared · 所有角色可见' },
+    ...props.availableAgents.map((agent) => ({
+      value: agent.name,
+      label: `角色 · ${agent.displayName || agent.name}`,
+    })),
+  ];
+
+  const normalizedScope = props.draftScope.trim();
+  if (!normalizedScope || normalizedScope.toLowerCase() === 'shared') {
+    return options;
+  }
+
+  if (options.some((option) => option.value === normalizedScope)) {
+    return options;
+  }
+
+  return [
+    ...options,
+    { value: normalizedScope, label: `角色 · ${normalizedScope}（当前值）` },
+  ];
+});
 
 defineExpose({
   focusIdField() {
