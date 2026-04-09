@@ -1,14 +1,19 @@
 import { computed, ref, watch, type Ref } from 'vue';
 import {
+  mergeTaskRuntimeSnapshot,
   createEmptyWorkspaceView,
   toDebugRoundItem,
+  toWorkspaceContextView,
   toWorkspaceView,
+  type BackendActiveTask,
+  type BackendRuntimeSnapshot,
   type BackendWorkspaceSnapshot,
   type DebugRoundItem,
   type LiveTurn,
   type TaskActivityStatus,
   type WorkspaceView,
 } from '@/data/mock';
+import { debugChat } from '@/lib/chatDebug';
 import type { WorkspaceSnapshotState } from './types';
 
 type UseWorkspaceSnapshotStateOptions = {
@@ -26,9 +31,11 @@ export function useWorkspaceSnapshotState({
   const optimisticTaskId = ref<string | null>(null);
   const optimisticActiveTaskId = ref<string | null>(null);
   const optimisticDeletedTaskIds = ref<Set<string>>(new Set());
-  const taskRuntimeSnapshots = ref<Record<number, NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>>>({});
+  // `snapshot.active_task` remains the active-task source of truth. Inactive task
+  // context stays warm here as backend-shaped data, and the right panel derives
+  // its view on demand to avoid maintaining mirrored source/view caches.
+  const taskContextSources = ref<Record<number, BackendActiveTask>>({});
   const taskDebugTraces = ref<Record<number, DebugRoundItem[]>>({});
-  const hydratedDebugTaskIds = ref<Set<number>>(new Set());
   const workspacePath = computed(() => snapshot.value?.workspace_path);
   const lastResolvedWorkspace = ref<WorkspaceView>(
     createEmptyWorkspaceView({
@@ -76,10 +83,9 @@ export function useWorkspaceSnapshotState({
       }
 
       const taskId = activeTask.task.id;
-      if (!hydratedDebugTaskIds.value.has(taskId)) {
-        hydrateTaskDebugTrace(taskId, activeTask.debug_trace?.rounds.map(toDebugRoundItem) ?? []);
-        hydratedDebugTaskIds.value = new Set([...hydratedDebugTaskIds.value, taskId]);
-      }
+      syncTaskContextSnapshot(taskId, activeTask);
+      const nextRounds = activeTask.debug_trace?.rounds.map(toDebugRoundItem) ?? [];
+      hydrateTaskDebugTrace(taskId, nextRounds);
     },
     { immediate: true },
   );
@@ -169,23 +175,50 @@ export function useWorkspaceSnapshotState({
     workspacePath: resolvedWorkspace.value.workspacePath,
   }));
 
-  const contextView = computed(() => ({
-    ...(buildContextWorkspaceView(
-      snapshot.value,
-      activeTaskIdNumber.value,
-      taskRuntimeSnapshots.value,
-      resolvedWorkspace.value,
-    )),
-    debugRounds: activeTaskIdNumber.value ? (taskDebugTraces.value[activeTaskIdNumber.value] ?? []) : [],
-  }));
+  const contextView = computed(() => {
+    const activeTaskId = activeTaskIdNumber.value;
+    if (!activeTaskId) {
+      return buildEmptyContextView(resolvedWorkspace.value);
+    }
+
+    const contextSource = taskContextSources.value[activeTaskId];
+    const baseContext = contextSource
+      ? toWorkspaceContextView(
+          contextSource,
+          contextSource.runtime?.working_directory ?? contextSource.task.working_directory,
+        )
+      : buildEmptyContextView(resolvedWorkspace.value);
+
+    return {
+      ...baseContext,
+      debugRounds: taskDebugTraces.value[activeTaskId] ?? [],
+    };
+  });
 
   function setTaskRuntimeSnapshot(
     taskId: number,
-    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+    runtime: BackendRuntimeSnapshot,
   ) {
-    taskRuntimeSnapshots.value = {
-      ...taskRuntimeSnapshots.value,
-      [taskId]: runtime,
+    const currentSource = taskContextSources.value[taskId];
+    if (!currentSource) {
+      debugChat('workspace-state', 'set-task-runtime-snapshot:missing-source', {
+        taskId,
+        workingDirectory: runtime.working_directory,
+      });
+      return;
+    }
+
+    const nextSource = mergeTaskRuntimeSnapshot(currentSource, runtime);
+    taskContextSources.value = {
+      ...taskContextSources.value,
+      [taskId]: nextSource,
+    };
+  }
+
+  function syncTaskContextSnapshot(taskId: number, activeTask: BackendActiveTask) {
+    taskContextSources.value = {
+      ...taskContextSources.value,
+      [taskId]: activeTask,
     };
   }
 
@@ -242,50 +275,21 @@ export function useWorkspaceSnapshotState({
     hydrateTaskDebugTrace,
     appendTaskDebugRound,
     clearDeletedTaskOptimism,
+    syncTaskContextSnapshot,
   };
 }
 
-function buildContextWorkspaceView(
-  snapshot: BackendWorkspaceSnapshot | null,
-  activeTaskId: number | null,
-  taskRuntimeSnapshots: Record<number, NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>>,
-  fallbackWorkspace: WorkspaceView,
-) {
-  if (!snapshot?.active_task || !activeTaskId) {
-    return {
-      notes: fallbackWorkspace.notes,
-      openFiles: fallbackWorkspace.openFiles,
-      workingDirectory: fallbackWorkspace.workingDirectory,
-      hints: fallbackWorkspace.hints,
-      skills: fallbackWorkspace.skills,
-      memories: fallbackWorkspace.memories,
-      memoryWarnings: fallbackWorkspace.memoryWarnings,
-      contextUsage: fallbackWorkspace.contextUsage,
-    };
-  }
-
-  const runtimeOverride = taskRuntimeSnapshots[activeTaskId];
-  const activeTask = snapshot.active_task.task.id === activeTaskId && runtimeOverride
-    ? {
-        ...snapshot.active_task,
-        runtime: runtimeOverride,
-      }
-    : snapshot.active_task;
-
-  const workspaceWithContext = toWorkspaceView({
-    ...snapshot,
-    active_task: activeTask,
-  });
-
+function buildEmptyContextView(fallbackWorkspace: WorkspaceView) {
   return {
-    notes: workspaceWithContext.notes,
-    openFiles: workspaceWithContext.openFiles,
-    workingDirectory: workspaceWithContext.workingDirectory,
-    hints: workspaceWithContext.hints,
-    skills: workspaceWithContext.skills,
-    memories: workspaceWithContext.memories,
-    memoryWarnings: workspaceWithContext.memoryWarnings,
-    contextUsage: workspaceWithContext.contextUsage,
+    notes: fallbackWorkspace.notes,
+    openFiles: fallbackWorkspace.openFiles,
+    workingDirectory: fallbackWorkspace.workingDirectory,
+    hints: fallbackWorkspace.hints,
+    skills: fallbackWorkspace.skills,
+    memories: fallbackWorkspace.memories,
+    memoryWarnings: fallbackWorkspace.memoryWarnings,
+    contextUsage: fallbackWorkspace.contextUsage,
+    debugRounds: [],
   };
 }
 

@@ -249,11 +249,15 @@ impl AgentSession {
         render_prompt(&context)
     }
 
-    pub async fn run_command(
+    pub async fn run_command_with_output<F>(
         &mut self,
         request: CommandRequest,
         cancellation: &TurnCancellation,
-    ) -> Result<CommandExecution> {
+        mut on_output: F,
+    ) -> Result<CommandExecution>
+    where
+        F: FnMut(crate::agent::CommandOutputStreamUpdate) -> Result<()>,
+    {
         let started_at = SystemTime::now();
         let selected_shell = self.resolve_shell(request.shell)?;
         let tracked_paths = self
@@ -272,6 +276,7 @@ impl AgentSession {
             &self.working_directory,
             request.timeout,
             cancellation,
+            &mut on_output,
         )
         .await;
 
@@ -302,6 +307,15 @@ impl AgentSession {
             finished_at,
             duration,
         })
+    }
+
+    pub async fn run_command(
+        &mut self,
+        request: CommandRequest,
+        cancellation: &TurnCancellation,
+    ) -> Result<CommandExecution> {
+        self.run_command_with_output(request, cancellation, |_| Ok(()))
+            .await
     }
 
     pub fn persisted_state(&self) -> PersistedTaskState {

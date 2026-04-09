@@ -30,7 +30,7 @@ export type LiveToolItem = {
 export type LiveTurn = {
   turnId: string;
   author: string;
-  state: 'pending' | 'running' | 'streaming' | 'error';
+  state: 'pending' | 'running' | 'streaming' | 'error' | 'cancelled';
   statusLabel: string;
   content: string;
   errorMessage?: string;
@@ -151,6 +151,16 @@ export type WorkspaceView = {
   workspacePath?: string;
   databasePath?: string;
 };
+
+export type BackendActiveTask = NonNullable<BackendWorkspaceSnapshot['active_task']>;
+export type BackendTaskOpenFile = BackendActiveTask['open_files'][number];
+export type BackendOpenFileSnapshot = NonNullable<BackendTaskOpenFile['snapshot']>;
+export type BackendRuntimeSnapshot = NonNullable<BackendActiveTask['runtime']>;
+export type BackendRuntimeOpenFile = BackendRuntimeSnapshot['open_files'][number];
+export type WorkspaceContextData = Pick<
+  WorkspaceView,
+  'notes' | 'openFiles' | 'workingDirectory' | 'hints' | 'skills' | 'memories' | 'memoryWarnings' | 'contextUsage' | 'debugRounds'
+>;
 
 export type TaskActivityStatus = 'working' | 'review';
 
@@ -726,10 +736,6 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       updatedAt: formatRelativeTime(task.last_active),
     })),
     activeTaskId,
-    workingDirectory:
-      activeTask?.task.working_directory
-      ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.working_directory
-      ?? workspace.workspace_path,
     selectedModel: activeTask?.task.selected_model ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.selected_model ?? undefined,
     selectedTemperature:
       activeTask?.task.model_temperature
@@ -752,15 +758,18 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_max_output_tokens
       ?? undefined,
     chat: activeTask ? toChatMessages(activeTask.history) : [],
+    ...toWorkspaceContextView(activeTask, activeTask?.task.working_directory ?? workspace.workspace_path),
+  };
+}
+
+export function toWorkspaceContextView(
+  activeTask?: BackendActiveTask | null,
+  fallbackWorkingDirectory?: string,
+): WorkspaceContextData {
+  return {
     notes: activeTask?.notes ?? [],
-    openFiles: activeTask?.open_files.map((file) => ({
-      scope: file.scope ?? 'shared',
-      path: normalizePath(file.path),
-      tokenUsage: formatOpenFileTokenUsage(file.snapshot),
-      freshness: file.locked ? 'low' : file.snapshot ? 'high' : 'medium',
-      locked: file.locked,
-      state: mapOpenFileState(file.snapshot),
-    })) ?? [],
+    openFiles: buildOpenFileItems(activeTask),
+    workingDirectory: activeTask?.runtime?.working_directory ?? activeTask?.task.working_directory ?? fallbackWorkingDirectory,
     hints: activeTask?.hints.map((hint, index) => ({
       source: `Hint ${index + 1}`,
       content: hint.content,
@@ -783,6 +792,16 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
     memoryWarnings: activeTask?.runtime?.memory_warnings ?? [],
     contextUsage: formatContextUsage(activeTask?.runtime?.context_usage),
     debugRounds: activeTask?.debug_trace?.rounds.map(toDebugRoundItem) ?? [],
+  };
+}
+
+export function mergeTaskRuntimeSnapshot(
+  activeTask: BackendActiveTask,
+  runtime: BackendRuntimeSnapshot,
+): BackendActiveTask {
+  return {
+    ...activeTask,
+    runtime,
   };
 }
 
@@ -885,13 +904,66 @@ function normalizePath(path: string) {
   return normalized;
 }
 
-function formatOpenFileTokenUsage(snapshot: BackendWorkspaceSnapshot['active_task'] extends infer T
-  ? T extends { open_files: Array<infer OpenFile> }
-    ? OpenFile extends { snapshot?: infer Snapshot }
-      ? Snapshot | undefined
-      : never
-    : never
-  : never) {
+function buildOpenFileItems(activeTask?: BackendActiveTask | null): OpenFileItem[] {
+  if (!activeTask) {
+    return [];
+  }
+
+  const runtimeByPath = new Map(
+    (activeTask.runtime?.open_files ?? []).map((entry) => [normalizePath(runtimeOpenFilePath(entry)), entry] as const),
+  );
+
+  const items = activeTask.open_files.map((file) => {
+    const normalizedPath = normalizePath(file.path);
+    const runtimeEntry = runtimeByPath.get(normalizedPath);
+
+    return {
+      scope: file.scope ?? 'shared',
+      path: normalizedPath,
+      tokenUsage: formatOpenFileTokenUsage(file.snapshot, runtimeEntry),
+      freshness: resolveOpenFileFreshness(file.locked, file.snapshot, runtimeEntry),
+      locked: file.locked,
+      state: mapOpenFileState(file.snapshot, runtimeEntry),
+    };
+  });
+
+  const orphanRuntimeEntries = (activeTask.runtime?.open_files ?? []).filter((entry) => {
+    const normalizedPath = normalizePath(runtimeOpenFilePath(entry));
+    return !activeTask.open_files.some((file) => normalizePath(file.path) === normalizedPath);
+  });
+
+  for (const runtimeEntry of orphanRuntimeEntries) {
+    items.push({
+      scope: 'shared',
+      path: normalizePath(runtimeOpenFilePath(runtimeEntry)),
+      tokenUsage: formatOpenFileTokenUsage(undefined, runtimeEntry),
+      freshness: resolveOpenFileFreshness(false, undefined, runtimeEntry),
+      locked: false,
+      state: mapOpenFileState(undefined, runtimeEntry),
+    });
+  }
+
+  return items;
+}
+
+function runtimeOpenFilePath(entry: BackendRuntimeOpenFile) {
+  if ('Available' in entry) {
+    return entry.Available.path;
+  }
+  if ('Deleted' in entry) {
+    return entry.Deleted.path;
+  }
+  if ('Moved' in entry) {
+    return entry.Moved.path;
+  }
+  return assertNever(entry);
+}
+
+function formatOpenFileTokenUsage(snapshot?: BackendOpenFileSnapshot | null, runtimeEntry?: BackendRuntimeOpenFile) {
+  if (runtimeEntry && 'Available' in runtimeEntry) {
+    return formatTokenCount(estimateTokenCount(runtimeEntry.Available.content));
+  }
+
   if (!snapshot) {
     return '0';
   }
@@ -915,13 +987,20 @@ function formatHintTime(expiresAt?: number | null) {
   return `${minutes}m${String(remainder).padStart(2, '0')}s`;
 }
 
-function mapOpenFileState(snapshot: BackendWorkspaceSnapshot['active_task'] extends infer T
-  ? T extends { open_files: Array<infer OpenFile> }
-    ? OpenFile extends { snapshot?: infer Snapshot }
-      ? Snapshot | undefined
-      : never
-    : never
-  : never) {
+function mapOpenFileState(snapshot?: BackendOpenFileSnapshot | null, runtimeEntry?: BackendRuntimeOpenFile) {
+  if (runtimeEntry) {
+    if ('Moved' in runtimeEntry) {
+      return {
+        kind: 'moved' as const,
+        newPath: normalizePath(runtimeEntry.Moved.new_path),
+      };
+    }
+
+    if ('Deleted' in runtimeEntry) {
+      return { kind: 'deleted' as const };
+    }
+  }
+
   if (!snapshot || 'Available' in snapshot) {
     return { kind: 'available' as const };
   }
@@ -983,4 +1062,25 @@ function estimateTokenCount(text: string) {
   }
 
   return Math.ceil(asciiChars / 4) + nonAsciiChars;
+}
+
+function resolveOpenFileFreshness(
+  locked: boolean,
+  snapshot?: BackendOpenFileSnapshot | null,
+  runtimeEntry?: BackendRuntimeOpenFile,
+): OpenFileItem['freshness'] {
+  if (locked) {
+    return 'low';
+  }
+  if (runtimeEntry) {
+    return 'high';
+  }
+  if (snapshot) {
+    return 'high';
+  }
+  return 'medium';
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled open file variant: ${JSON.stringify(value)}`);
 }

@@ -67,6 +67,7 @@ export function createMessageActions({
     activeTaskIdNumber,
     hydrateTaskDebugTrace,
     clearDeletedTaskOptimism,
+    syncTaskContextSnapshot,
   } = workspaceState;
   const { appendTaskChatMessage, clearTaskChat } = taskChatState;
 
@@ -97,21 +98,20 @@ export function createMessageActions({
       return;
     }
 
-    hydrateTaskDebugTrace(taskId, nextActiveTask.debug_trace?.rounds.map(toDebugRoundItem) ?? []);
+    if (nextActiveTask.debug_trace) {
+      hydrateTaskDebugTrace(taskId, nextActiveTask.debug_trace.rounds.map(toDebugRoundItem));
+    }
+    syncTaskContextSnapshot(taskId, nextActiveTask);
 
     snapshot.value = {
       ...currentSnapshot,
       tasks: nextSnapshot.tasks,
       active_task: {
         ...currentActiveTask,
-        task: nextActiveTask.task,
-        active_agent: nextActiveTask.active_agent,
-        history: mergeCompletedTaskHistory(currentActiveTask.history, nextActiveTask.history),
-        notes: nextActiveTask.notes,
-        open_files: nextActiveTask.open_files,
-        hints: nextActiveTask.hints,
+        ...nextActiveTask,
         runtime: nextActiveTask.runtime ?? currentActiveTask.runtime,
         debug_trace: nextActiveTask.debug_trace ?? currentActiveTask.debug_trace,
+        history: mergeCompletedTaskHistory(currentActiveTask.history, nextActiveTask.history),
       },
     };
     debugChat('message-actions', 'apply-completed-snapshot:merged', summarizeSnapshot(snapshot.value));

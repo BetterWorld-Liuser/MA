@@ -16,8 +16,8 @@ use super::file_diffs::format_file_diff;
 use super::prompting::format_tool_output;
 use super::shells::{AvailableShell, parse_shell};
 use super::{
-    AgentSession, CommandRequest, CommandShell, ToolOutcome, TurnCancellation,
-    session::DEFAULT_RUN_COMMAND_TIMEOUT,
+    AgentSession, CommandOutputStreamUpdate, CommandRequest, CommandShell, ToolOutcome,
+    TurnCancellation, session::DEFAULT_RUN_COMMAND_TIMEOUT,
 };
 
 impl AgentSession {
@@ -26,6 +26,19 @@ impl AgentSession {
         tool_call: &ProviderToolCall,
         cancellation: &TurnCancellation,
     ) -> Result<ToolOutcome> {
+        self.execute_tool_call_with_output(tool_call, cancellation, |_| Ok(()))
+            .await
+    }
+
+    pub(super) async fn execute_tool_call_with_output<F>(
+        &mut self,
+        tool_call: &ProviderToolCall,
+        cancellation: &TurnCancellation,
+        mut on_output: F,
+    ) -> Result<ToolOutcome>
+    where
+        F: FnMut(CommandOutputStreamUpdate) -> Result<()>,
+    {
         let args: Value = serde_json::from_str(&tool_call.arguments_json).with_context(|| {
             format!(
                 "failed to decode arguments for tool {}: {}",
@@ -43,13 +56,14 @@ impl AgentSession {
                     bail!("invalid run_command args: timeout_secs must be at least 1");
                 }
                 let execution = self
-                    .run_command(
+                    .run_command_with_output(
                         CommandRequest {
                             command: args.command,
                             shell: parse_shell(&args.shell)?,
                             timeout: Duration::from_secs(timeout_secs),
                         },
                         cancellation,
+                        &mut on_output,
                     )
                     .await?;
                 Ok(ToolOutcome {

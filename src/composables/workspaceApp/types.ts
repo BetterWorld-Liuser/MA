@@ -1,5 +1,7 @@
 import type { Ref } from 'vue';
 import type {
+  BackendActiveTask,
+  BackendRuntimeSnapshot,
   BackendWorkspaceSnapshot,
   ChatImageAttachment,
   ChatMessage,
@@ -84,11 +86,12 @@ export type WorkspaceSnapshotState = {
   activeTaskIdNumber: Readonly<Ref<number | null>>;
   setTaskRuntimeSnapshot: (
     taskId: number,
-    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+    runtime: BackendRuntimeSnapshot,
   ) => void;
   hydrateTaskDebugTrace: (taskId: number, rounds: DebugRoundItem[]) => void;
   appendTaskDebugRound: (taskId: number, round: DebugRoundItem) => void;
   clearDeletedTaskOptimism: (taskId: number) => void;
+  syncTaskContextSnapshot: (taskId: number, task: BackendActiveTask) => void;
 };
 
 export type TaskChatState = {

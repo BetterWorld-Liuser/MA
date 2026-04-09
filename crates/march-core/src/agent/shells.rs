@@ -1,15 +1,18 @@
 use std::env;
 use std::ffi::OsString;
+use std::future::pending;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use encoding_rs::GBK;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{Child, Command as TokioCommand};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::agent::TurnCancellation;
+use crate::agent::{CommandOutputStreamUpdate, TurnCancellation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandShell {
@@ -54,11 +57,19 @@ pub fn decode_command_output(bytes: &[u8]) -> String {
     {
         let (decoded, _, had_errors) = GBK.decode(bytes);
         if !had_errors {
-            return decoded.trim().to_string();
+            return strip_ansi_control_sequences(decoded.trim());
         }
     }
 
-    String::from_utf8_lossy(bytes).trim().to_string()
+    strip_ansi_control_sequences(String::from_utf8_lossy(bytes).trim())
+}
+
+fn strip_ansi_control_sequences(input: &str) -> String {
+    let stripped = strip_ansi_escapes::strip(input.as_bytes());
+    String::from_utf8_lossy(&stripped)
+        .chars()
+        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+        .collect()
 }
 
 pub fn platform_label() -> &'static str {
@@ -105,6 +116,7 @@ pub async fn shell_command_with_cancel(
     working_directory: &Path,
     timeout: Duration,
     cancellation: &TurnCancellation,
+    on_output: &mut impl FnMut(CommandOutputStreamUpdate) -> Result<()>,
 ) -> Result<std::process::Output> {
     let mut process = match shell {
         CommandShell::Sh => {
@@ -138,7 +150,7 @@ pub async fn shell_command_with_cancel(
         .spawn()
         .with_context(|| format!("failed to spawn {}", shell.label()))?;
 
-    collect_child_output(child, command, timeout, cancellation).await
+    collect_child_output(child, command, timeout, cancellation, on_output).await
 }
 
 async fn collect_child_output(
@@ -146,78 +158,266 @@ async fn collect_child_output(
     command: &str,
     timeout: Duration,
     cancellation: &TurnCancellation,
+    on_output: &mut impl FnMut(CommandOutputStreamUpdate) -> Result<()>,
 ) -> Result<std::process::Output> {
+    const OUTPUT_STREAM_THROTTLE: Duration = Duration::from_millis(50);
+
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-
-    let stdout_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        if let Some(mut stdout) = stdout {
-            stdout.read_to_end(&mut bytes).await?;
-        }
-        Ok::<Vec<u8>, std::io::Error>(bytes)
+    let (tx, mut rx) = mpsc::unbounded_channel::<(StreamKind, Vec<u8>)>();
+    let mut pipe_readers = Some(PipeReaders {
+        stdout_task: spawn_pipe_reader(stdout, StreamKind::Stdout, tx.clone()),
+        stderr_task: spawn_pipe_reader(stderr, StreamKind::Stderr, tx),
     });
-    let stderr_task = tokio::spawn(async move {
-        let mut bytes = Vec::new();
-        if let Some(mut stderr) = stderr {
-            stderr.read_to_end(&mut bytes).await?;
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut output_cache = OutputSnapshotCache::default();
+    let mut timeout_sleep = Box::pin(tokio::time::sleep(timeout));
+    let mut output_flush = None;
+    let mut pending_output = false;
+    let status = loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                finalize_child_output(
+                    &mut child,
+                    &mut rx,
+                    pipe_readers.take().expect("pipe readers should exist until finalized"),
+                    &mut stdout_bytes,
+                    &mut stderr_bytes,
+                    true,
+                ).await;
+                return Err(command_interruption_error("turn cancelled", command, &stdout_bytes, &stderr_bytes));
+            }
+            _ = &mut timeout_sleep => {
+                finalize_child_output(
+                    &mut child,
+                    &mut rx,
+                    pipe_readers.take().expect("pipe readers should exist until finalized"),
+                    &mut stdout_bytes,
+                    &mut stderr_bytes,
+                    true,
+                ).await;
+                return Err(command_interruption_error(
+                    &format!(
+                        "command timed out after {:.3}s (timeout {:.3}s)",
+                        timeout.as_secs_f64(),
+                        timeout.as_secs_f64(),
+                    ),
+                    command,
+                    &stdout_bytes,
+                    &stderr_bytes,
+                ));
+            }
+            status = child.wait() => {
+                break status.context("failed to wait for command completion")?;
+            }
+            Some((stream, chunk)) = rx.recv() => {
+                append_stream_chunk(stream, chunk, &mut stdout_bytes, &mut stderr_bytes);
+                if !pending_output {
+                    output_flush = Some(Box::pin(tokio::time::sleep(OUTPUT_STREAM_THROTTLE)));
+                    pending_output = true;
+                }
+            }
+            _ = async {
+                if let Some(flush) = output_flush.as_mut() {
+                    flush.await;
+                } else {
+                    pending::<()>().await;
+                }
+            }, if pending_output => {
+                emit_output_update(on_output, &mut output_cache, &stdout_bytes, &stderr_bytes)?;
+                pending_output = false;
+                output_flush = None;
+            }
         }
-        Ok::<Vec<u8>, std::io::Error>(bytes)
-    });
-
-    let status = tokio::select! {
-        _ = cancellation.cancelled() => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let (stdout, stderr) = collect_terminated_output(stdout_task, stderr_task).await;
-            return Err(anyhow::anyhow!(format_command_interruption(
-                "turn cancelled",
-                command,
-                &stdout,
-                &stderr,
-            )));
-        }
-        _ = tokio::time::sleep(timeout) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let (stdout, stderr) = collect_terminated_output(stdout_task, stderr_task).await;
-            return Err(anyhow::anyhow!(format_command_interruption(
-                &format!(
-                    "command timed out after {:.3}s (timeout {:.3}s)",
-                    timeout.as_secs_f64(),
-                    timeout.as_secs_f64(),
-                ),
-                command,
-                &stdout,
-                &stderr,
-            )));
-        }
-        status = child.wait() => status.context("failed to wait for command completion")?,
     };
 
-    let stdout = join_output(stdout_task, "stdout").await?;
-    let stderr = join_output(stderr_task, "stderr").await?;
+    finalize_child_output(
+        &mut child,
+        &mut rx,
+        pipe_readers
+            .take()
+            .expect("pipe readers should exist until finalized"),
+        &mut stdout_bytes,
+        &mut stderr_bytes,
+        false,
+    )
+    .await;
+    if pending_output
+        || stdout_bytes.len() != output_cache.stdout_bytes_len
+        || stderr_bytes.len() != output_cache.stderr_bytes_len
+    {
+        emit_output_update(on_output, &mut output_cache, &stdout_bytes, &stderr_bytes)?;
+    }
 
     Ok(std::process::Output {
         status,
-        stdout,
-        stderr,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
     })
 }
 
-async fn collect_terminated_output(
-    stdout_task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
-    stderr_task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
-) -> (String, String) {
-    let stdout = match join_output(stdout_task, "stdout").await {
-        Ok(bytes) => decode_command_output(&bytes),
-        Err(error) => format!("[failed to collect stdout: {error}]"),
+#[derive(Debug, Clone, Copy)]
+enum StreamKind {
+    Stdout,
+    Stderr,
+}
+
+struct PipeReaders {
+    stdout_task: JoinHandle<Result<(), std::io::Error>>,
+    stderr_task: JoinHandle<Result<(), std::io::Error>>,
+}
+
+#[derive(Default)]
+struct OutputSnapshotCache {
+    stdout: String,
+    stderr: String,
+    stdout_bytes_len: usize,
+    stderr_bytes_len: usize,
+}
+
+fn spawn_pipe_reader<R>(
+    reader: Option<R>,
+    stream: StreamKind,
+    sender: mpsc::UnboundedSender<(StreamKind, Vec<u8>)>,
+) -> tokio::task::JoinHandle<Result<(), std::io::Error>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let Some(mut reader) = reader else {
+            return Ok(());
+        };
+
+        let mut buffer = [0u8; 4096];
+        loop {
+            let read = reader.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            if sender.send((stream, buffer[..read].to_vec())).is_err() {
+                break;
+            }
+        }
+        Ok(())
+    })
+}
+
+fn append_stream_chunk(
+    stream: StreamKind,
+    chunk: Vec<u8>,
+    stdout_bytes: &mut Vec<u8>,
+    stderr_bytes: &mut Vec<u8>,
+) {
+    match stream {
+        StreamKind::Stdout => stdout_bytes.extend_from_slice(&chunk),
+        StreamKind::Stderr => stderr_bytes.extend_from_slice(&chunk),
+    }
+}
+
+fn drain_pipe_channel(
+    rx: &mut mpsc::UnboundedReceiver<(StreamKind, Vec<u8>)>,
+    stdout_bytes: &mut Vec<u8>,
+    stderr_bytes: &mut Vec<u8>,
+) {
+    while let Ok((stream, chunk)) = rx.try_recv() {
+        append_stream_chunk(stream, chunk, stdout_bytes, stderr_bytes);
+    }
+}
+
+fn emit_output_update(
+    on_output: &mut impl FnMut(CommandOutputStreamUpdate) -> Result<()>,
+    cache: &mut OutputSnapshotCache,
+    stdout_bytes: &[u8],
+    stderr_bytes: &[u8],
+) -> Result<()> {
+    update_output_cache(stdout_bytes, &mut cache.stdout, &mut cache.stdout_bytes_len);
+    update_output_cache(stderr_bytes, &mut cache.stderr, &mut cache.stderr_bytes_len);
+    on_output(CommandOutputStreamUpdate {
+        stdout: cache.stdout.clone(),
+        stderr: cache.stderr.clone(),
+    })
+}
+
+fn update_output_cache(bytes: &[u8], cached_text: &mut String, cached_len: &mut usize) {
+    if bytes.len() < *cached_len {
+        *cached_text = decode_command_output(bytes);
+        *cached_len = bytes.len();
+        return;
+    }
+
+    if bytes.len() == *cached_len {
+        return;
+    }
+
+    // Stream updates are preview snapshots. We incrementally decode only the
+    // newly appended bytes here so long-running commands do not repeatedly
+    // re-decode the full accumulated buffer on every throttle tick. The final
+    // command result still decodes from the full raw buffers in one pass.
+    cached_text.push_str(&decode_command_output(&bytes[*cached_len..]));
+    *cached_len = bytes.len();
+}
+
+async fn finalize_child_output(
+    child: &mut Child,
+    rx: &mut mpsc::UnboundedReceiver<(StreamKind, Vec<u8>)>,
+    pipe_readers: PipeReaders,
+    stdout_bytes: &mut Vec<u8>,
+    stderr_bytes: &mut Vec<u8>,
+    terminate: bool,
+) {
+    if terminate {
+        request_child_termination(child).await;
+        let _ = child.wait().await;
+    }
+
+    drain_pipe_channel(rx, stdout_bytes, stderr_bytes);
+    join_pipe_readers(pipe_readers).await;
+    drain_pipe_channel(rx, stdout_bytes, stderr_bytes);
+}
+
+async fn join_pipe_readers(pipe_readers: PipeReaders) {
+    let _ = pipe_readers.stdout_task.await;
+    let _ = pipe_readers.stderr_task.await;
+}
+
+async fn request_child_termination(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        request_child_process_tree_termination_windows(child).await;
+    }
+
+    let _ = child.start_kill();
+}
+
+#[cfg(windows)]
+async fn request_child_process_tree_termination_windows(child: &Child) {
+    const TASKKILL_TIMEOUT: Duration = Duration::from_secs(2);
+
+    let Some(pid) = child.id() else {
+        return;
     };
-    let stderr = match join_output(stderr_task, "stderr").await {
-        Ok(bytes) => decode_command_output(&bytes),
-        Err(error) => format!("[failed to collect stderr: {error}]"),
-    };
-    (stdout, stderr)
+
+    let mut killer = TokioCommand::new("taskkill");
+    killer
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let _ = tokio::time::timeout(TASKKILL_TIMEOUT, killer.status()).await;
+}
+
+fn command_interruption_error(
+    reason: &str,
+    command: &str,
+    stdout_bytes: &[u8],
+    stderr_bytes: &[u8],
+) -> anyhow::Error {
+    anyhow::anyhow!(format_command_interruption(
+        reason,
+        command,
+        &decode_command_output(stdout_bytes),
+        &decode_command_output(stderr_bytes),
+    ))
 }
 
 fn format_command_interruption(reason: &str, command: &str, stdout: &str, stderr: &str) -> String {
@@ -231,16 +431,6 @@ fn format_command_interruption(reason: &str, command: &str, stdout: &str, stderr
         message.push_str(stderr);
     }
     message
-}
-
-async fn join_output(
-    task: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
-    stream_name: &str,
-) -> Result<Vec<u8>> {
-    let bytes = task
-        .await
-        .context(format!("{stream_name} reader task failed to join"))??;
-    Ok(bytes)
 }
 
 pub fn detect_available_shells() -> Result<Vec<AvailableShell>> {

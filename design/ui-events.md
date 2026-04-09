@@ -66,6 +66,8 @@
 - 右栏 debug 区不应因为聊天区流式输出而重置当前 tab
 - 任一 store 的局部更新都不应触发与其无关的过渡动画或滚动跳变
 - 聊天区只允许一个“最终 assistant 消息”写入源，不能同时由事件 append 与 snapshot hydrate 双写
+- 右栏上下文区、Debug 区这类同时消费 snapshot 与 runtime event 的区域，只允许维护一份任务 source 数据；视图层按需派生，不再额外维护同构 view cache 做双写
+- runtime event 抵达时若基线 source 尚未 hydrate，不允许静默丢弃；至少要留下可检索的 debug 记录，必要时通过暂存/回放补齐
 
 ---
 
@@ -449,6 +451,8 @@ type ToolItemViewModel = {
 - task 级事实刷新时，前端应尽量做字段级 merge，而不是整块替换后让所有子树自行重建
 - 只有 task 切换、任务删除、工作区首次加载这类“语义上确实换了一整页”的场景，才允许大范围重建
 - 聊天区不消费 `active_task.history` 的常规刷新；`history` 只作为首次进入 task 或显式 resync 的基线来源
+- `active_task` 这类混合对象在 merge 时必须逐字段声明语义：`history / notes / open_files / hints` 可按最新 snapshot 替换；`runtime / debug_trace` 若本次事件未提供，应继承旧值，而不是被对象 spread 隐式清空
+- 多个事件分支若共享“忽略已关闭 turn / 标记 task working / 写入 runtime / 获取 liveTurn / 合并回写”这类前缀，应抽成单个 helper，确保所有分支遵守同一状态机入口与忽略规则
 
 关于 Debug 区还应补一条心智约束：
 
@@ -479,6 +483,7 @@ type ToolItemViewModel = {
 - 后端持久化层负责“这一轮结束后真实留下来的事实”
 - 前端运行态负责“这一轮收敛之前用户看到的过程”
 - 两者在轮次结束时需要**原子收口**：最终 assistant 消息进入历史列表、对应 live turn 消失、debug trace 追加完成，应表现为一次连续更新，而不是先清空一部分临时态、下一帧再由持久化快照补回来
+- 如果一次完成事件只带来“部分 task 字段更新”，前端必须按语义 merge 到当前 source 上，不允许因为一条字段缺失的完成态 payload 把右栏 runtime/debug 信息抹掉
 
 如果收口被拆成两个前端更新，用户会看到消息闪烁、列表回弹、滚动位置抖动；这是应在事件层和 store 层共同避免的 UI 错误，而不是可接受的小瑕疵。
 

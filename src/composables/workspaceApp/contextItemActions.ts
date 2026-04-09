@@ -64,7 +64,7 @@ export function createContextItemActions({
   onMemoryMutated,
   runWorkspaceAction,
 }: ContextItemActionsOptions) {
-  const { snapshot, workspace, activeTaskIdNumber } = workspaceState;
+  const { snapshot, contextView, activeTaskIdNumber } = workspaceState;
 
   async function addNote() {
     if (!activeTaskIdNumber.value || busy.value) {
@@ -89,7 +89,7 @@ export function createContextItemActions({
       return;
     }
 
-    const existing = workspace.value.notes.find((note) => note.id === noteId);
+    const existing = contextView.value.notes.find((note) => note.id === noteId);
     openEditNoteDialog({
       id: noteId,
       content: existing?.content ?? '',

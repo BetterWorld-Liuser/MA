@@ -1,6 +1,8 @@
 import { ref, watch, type Ref } from 'vue';
 import type {
+  BackendActiveTask,
   BackendAgentProgressEvent,
+  BackendRuntimeSnapshot,
   BackendWorkspaceSnapshot,
   ChatMessage,
   DebugRoundItem,
@@ -19,8 +21,9 @@ type UseLiveTurnsOptions = {
   appendTaskDebugRound: (taskId: number, round: DebugRoundItem) => void;
   setTaskRuntimeSnapshot: (
     taskId: number,
-    runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+    runtime: BackendRuntimeSnapshot,
   ) => void;
+  syncTaskContextSnapshot: (taskId: number, task: BackendActiveTask) => void;
 };
 
 type ArchivedFailedTurn = {
@@ -44,6 +47,7 @@ export function useLiveTurns({
   appendTaskChatMessage,
   appendTaskDebugRound,
   setTaskRuntimeSnapshot,
+  syncTaskContextSnapshot,
 }: UseLiveTurnsOptions) {
   const liveTurns = ref<Record<number, LiveTurn>>({});
   const archivedFailedTurns = ref<Record<number, ArchivedFailedTurn[]>>({});
@@ -82,38 +86,18 @@ export function useLiveTurns({
         });
         return;
       case 'status':
-        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
-          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
-          return;
-        }
-        setTaskActivity(event.task_id, 'working');
-        setTaskRuntimeSnapshot(event.task_id, event.runtime);
-        ensureLiveTurn(event.task_id, event.turn_id);
-        if (!liveTurns.value[event.task_id]) {
-          return;
-        }
-        upsertLiveTurn(event.task_id, {
-          ...liveTurns.value[event.task_id],
+        withMutableLiveTurn(event, (liveTurn) => ({
+          ...liveTurn,
           author: formatAgentAuthor(event.agent_display_name || event.agent),
-          state: liveTurns.value[event.task_id].content ? liveTurns.value[event.task_id].state : 'running',
+          state: liveTurn.content ? liveTurn.state : 'running',
           statusLabel: event.label,
-        });
+        }));
         return;
       case 'tool_started':
-        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
-          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
-          return;
-        }
-        setTaskActivity(event.task_id, 'working');
-        setTaskRuntimeSnapshot(event.task_id, event.runtime);
-        ensureLiveTurn(event.task_id, event.turn_id);
-        if (!liveTurns.value[event.task_id]) {
-          return;
-        }
-        upsertLiveTurn(event.task_id, {
-          ...liveTurns.value[event.task_id],
+        withMutableLiveTurn(event, (liveTurn) => ({
+          ...liveTurn,
           tools: [
-            ...liveTurns.value[event.task_id].tools,
+            ...liveTurn.tools,
             {
               id: event.tool_call_id,
               label: event.tool_name,
@@ -121,22 +105,12 @@ export function useLiveTurns({
               state: 'running',
             },
           ],
-        });
+        }));
         return;
       case 'tool_finished':
-        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
-          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
-          return;
-        }
-        setTaskActivity(event.task_id, 'working');
-        setTaskRuntimeSnapshot(event.task_id, event.runtime);
-        ensureLiveTurn(event.task_id, event.turn_id);
-        if (!liveTurns.value[event.task_id]) {
-          return;
-        }
-        upsertLiveTurn(event.task_id, {
-          ...liveTurns.value[event.task_id],
-          tools: liveTurns.value[event.task_id].tools.map((tool) =>
+        withMutableLiveTurn(event, (liveTurn) => ({
+          ...liveTurn,
+          tools: liveTurn.tools.map((tool) =>
             tool.id === event.tool_call_id
               ? {
                   ...tool,
@@ -146,76 +120,60 @@ export function useLiveTurns({
                 }
               : tool,
           ),
-        });
+        }));
         return;
       case 'assistant_text_preview':
-        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
-          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
-          return;
-        }
-        setTaskActivity(event.task_id, 'working');
-        setTaskRuntimeSnapshot(event.task_id, event.runtime);
-        ensureLiveTurn(event.task_id, event.turn_id);
-        if (!liveTurns.value[event.task_id]) {
-          return;
-        }
-        upsertLiveTurn(event.task_id, {
-          ...liveTurns.value[event.task_id],
+        withMutableLiveTurn(event, (liveTurn) => ({
+          ...liveTurn,
           author: formatAgentAuthor(event.agent_display_name || event.agent),
           state: 'streaming',
           statusLabel: '正在生成回复',
           content: event.message,
           errorMessage: '',
-        });
+        }));
         return;
       case 'assistant_message_checkpoint':
-        if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
-          debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
-          return;
-        }
-        setTaskActivity(event.task_id, 'working');
-        setTaskRuntimeSnapshot(event.task_id, event.runtime);
-        ensureLiveTurn(event.task_id, event.turn_id);
-        if (!liveTurns.value[event.task_id]) {
-          return;
-        }
-        if (event.checkpoint_type === 'intermediate') {
+        withMutableLiveTurn(event, (liveTurn) => {
+          if (event.checkpoint_type !== 'intermediate') {
+            return liveTurn;
+          }
+
           archiveIntermediateTurn(event.task_id, {
-            ...liveTurns.value[event.task_id],
+            ...liveTurn,
             author: formatAgentAuthor(event.agent_display_name || event.agent),
             content: event.content,
           }, event.message_id);
-          upsertLiveTurn(event.task_id, {
-            ...liveTurns.value[event.task_id],
+          return {
+            ...liveTurn,
             author: formatAgentAuthor(event.agent_display_name || event.agent),
             state: 'running',
             statusLabel: '正在继续处理',
             content: '',
             errorMessage: '',
-            transitionKey: (liveTurns.value[event.task_id].transitionKey ?? 0) + 1,
-          });
-        }
+            transitionKey: (liveTurn.transitionKey ?? 0) + 1,
+          };
+        });
         return;
       case 'final_assistant_message':
         sealLiveTurn(event.task_id, event.turn_id);
         setTaskActivity(event.task_id, 'review');
         appendTaskChatMessage(event.task_id, toChatMessage(event.assistant_message));
+        syncTaskContextSnapshot(event.task_id, event.task);
         mergeActiveTaskSnapshot(event.task_id, event.task, event.assistant_message);
         clearLiveTurn(event.task_id);
         return;
       case 'round_complete':
         setTaskActivity(event.task_id, 'review');
         appendTaskDebugRound(event.task_id, toDebugRoundItem(event.debug_round));
+        syncTaskContextSnapshot(event.task_id, event.task);
         mergeActiveTaskSnapshot(event.task_id, event.task);
         return;
       case 'turn_failed':
+      {
         clearTaskActivity(event.task_id);
-        ensureLiveTurn(event.task_id, event.turn_id);
-        if (!liveTurns.value[event.task_id]) {
-          return;
-        }
+        const liveTurn = ensureLiveTurn(event.task_id, event.turn_id);
         const failedTurn: LiveTurn = {
-          ...liveTurns.value[event.task_id],
+          ...liveTurn,
           state: 'error',
           statusLabel: '本轮执行失败',
           errorMessage: event.message,
@@ -230,33 +188,44 @@ export function useLiveTurns({
           errorMessage.value = event.message;
         }
         return;
+      }
       case 'turn_cancelled':
+      {
         clearTaskActivity(event.task_id);
+        syncTaskContextSnapshot(event.task_id, event.task);
         mergeActiveTaskSnapshot(event.task_id, event.task);
+        const liveTurn = ensureLiveTurn(event.task_id, event.turn_id);
+        upsertLiveTurn(event.task_id, {
+          ...liveTurn,
+          state: 'cancelled',
+          statusLabel: '本轮已中断',
+          errorMessage: '',
+        });
         sealLiveTurn(event.task_id, event.turn_id);
-        clearLiveTurn(event.task_id);
         if (sendingTaskId.value === event.task_id) {
           sendingTaskId.value = null;
         }
         errorMessage.value = '';
         return;
+      }
     }
   }
 
-  function ensureLiveTurn(taskId: number, turnId: string) {
-    if (liveTurns.value[taskId]?.turnId === turnId) {
+  function ensureLiveTurn(taskId: number, turnId: string): LiveTurn {
+    const existing = liveTurns.value[taskId];
+    if (existing?.turnId === turnId) {
       debugChat('live-turns', 'ensure-live-turn:reuse-existing', {
         taskId,
         turnId,
       });
-      return;
+      return existing;
     }
 
     debugChat('live-turns', 'ensure-live-turn:create', {
       taskId,
       turnId,
     });
-    upsertLiveTurn(taskId, {
+    const createdTurn: LiveTurn = {
       turnId,
       author: 'March',
       state: 'running',
@@ -265,7 +234,27 @@ export function useLiveTurns({
       errorMessage: '',
       tools: [],
       transitionKey: 0,
-    });
+    };
+    upsertLiveTurn(taskId, createdTurn);
+    return createdTurn;
+  }
+
+  function withMutableLiveTurn(
+    event: Extract<
+      BackendAgentProgressEvent,
+      { kind: 'status' | 'tool_started' | 'tool_finished' | 'assistant_text_preview' | 'assistant_message_checkpoint' }
+    >,
+    patch: (liveTurn: LiveTurn) => LiveTurn,
+  ) {
+    if (shouldIgnoreClosedLiveTurnEvent(event.task_id, event.turn_id)) {
+      debugChat('live-turns', 'event:ignored-closed-turn', summarizeAgentEvent(event));
+      return;
+    }
+
+    setTaskActivity(event.task_id, 'working');
+    setTaskRuntimeSnapshot(event.task_id, event.runtime);
+    const liveTurn = ensureLiveTurn(event.task_id, event.turn_id);
+    upsertLiveTurn(event.task_id, patch(liveTurn));
   }
 
   function shouldIgnoreClosedLiveTurnEvent(taskId: number, turnId: string) {
@@ -376,14 +365,10 @@ export function useLiveTurns({
       ...snapshot.value,
       active_task: {
         ...currentTask,
-        task: nextTask.task,
-        active_agent: nextTask.active_agent,
-        history: mergedHistory,
-        notes: nextTask.notes,
-        open_files: nextTask.open_files,
-        hints: nextTask.hints,
+        ...nextTask,
         runtime: nextTask.runtime ?? currentTask.runtime,
         debug_trace: nextTask.debug_trace ?? currentTask.debug_trace,
+        history: mergedHistory,
       },
     };
     debugChat('live-turns', 'merge-task-snapshot:applied', summarizeSnapshot(snapshot.value));

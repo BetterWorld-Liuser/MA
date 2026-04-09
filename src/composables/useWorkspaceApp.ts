@@ -7,7 +7,13 @@ import { useMemoryDialog } from '@/composables/useMemoryDialog';
 import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
 import { useSettingsMemories } from '@/composables/useSettingsMemories';
 import { useProviderSettings } from '@/composables/useProviderSettings';
-import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, ChatMessage, DebugRoundItem } from '@/data/mock';
+import type {
+  BackendAgentProgressEvent,
+  BackendRuntimeSnapshot,
+  BackendWorkspaceSnapshot,
+  ChatMessage,
+  DebugRoundItem,
+} from '@/data/mock';
 import { debugChat, summarizeAgentEvent, summarizeSnapshot } from '@/lib/chatDebug';
 import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
 import { useWorkspaceSnapshotState } from '@/composables/workspaceApp/useWorkspaceSnapshotState';
@@ -44,9 +50,13 @@ export function useWorkspaceApp() {
   const workspacePath = computed(() => snapshot.value?.workspace_path);
   let appendTaskChatMessage = (_taskId: number, _message: ChatMessage) => {};
   let appendTaskDebugRound = (_taskId: number, _round: DebugRoundItem) => {};
+  let syncTaskContextSnapshot = (
+    _taskId: number,
+    _task: NonNullable<BackendWorkspaceSnapshot['active_task']>,
+  ) => {};
   let setTaskRuntimeSnapshot = (
     _taskId: number,
-    _runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>,
+    _runtime: BackendRuntimeSnapshot,
   ) => {};
   const {
     isMaximized,
@@ -81,6 +91,7 @@ export function useWorkspaceApp() {
     appendTaskChatMessage: (taskId, message) => appendTaskChatMessage(taskId, message),
     appendTaskDebugRound: (taskId, round) => appendTaskDebugRound(taskId, round),
     setTaskRuntimeSnapshot: (taskId, runtime) => setTaskRuntimeSnapshot(taskId, runtime),
+    syncTaskContextSnapshot: (taskId, task) => syncTaskContextSnapshot(taskId, task),
   });
 
   const workspaceState = useWorkspaceSnapshotState({
@@ -89,6 +100,7 @@ export function useWorkspaceApp() {
     taskActivityStatuses,
   });
   setTaskRuntimeSnapshot = workspaceState.setTaskRuntimeSnapshot;
+  syncTaskContextSnapshot = workspaceState.syncTaskContextSnapshot;
   const taskChatState = useTaskChatState({
     snapshot,
     activeTaskIdNumber: workspaceState.activeTaskIdNumber,

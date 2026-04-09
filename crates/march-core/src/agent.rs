@@ -147,6 +147,12 @@ pub struct CommandExecution {
 }
 
 #[derive(Debug, Clone)]
+pub struct CommandOutputStreamUpdate {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct AgentRunResult {
     pub final_messages: Vec<FinalAssistantMessage>,
     pub debug_rounds: Vec<DebugRound>,
@@ -398,7 +404,11 @@ mod tests {
 
         Runtime::new()
             .expect("create tokio runtime")
-            .block_on(session.execute_tool_call(&tool_call, TurnCancellation::never()))
+            .block_on(session.execute_tool_call_with_output(
+                &tool_call,
+                TurnCancellation::never(),
+                |_| Ok(()),
+            ))
             .expect("write_file should succeed");
 
         let persisted = session.persisted_state();
@@ -565,6 +575,22 @@ mod tests {
     #[test]
     fn decode_command_output_falls_back_to_gbk_on_windows_style_bytes() {
         let decoded = decode_command_output(&[0xB2, 0xE2, 0xCA, 0xD4]);
+        assert_eq!(decoded, "测试");
+    }
+
+    #[test]
+    fn decode_command_output_strips_ansi_escape_sequences() {
+        let decoded = decode_command_output(b"\x1b[31;1magent-browser: \x1b[0mnot recognized");
+        assert_eq!(decoded, "agent-browser: not recognized");
+    }
+
+    #[test]
+    fn decode_command_output_strips_ansi_after_gbk_decode() {
+        let mut bytes = b"\x1b[31m".to_vec();
+        bytes.extend_from_slice(&[0xB2, 0xE2, 0xCA, 0xD4]);
+        bytes.extend_from_slice(b"\x1b[0m");
+
+        let decoded = decode_command_output(&bytes);
         assert_eq!(decoded, "测试");
     }
 
@@ -757,6 +783,52 @@ mod tests {
             assert!(message.contains("Partial stdout:"));
             assert!(message.contains("agent-browser@0.25.3"));
             assert!(message.contains("Ok to proceed? (y)"));
+        });
+    }
+
+    #[test]
+    fn run_command_timeout_stays_within_timeout_plus_shutdown_buffer() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                "default",
+                ConversationHistory::default(),
+                [],
+                std::env::current_dir().expect("current dir"),
+            )
+            .expect("create agent session");
+
+            let (shell, command) = if cfg!(windows) {
+                (
+                    CommandShell::PowerShell,
+                    "Start-Sleep -Seconds 5".to_string(),
+                )
+            } else {
+                (CommandShell::Sh, "sleep 5".to_string())
+            };
+
+            let started = std::time::Instant::now();
+            let _ = session
+                .run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: Duration::from_secs(1),
+                    },
+                    TurnCancellation::never(),
+                )
+                .await
+                .expect_err("timed out command should fail");
+
+            let elapsed = started.elapsed();
+            let allowed_buffer = Duration::from_secs(2);
+            assert!(
+                elapsed <= Duration::from_secs(1) + allowed_buffer,
+                "timed out command should return within timeout + shutdown buffer ({:?}), got {:?}",
+                allowed_buffer,
+                elapsed,
+            );
         });
     }
 

@@ -419,7 +419,7 @@
 }
 
 @utility message-tools-item {
-  @apply flex items-baseline gap-1.25 text-[9px] leading-4;
+  @apply flex min-w-0 items-baseline gap-1.25 text-[9px] leading-4;
 }
 
 @utility message-tools-item-label {
@@ -427,11 +427,11 @@
 }
 
 @utility message-tools-item-separator {
-  @apply text-text-dim;
+  @apply shrink-0 text-text-dim;
 }
 
 @utility message-tools-item-summary {
-  @apply min-w-0 text-text-dim;
+  @apply min-w-0 flex-1 truncate text-text-dim;
 }
 
 @utility message-actions {
@@ -507,7 +507,7 @@
 }
 
 @utility live-tool-item {
-  @apply flex items-center gap-2 rounded-md px-1 py-0.5;
+  @apply flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5;
 }
 
 @utility live-tool-state {
@@ -534,7 +534,7 @@
 }
 
 @utility live-tool-text {
-  @apply truncate font-mono text-[9px] text-text-dim;
+  @apply min-w-0 flex-1 truncate font-mono text-[9px] text-text-dim;
 }
 
 @utility chat-composer-shell {

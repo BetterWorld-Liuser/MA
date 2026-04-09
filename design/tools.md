@@ -62,6 +62,21 @@ Only choose from the shells listed above.
 
 `timeout_secs` 为可选参数；不传时默认 10 秒。命令正常返回时，tool result 需带上实际运行耗时；若超时，March 必须杀掉子进程并返回明确错误，例如“命令在 10 秒后超时被终止”。
 
+### `run_command` 的流式输出协议
+
+为了让聊天区和右栏能够在长时间命令执行时实时反馈，`run_command` 可以在工具执行过程中向 UI 推送 stdout/stderr 更新。但这里必须先固定语义：
+
+- UI 事件里如果携带的是“截至当前的完整 stdout/stderr”，它就是 **snapshot**，不是 delta；命名、注释和前端消费方式都必须按 snapshot 语义设计
+- 如果未来改成 delta 协议，也必须显式换名字，不能复用同一个事件结构暗中改变含义
+- UI 默认应消费简化后的展示文本；完整原始字节仍由后端保留，用于最终 tool result 和错误报告
+
+实现约束：
+
+- 长时间命令的输出更新不能每次节流都对完整累积 buffer 做全量 decode / ANSI strip / 清洗；必须采用增量 decode、游标缓存或等价方案，避免输出越长越慢
+- “正常结束 / 超时 / 取消”三条路径的子进程收尾必须共用同一个 helper，统一处理终止、drain pipe、等待 child、join reader 等步骤
+- 若当前没有活跃 flush timer，应使用显式状态表示；不要用缺少注释的超长 sleep sentinel 伪装“禁用计时器”
+- Windows 下通过 `taskkill /T /F` 终止进程树时，也必须受 timeout 保护，不能让 cancellation path 本身阻塞 turn 收口
+
 ### 2. 文件工具：`open_file` / `close_file` / `write_file` / 行号级编辑
 
 没有 `read_file`——打开即追踪，上下文里的内容永远反映磁盘真实状态：

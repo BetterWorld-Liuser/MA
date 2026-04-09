@@ -71,7 +71,12 @@
                     <span class="message-tools-summary-action">查看</span>
                   </summary>
                   <ul class="message-tools-list">
-                    <li v-for="tool in message.tools" :key="`${tool.label}-${tool.summary}`" class="message-tools-item">
+                    <li
+                      v-for="tool in message.tools"
+                      :key="`${tool.label}-${tool.summary}`"
+                      class="message-tools-item"
+                      :title="tool.summary ? `${tool.label} · ${tool.summary}` : tool.label"
+                    >
                       <span class="message-tools-item-label">{{ tool.label }}</span>
                       <span class="message-tools-item-separator">·</span>
                       <span class="message-tools-item-summary">{{ tool.summary }}</span>
@@ -106,18 +111,18 @@
 
             <Transition name="live-turn-swap" mode="out-in">
               <div
-                :key="liveTurnContentKey"
+                :key="liveTurnPresentation.contentKey"
                 class="message-bubble message-bubble-assistant opacity-90"
-                :class="liveTurn.state === 'error' ? 'live-bubble-error' : ''"
+                :class="liveTurnPresentation.bubbleClass"
                 @click.capture="handleMarkdownLinkClick"
               >
-                <div class="live-status-row" :class="liveTurn.state === 'error' ? 'live-status-row-error' : ''">
-                  <span class="live-status-dots" :class="liveTurn.state === 'error' ? 'live-status-dots-error' : ''" aria-hidden="true">
+                <div class="live-status-row" :class="liveTurnPresentation.statusRowClass">
+                  <span class="live-status-dots" :class="liveTurnPresentation.dotsClass" aria-hidden="true">
                     <span></span>
                     <span></span>
                     <span></span>
                   </span>
-                  <span class="live-status-label" :class="liveTurn.state === 'error' ? 'text-error' : ''">{{ liveTurn.statusLabel }}</span>
+                  <span class="live-status-label" :class="liveTurnPresentation.labelClass">{{ liveTurn.statusLabel }}</span>
                 </div>
                 <MarkdownRender
                   v-if="liveTurn.content"
@@ -128,8 +133,8 @@
                   :render-batch-size="16"
                   :render-batch-delay="8"
                 />
-                <p v-else class="mt-1 text-[11px]" :class="liveTurn.state === 'error' ? 'text-error' : 'text-text-dim'">
-                  {{ liveTurn.state === 'error' ? (liveTurn.errorMessage || '这轮没有成功完成。') : `${liveTurn.author} 正在处理这一轮请求。` }}
+                <p v-else class="mt-1 text-[11px]" :class="liveTurnPresentation.emptyTextClass">
+                  {{ liveTurnPresentation.emptyText }}
                 </p>
 
                 <p
@@ -140,9 +145,14 @@
                 </p>
 
                 <div v-if="liveTurn.tools.length" class="live-tools" aria-label="Live tool summaries">
-                  <div v-for="tool in liveTurn.tools" :key="tool.id" class="live-tool-item">
+                  <div
+                    v-for="tool in liveTurn.tools"
+                    :key="tool.id"
+                    class="live-tool-item"
+                    :title="tool.summary || tool.label"
+                  >
                     <span class="live-tool-state" :class="`live-tool-state-${tool.state}`"></span>
-                    <span class="live-tool-text">{{ tool.summary || tool.label }}</span>
+                    <span class="live-tool-text">{{ tool.preview || tool.summary || tool.label }}</span>
                   </div>
                 </div>
               </div>
@@ -229,17 +239,63 @@ const showJumpToBottomButton = computed(() => {
   const hasScrollableOverflow = scrollContainer.value.scrollHeight - scrollContainer.value.clientHeight > 8;
   return hasScrollableOverflow && distanceFromBottom.value > JUMP_TO_BOTTOM_BUTTON_THRESHOLD;
 });
-const liveTurnContentKey = computed(() => {
-  if (!props.liveTurn) {
-    return 'live-turn-empty';
+const liveTurnPresentation = computed(() => {
+  const turn = props.liveTurn;
+  if (!turn) {
+    return buildLiveTurnPresentation('active', null);
   }
 
-  return [
-    props.liveTurn.turnId,
-    props.liveTurn.transitionKey ?? 0,
-    props.liveTurn.state === 'error' ? 'error' : 'active',
-  ].join('::');
+  if (turn.state === 'error') {
+    return buildLiveTurnPresentation('error', turn);
+  }
+
+  if (turn.state === 'cancelled') {
+    return buildLiveTurnPresentation('cancelled', turn);
+  }
+
+  return buildLiveTurnPresentation('active', turn);
 });
+
+type LiveTurnTone = 'active' | 'error' | 'cancelled';
+
+function buildLiveTurnPresentation(tone: LiveTurnTone, turn: LiveTurn | null) {
+  const toneStyle = tone === 'active'
+    ? {
+        bubbleClass: '',
+        statusRowClass: '',
+        dotsClass: '',
+        labelClass: '',
+        emptyTextClass: 'text-text-dim',
+      }
+    : {
+        bubbleClass: 'live-bubble-error',
+        statusRowClass: 'live-status-row-error',
+        dotsClass: 'live-status-dots-error',
+        labelClass: tone === 'error' ? 'text-error' : 'text-text-dim',
+        emptyTextClass: tone === 'error' ? 'text-error' : 'text-text-dim',
+      };
+
+  return {
+    tone,
+    contentKey: turn ? [turn.turnId, turn.transitionKey ?? 0, tone].join('::') : 'live-turn-empty',
+    ...toneStyle,
+    emptyText: turn
+      ? resolveLiveTurnEmptyText(tone, turn)
+      : '',
+  };
+}
+
+function resolveLiveTurnEmptyText(tone: LiveTurnTone, turn: LiveTurn) {
+  if (tone === 'error') {
+    return turn.errorMessage || '这轮没有成功完成。';
+  }
+
+  if (tone === 'cancelled') {
+    return `${turn.author} 已停止这一轮执行。`;
+  }
+
+  return `${turn.author} 正在处理这一轮请求。`;
+}
 
 watch(
   chatLength,
