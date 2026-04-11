@@ -236,30 +236,53 @@ Frontmatter 中的 `skills` 字段可选，省略时继承 task 默认 skills。
 
 ### 用户 @Agent
 
-聊天输入中 `@角色名` 触发角色切换：
+聊天输入中 `@角色名` 触发 agent 激活。一条消息可同时 `@` 多个角色，每个角色各自创建一个独立 Turn 并发执行。
+
+**激活规则（同 UserMessage 数据模型）**：
+
+- **`mentions`**：输入框中显式 @ 的 agent_id 列表，按出现顺序排列
+- **`replies`**：引用的历史气泡列表；`kind === 'turn'` 的 reply 额外派生出该 Turn 归属 agent 的激活
+- **最终激活列表** = `mentions ∪ replies.turn.agent_id`，去重，mentions 在前
+
+激活器按此顺序串行发出 `turn_started` 事件，每个 Turn 各自独立并发运行。
+
+**单 agent 激活示例**：
 
 ```
 用户: @reviewer 帮我看看 auth 模块的代码质量
 
-March 处理流程：
-  1. 识别 @reviewer
-  2. 构建本轮 AgentContext：
-     system_core = 基础指令片段 + reviewer.system_prompt
-     available_agents = task 当前可用 agent roster（含 name / display_name / description）
-     open_files  = 共享文件 ∪ reviewer 私有文件
-     notes       = 共享笔记 ∪ reviewer 私有笔记
-     recent_chat = task 最近 N 轮（包含所有角色发言）
-     skills      = reviewer.skills_config ?? task 默认
-  3. agent loop 正常运行
-  4. 轮结束 → 回复出现在聊天区，带 reviewer 标识
-     recent_chat 追加这条记录
+后端流程：
+  1. user_message_appended { mentions: ['reviewer'], replies: [] }
+  2. turn_started { turn_id, agent_id: 'reviewer', trigger: { kind: 'user', id: msg_id } }
+  3. reviewer 构建 AgentContext：
+       system_core = 基础指令 + reviewer.system_prompt
+       available_agents = task 当前可用 agent roster
+       open_files  = 共享文件 ∪ reviewer 私有文件
+       notes       = 共享笔记 ∪ reviewer 私有笔记
+       recent_chat = task 最近 N 轮（包含所有角色发言）
+       skills      = reviewer.skills_config ?? task 默认
+  4. reviewer agent loop 执行 → turn_finished
+  5. 回复出现在聊天区 TurnGroup，带 reviewer 标识；recent_chat 追加
 ```
 
-这里的“触发角色切换”是实现描述，不是推荐暴露给用户的文案。面向用户的语义应统一为：
+**多 agent 并发激活示例**：
+
+```
+用户: @reviewer @architect 分别看看这段代码
+
+后端流程：
+  1. user_message_appended { mentions: ['reviewer', 'architect'], replies: [] }
+  2. turn_started { turn_id: T1, agent_id: 'reviewer', trigger: { kind: 'user', ... } }
+  3. turn_started { turn_id: T2, agent_id: 'architect', trigger: { kind: 'user', ... } }
+  4. T1 和 T2 并发执行，message_*/tool_*/delta 事件按 turn_id 路由
+  5. 各自独立 turn_finished，各自独立折叠
+```
+
+面向用户的语义：
 
 - `@Agent` = 请该角色接手当前问题
-- 当前回复 = 该角色的发言
-- 不额外插入“已切到某角色”的系统播报
+- 回复 = 该角色的发言（TurnGroup 头部显示角色名）
+- 不额外插入”已切到某角色”的系统播报
 
 ### Agent roster 注入
 

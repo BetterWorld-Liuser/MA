@@ -6,11 +6,6 @@ export type TaskItem = {
   updatedAt: string;
 };
 
-export type ChatTool = {
-  label: string;
-  summary: string;
-};
-
 export type ChatImageAttachment = {
   id: string;
   name: string;
@@ -19,36 +14,62 @@ export type ChatImageAttachment = {
   sourcePath?: string;
 };
 
-export type LiveToolItem = {
-  id: string;
-  label: string;
-  summary: string;
-  state: 'running' | 'success' | 'error';
-  preview?: string;
-};
+export type ReplyRef =
+  | { kind: 'turn'; id: string }
+  | { kind: 'user_message'; id: string };
 
-export type LiveTurn = {
-  turnId: string;
-  author: string;
-  state: 'pending' | 'running' | 'streaming' | 'error' | 'cancelled';
-  statusLabel: string;
+export type UserMessage = {
+  kind: 'user_message';
+  userMessageId: string;
   content: string;
-  errorMessage?: string;
-  tools: LiveToolItem[];
-  transitionKey?: number;
-};
-
-export type ChatMessage = {
-  id?: string;
-  role: 'user' | 'assistant';
+  mentions: string[];
+  replies: ReplyRef[];
+  ts: number;
   author: string;
-  time: string;
-  timestamp?: number;
-  content: string;
   images?: ChatImageAttachment[];
-  tools?: ChatTool[];
-  variant?: 'default' | 'intermediate' | 'failed';
 };
+
+export type AssistantTimelineTextEntry = {
+  kind: 'text';
+  text: string;
+};
+
+export type AssistantTimelineToolEntry = {
+  kind: 'tool';
+  toolCallId: string;
+  toolName: string;
+  arguments: string;
+  status: 'running' | 'ok' | 'error';
+  preview?: string;
+  durationMs?: number;
+};
+
+export type AssistantTimelineEntry = AssistantTimelineTextEntry | AssistantTimelineToolEntry;
+
+export type AssistantMessage = {
+  messageId: string;
+  turnId: string;
+  state: 'streaming' | 'done';
+  reasoning: string;
+  timeline: AssistantTimelineEntry[];
+};
+
+export type Turn = {
+  kind: 'turn';
+  turnId: string;
+  agentId: string;
+  agentName: string;
+  trigger:
+    | { kind: 'user'; id: string }
+    | { kind: 'turn'; id: string };
+  state: 'streaming' | 'done' | 'failed' | 'cancelled';
+  statusLabel?: string;
+  errorMessage?: string;
+  ts: number;
+  messages: AssistantMessage[];
+};
+
+export type TaskTimelineEntry = UserMessage | Turn;
 
 export type NoteItem = {
   id: string;
@@ -138,7 +159,7 @@ export type WorkspaceView = {
   selectedFrequencyPenalty?: number;
   selectedMaxOutputTokens?: number;
   workingDirectory?: string;
-  chat: ChatMessage[];
+  timeline: TaskTimelineEntry[];
   notes: NoteItem[];
   openFiles: OpenFileItem[];
   hints: HintItem[];
@@ -147,7 +168,6 @@ export type WorkspaceView = {
   memoryWarnings: string[];
   contextUsage: ContextUsage;
   debugRounds: DebugRoundItem[];
-  liveTurn?: LiveTurn;
   workspacePath?: string;
   databasePath?: string;
 };
@@ -192,24 +212,57 @@ export type BackendWorkspaceSnapshot = {
       model_max_output_tokens?: number | null;
     };
     active_agent?: string;
-    history: Array<{
-      role: 'System' | 'User' | 'Assistant' | 'Tool';
-      agent?: string;
-      agent_display_name?: string;
-      content: string;
-      images?: Array<{
-        id: string;
-        name: string;
-        mediaType: string;
-        dataUrl: string;
-        sourcePath?: string | null;
-      }>;
-      timestamp: number;
-      tool_summaries: Array<{
-        name: string;
-        summary: string;
-      }>;
-    }>;
+    last_seq: number;
+    timeline: Array<
+      | {
+          kind: 'user_message';
+          user_message_id: string;
+          content: string;
+          images: Array<{
+            id: string;
+            name: string;
+            media_type: string;
+            data_url: string;
+            source_path?: string | null;
+          }>;
+          mentions: string[];
+          replies: ReplyRef[];
+          timestamp: number;
+        }
+      | {
+          kind: 'turn';
+          turn_id: string;
+          agent_id: string;
+          agent_display_name: string;
+          trigger:
+            | { kind: 'user'; id: string }
+            | { kind: 'turn'; id: string };
+          state: string;
+          error_message?: string | null;
+          timestamp: number;
+          messages: Array<{
+            message_id: string;
+            turn_id: string;
+            state: string;
+            reasoning: string;
+            timeline: Array<
+              | {
+                  kind: 'text';
+                  text: string;
+                }
+              | {
+                  kind: 'tool';
+                  tool_call_id: string;
+                  tool_name: string;
+                  arguments: string;
+                  status: string;
+                  preview?: string | null;
+                  duration_ms?: number | null;
+                }
+            >;
+          }>;
+        }
+    >;
     notes: Array<{
       scope?: string;
       id: string;
@@ -329,27 +382,40 @@ export type BackendWorkspaceSnapshot = {
 
 export type BackendAgentProgressEvent =
   | {
-      kind: 'turn_started';
+      kind: 'user_message_appended';
       task_id: number;
-      turn_id: string;
-      user_message: string;
-      agent: string;
-      agent_display_name: string;
+      seq: number;
+      user_message_id: string;
+      content: string;
+      ts: number;
+      mentions: string[];
+      replies: ReplyRef[];
     }
   | {
-      kind: 'status';
+      kind: 'turn_started';
       task_id: number;
+      seq: number;
       turn_id: string;
       agent: string;
       agent_display_name: string;
-      phase: 'building_context' | 'waiting_model' | 'running_tool' | 'streaming';
-      label: string;
+      trigger:
+        | { kind: 'user'; id: string }
+        | { kind: 'turn'; id: string };
+    }
+  | {
+      kind: 'message_started';
+      task_id: number;
+      seq: number;
+      turn_id: string;
+      message_id: string;
       runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
       kind: 'tool_started';
       task_id: number;
+      seq: number;
       turn_id: string;
+      message_id: string;
       tool_call_id: string;
       tool_name: string;
       summary: string;
@@ -358,7 +424,9 @@ export type BackendAgentProgressEvent =
   | {
       kind: 'tool_finished';
       task_id: number;
+      seq: number;
       turn_id: string;
+      message_id: string;
       tool_call_id: string;
       status: 'success' | 'error';
       summary: string;
@@ -367,51 +435,39 @@ export type BackendAgentProgressEvent =
       runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
-      kind: 'assistant_text_preview';
+      kind: 'assistant_stream_delta';
       task_id: number;
+      seq: number;
       turn_id: string;
-      agent: string;
-      agent_display_name: string;
-      message: string;
-      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
-    }
-  | {
-      kind: 'assistant_message_checkpoint';
-      task_id: number;
-      turn_id: string;
-      agent: string;
-      agent_display_name: string;
       message_id: string;
-      content: string;
-      checkpoint_type: 'intermediate' | 'final';
+      field: 'reasoning' | 'content' | 'tool_call_arguments';
+      delta: string;
+      tool_call_id?: string | null;
       runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
     }
   | {
-      kind: 'final_assistant_message';
+      kind: 'message_finished';
       task_id: number;
+      seq: number;
       turn_id: string;
-      assistant_message: BackendHistoryTurn;
+      message_id: string;
+      runtime: NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['runtime']>;
+    }
+  | {
+      kind: 'turn_finished';
+      task_id: number;
+      seq: number;
+      turn_id: string;
+      reason: 'idle' | 'failed' | 'cancelled';
+      error_message?: string | null;
       task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
     }
   | {
       kind: 'round_complete';
       task_id: number;
+      seq: number;
       turn_id: string;
       debug_round: BackendDebugRoundView;
-      task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
-    }
-  | {
-      kind: 'turn_failed';
-      task_id: number;
-      turn_id: string;
-      stage: 'context' | 'tool' | 'provider' | 'internal';
-      message: string;
-      retryable: boolean;
-    }
-  | {
-      kind: 'turn_cancelled';
-      task_id: number;
-      turn_id: string;
       task: NonNullable<BackendWorkspaceSnapshot['active_task']>;
     };
 
@@ -488,7 +544,16 @@ export type TaskModelSelectorView = {
   }>;
 };
 
-export type BackendHistoryTurn = NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['history']>[number];
+export type BackendTaskTimelineEntry = NonNullable<
+  NonNullable<BackendWorkspaceSnapshot['active_task']>['timeline']
+>[number];
+export type BackendTaskHistoryView = {
+  timeline: BackendTaskTimelineEntry[];
+  last_seq: number;
+};
+export type BackendTaskSubscriptionView = {
+  status: 'subscribed' | 'gap_too_large';
+};
 export type BackendDebugRoundView = NonNullable<
   NonNullable<NonNullable<BackendWorkspaceSnapshot['active_task']>['debug_trace']>['rounds']
 >[number];
@@ -584,31 +649,7 @@ export const mockWorkspace: WorkspaceView = {
   selectedPresencePenalty: 0,
   selectedFrequencyPenalty: 0,
   workingDirectory: 'D:/playground/MA',
-  chat: [
-    {
-      role: 'user',
-      author: 'User',
-      time: '14:32',
-      content: '帮我把 auth 模块拆成更小的单元。',
-    },
-    {
-      role: 'assistant',
-      author: 'March',
-      time: '14:32',
-      content: '好的，我先看一下现有结构，然后把依赖边界切开。',
-      tools: [
-        { label: 'open_file', summary: 'src/auth.rs' },
-        { label: 'replace_lines', summary: '12-30' },
-        { label: 'reply', summary: '发送了用户可见消息' },
-      ],
-    },
-    {
-      role: 'assistant',
-      author: 'March',
-      time: '14:33',
-      content: '已完成，auth 模块现在拆成了三个文件，接口层更清晰了。',
-    },
-  ] satisfies ChatMessage[],
+  timeline: [],
   notes: [
     { id: 'target', content: '当前目标：拆分 auth 模块' },
     { id: 'plan', content: '1. 读现有结构 2. 拆接口层 3. 补测试' },
@@ -700,7 +741,7 @@ export function createEmptyWorkspaceView(input?: {
     selectedFrequencyPenalty: undefined,
     selectedMaxOutputTokens: undefined,
     workingDirectory,
-    chat: [],
+    timeline: [],
     notes: [],
     openFiles: [],
     hints: [],
@@ -714,7 +755,6 @@ export function createEmptyWorkspaceView(input?: {
       sections: [],
     },
     debugRounds: [],
-    liveTurn: undefined,
     workspacePath,
     databasePath: undefined,
   };
@@ -757,7 +797,7 @@ export function toWorkspaceView(snapshot: unknown): WorkspaceView {
       activeTask?.task.model_max_output_tokens
       ?? workspace.tasks.find((task) => task.id === Number(activeTaskId))?.model_max_output_tokens
       ?? undefined,
-    chat: activeTask ? toChatMessages(activeTask.history) : [],
+    timeline: activeTask ? toTaskTimelineEntries(activeTask.timeline) : [],
     ...toWorkspaceContextView(activeTask, activeTask?.task.working_directory ?? workspace.workspace_path),
   };
 }
@@ -805,30 +845,62 @@ export function mergeTaskRuntimeSnapshot(
   };
 }
 
-export function toChatMessages(history: BackendHistoryTurn[]): ChatMessage[] {
-  return history.map(toChatMessage);
-}
+export function toTaskTimelineEntries(entries: BackendTaskTimelineEntry[]): TaskTimelineEntry[] {
+  return entries.map((entry) => {
+    if (entry.kind === 'user_message') {
+      return {
+        kind: 'user_message',
+        userMessageId: entry.user_message_id,
+        content: entry.content,
+        mentions: [...entry.mentions],
+        replies: entry.replies.map((reply) => ({ ...reply })),
+        ts: entry.timestamp * 1000,
+        author: 'User',
+        images: entry.images.map((image) => ({
+          id: image.id,
+          name: image.name,
+          previewUrl: image.data_url,
+          mediaType: image.media_type,
+          sourcePath: image.source_path ?? undefined,
+        })),
+      } satisfies UserMessage;
+    }
 
-export function toChatMessage(turn: BackendHistoryTurn): ChatMessage {
-  return {
-    id: buildHistoryMessageId(turn),
-    role: turn.role === 'User' ? 'user' : 'assistant',
-    author: turn.role === 'User' ? 'User' : (turn.agent_display_name || turn.agent || 'March'),
-    time: formatTime(turn.timestamp),
-    timestamp: turn.timestamp * 1000,
-    content: turn.content,
-    images: turn.images?.map((image) => ({
-      id: image.id,
-      name: image.name,
-      previewUrl: image.dataUrl,
-      mediaType: image.mediaType,
-      sourcePath: image.sourcePath ?? undefined,
-    })),
-    tools: turn.tool_summaries.map((tool) => ({
-      label: tool.name,
-      summary: tool.summary,
-    })),
-  };
+    return {
+      kind: 'turn',
+      turnId: entry.turn_id,
+      agentId: entry.agent_id,
+      agentName: entry.agent_display_name,
+      trigger: { ...entry.trigger },
+      state: toTurnState(entry.state),
+      errorMessage: entry.error_message ?? undefined,
+      ts: entry.timestamp * 1000,
+      messages: entry.messages.map((message) => ({
+        messageId: message.message_id,
+        turnId: message.turn_id,
+        state: toAssistantMessageState(message.state),
+        reasoning: message.reasoning,
+        timeline: message.timeline.map((timelineEntry) => {
+          if (timelineEntry.kind === 'text') {
+            return {
+              kind: 'text',
+              text: timelineEntry.text,
+            } satisfies AssistantTimelineTextEntry;
+          }
+
+          return {
+            kind: 'tool',
+            toolCallId: timelineEntry.tool_call_id,
+            toolName: timelineEntry.tool_name,
+            arguments: timelineEntry.arguments,
+            status: toToolCallState(timelineEntry.status),
+            preview: timelineEntry.preview ?? undefined,
+            durationMs: timelineEntry.duration_ms ?? undefined,
+          } satisfies AssistantTimelineToolEntry;
+        }),
+      })),
+    } satisfies Turn;
+  });
 }
 
 export function toDebugRoundItem(round: BackendDebugRoundView): DebugRoundItem {
@@ -847,29 +919,32 @@ export function toDebugRoundItem(round: BackendDebugRoundView): DebugRoundItem {
   };
 }
 
-function formatTime(timestamp: number) {
-  return new Date(timestamp * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function buildHistoryMessageId(turn: BackendHistoryTurn) {
-  return [
-    'history',
-    turn.role,
-    turn.timestamp,
-    turn.agent_display_name || turn.agent || '',
-    hashString(turn.content),
-  ].join(':');
-}
-
-function hashString(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+function toTurnState(state: string): Turn['state'] {
+  switch (state) {
+    case 'streaming':
+      return 'streaming';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return 'done';
   }
-  return hash.toString(16);
+}
+
+function toAssistantMessageState(state: string): AssistantMessage['state'] {
+  return state === 'streaming' ? 'streaming' : 'done';
+}
+
+function toToolCallState(state: string): AssistantTimelineToolEntry['status'] {
+  switch (state) {
+    case 'running':
+      return 'running';
+    case 'error':
+      return 'error';
+    default:
+      return 'ok';
+  }
 }
 
 function formatRelativeTime(timestamp: number) {

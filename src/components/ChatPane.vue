@@ -2,11 +2,16 @@
   <section class="panel flex min-h-0 overflow-visible flex-col">
     <div class="chat-pane-header">
       <div class="chat-pane-meta">
-        {{ chat.length ? `${chat.length} messages` : 'No messages yet' }}
+        {{ timeline.length ? `${timeline.length} entries` : 'No messages yet' }}
       </div>
     </div>
 
-    <ChatMessageList :chat="chat" :live-turn="liveTurn" :task-id="taskId" />
+    <ChatMessageList
+      :timeline="timeline"
+      :task-id="taskId"
+      @reply-entry="addReply"
+      @cancel-turn="emit('cancelTurn', $event)"
+    />
 
     <div class="shrink-0 p-2" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
       <div ref="composerRootRef" class="chat-composer-shell">
@@ -28,6 +33,24 @@
           @dragleave="handleDragLeave"
           @drop="handleDrop"
         >
+          <div v-if="replyPreviews.length" class="chat-composer-replies" aria-label="Referenced replies">
+            <button
+              v-for="reply in replyPreviews"
+              :key="`${reply.kind}:${reply.id}`"
+              class="reply-chip"
+              type="button"
+              :disabled="disabled"
+              @click="removeReply(reply.kind, reply.id)"
+            >
+              <span class="reply-chip-kind">{{ reply.kind === 'turn' ? 'TURN' : 'MSG' }}</span>
+              <span class="reply-chip-body">
+                <span class="reply-chip-author">{{ reply.author }}</span>
+                <span class="reply-chip-summary">{{ reply.summary }}</span>
+              </span>
+              <span class="reply-chip-remove" aria-hidden="true">×</span>
+            </button>
+          </div>
+
           <div v-if="mentions.length" class="chat-composer-chips" aria-label="Referenced context">
             <button
               v-for="chip in mentions"
@@ -160,7 +183,7 @@
                 v-else
                 class="composer-send-button"
                 type="button"
-                :disabled="disabled || interactionLocked || composerIsEmpty"
+                :disabled="disabled || interactionLocked || composerSubmitDisabled"
                 @click="submit"
               >
                 ↵发送
@@ -311,10 +334,14 @@ import ChatPaneModelSettingsMenu from '@/components/chat/ChatPaneModelSettingsMe
 import { useChatComposer } from '@/composables/useChatComposer';
 import { useTaskModelSelector } from '@/composables/useTaskModelSelector';
 import type { ComposerImageAttachment } from '@/composables/useChatComposer';
+import type { ReplyRef } from '@/data/mock';
+import {
+  extractAgentMentionsFromComposerText,
+  type ComposerReplyPreview,
+} from '@/composables/workspaceApp/types';
 
 const props = defineProps<{
-  chat: import('../data/mock').ChatMessage[];
-  liveTurn?: import('../data/mock').LiveTurn;
+  timeline: import('../data/mock').TaskTimelineEntry[];
   disabled?: boolean;
   sending?: boolean;
   interactionLocked?: boolean;
@@ -332,7 +359,15 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [payload: { content: string; directories: string[]; files: string[]; skills: string[]; images: ComposerImageAttachment[] }];
+  send: [payload: {
+    content: string;
+    mentions: string[];
+    replies: ReplyRef[];
+    directories: string[];
+    files: string[];
+    skills: string[];
+    images: ComposerImageAttachment[];
+  }];
   setModel: [selection: { modelConfigId: number }];
   setModelSettings: [settings: {
     temperature?: number | null;
@@ -342,7 +377,7 @@ const emit = defineEmits<{
     maxOutputTokens?: number | null;
   }];
   setWorkingDirectory: [path?: string | null];
-  cancelTurn: [];
+  cancelTurn: [turnId?: string];
 }>();
 
 const disabledRef = computed(() => !!props.disabled);
@@ -452,6 +487,12 @@ const {
 });
 
 const previewImage = ref<ComposerImageAttachment | null>(null);
+const replyPreviews = ref<ComposerReplyPreview[]>([]);
+const composerSubmitDisabled = computed(() =>
+  props.disabled
+  || props.interactionLocked
+  || (composerIsEmpty.value && replyPreviews.value.length === 0),
+);
 
 watch(
   draft,
@@ -466,6 +507,7 @@ watch(
   () => props.taskId,
   () => {
     resetComposer();
+    replyPreviews.value = [];
   },
 );
 
@@ -483,7 +525,11 @@ function onComposerKeydown(event: KeyboardEvent) {
 
 function submit() {
   const content = draft.value.trim();
-  if ((!content && mentions.value.length === 0 && imageAttachments.value.length === 0) || props.disabled || props.interactionLocked) {
+  if (
+    (!content && mentions.value.length === 0 && imageAttachments.value.length === 0 && replyPreviews.value.length === 0)
+    || props.disabled
+    || props.interactionLocked
+  ) {
     return;
   }
 
@@ -492,11 +538,14 @@ function submit() {
   const skills = mentions.value.filter((item) => item.kind === 'skill').map((item) => item.path);
   emit('send', {
     content,
+    mentions: extractAgentMentionsFromComposerText(content),
+    replies: replyPreviews.value.map((reply) => ({ kind: reply.kind, id: reply.id })),
     directories,
     files,
     skills,
     images: imageAttachments.value,
   });
+  replyPreviews.value = [];
   resetComposer();
   closeAllMenus();
 }
@@ -507,6 +556,18 @@ function openImagePreview(image: ComposerImageAttachment) {
 
 function closeImagePreview() {
   previewImage.value = null;
+}
+
+function addReply(reply: ComposerReplyPreview) {
+  if (replyPreviews.value.some((entry) => entry.kind === reply.kind && entry.id === reply.id)) {
+    return;
+  }
+
+  replyPreviews.value = [...replyPreviews.value, reply];
+}
+
+function removeReply(kind: ReplyRef['kind'], id: string) {
+  replyPreviews.value = replyPreviews.value.filter((reply) => !(reply.kind === kind && reply.id === id));
 }
 
 defineExpose({

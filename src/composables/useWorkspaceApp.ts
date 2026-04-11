@@ -1,7 +1,7 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useConfirmDialog } from '@/composables/useConfirmDialog';
-import { useLiveTurns } from '@/composables/useLiveTurns';
 import { useNoteDialog } from '@/composables/useNoteDialog';
 import { useMemoryDialog } from '@/composables/useMemoryDialog';
 import { useAppearanceSettings } from '@/composables/useAppearanceSettings';
@@ -10,14 +10,15 @@ import { useProviderSettings } from '@/composables/useProviderSettings';
 import type {
   BackendAgentProgressEvent,
   BackendRuntimeSnapshot,
+  BackendTaskSubscriptionView,
   BackendWorkspaceSnapshot,
-  ChatMessage,
   DebugRoundItem,
+  TaskActivityStatus,
 } from '@/data/mock';
 import { debugChat, summarizeAgentEvent, summarizeSnapshot } from '@/lib/chatDebug';
 import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
 import { useWorkspaceSnapshotState } from '@/composables/workspaceApp/useWorkspaceSnapshotState';
-import { useTaskChatState } from '@/composables/workspaceApp/useTaskChatState';
+import { useTaskTimelineState } from '@/composables/workspaceApp/useTaskTimelineState';
 import { useWorkspaceTaskActions } from '@/composables/workspaceApp/useWorkspaceTaskActions';
 import {
   humanizeError,
@@ -36,6 +37,11 @@ type BackendNotice = {
   timestamp: number;
 };
 
+type TaskWorkingChangedEvent = {
+  task_id: number;
+  working: boolean;
+};
+
 export function useWorkspaceApp() {
   const appTitle = 'March';
   const busy = ref(false);
@@ -47,8 +53,7 @@ export function useWorkspaceApp() {
   const noteDialogRef = ref<NoteEditorDialogHandle | null>(null);
   const memoryDialogRef = ref<MemoryEditorDialogHandle | null>(null);
   const snapshot = ref<BackendWorkspaceSnapshot | null>(null);
-  const workspacePath = computed(() => snapshot.value?.workspace_path);
-  let appendTaskChatMessage = (_taskId: number, _message: ChatMessage) => {};
+  const taskActivityStatuses = ref<Record<number, TaskActivityStatus>>({});
   let appendTaskDebugRound = (_taskId: number, _round: DebugRoundItem) => {};
   let syncTaskContextSnapshot = (
     _taskId: number,
@@ -67,48 +72,28 @@ export function useWorkspaceApp() {
     closeWindow,
   } = useWindowControls();
 
-  let unlistenAgentProgress: UnlistenFn | null = null;
+  let unlistenTaskProgress: UnlistenFn | null = null;
+  let unlistenTaskWorkingChanged: UnlistenFn | null = null;
   let unlistenMemoryChanged: UnlistenFn | null = null;
   let unlistenBackendNotice: UnlistenFn | null = null;
-
-  const {
-    liveTurns,
-    archivedFailedTurns,
-    archivedIntermediateTurns,
-    taskActivityStatuses,
-    applyAgentProgress,
-    upsertLiveTurn,
-    archiveFailedTurn,
-    clearLiveTurn,
-    clearTaskActivity,
-    clearArchivedFailedTurns,
-    clearArchivedIntermediateTurns,
-  } = useLiveTurns({
-    snapshot,
-    sendingTaskId,
-    errorMessage,
-    workspacePath,
-    appendTaskChatMessage: (taskId, message) => appendTaskChatMessage(taskId, message),
-    appendTaskDebugRound: (taskId, round) => appendTaskDebugRound(taskId, round),
-    setTaskRuntimeSnapshot: (taskId, runtime) => setTaskRuntimeSnapshot(taskId, runtime),
-    syncTaskContextSnapshot: (taskId, task) => syncTaskContextSnapshot(taskId, task),
-  });
+  let stopTaskSubscriptionWatch: (() => void) | null = null;
+  let taskSubscriptionGeneration = 0;
 
   const workspaceState = useWorkspaceSnapshotState({
     snapshot,
-    liveTurns,
     taskActivityStatuses,
   });
   setTaskRuntimeSnapshot = workspaceState.setTaskRuntimeSnapshot;
   syncTaskContextSnapshot = workspaceState.syncTaskContextSnapshot;
-  const taskChatState = useTaskChatState({
+  const taskChatState = useTaskTimelineState({
     snapshot,
     activeTaskIdNumber: workspaceState.activeTaskIdNumber,
-    liveTurns,
-    archivedFailedTurns,
-    archivedIntermediateTurns,
+    taskActivityStatuses,
+    setTaskRuntimeSnapshot: (taskId, runtime) => setTaskRuntimeSnapshot(taskId, runtime),
+    syncTaskContextSnapshot: (taskId, task) => syncTaskContextSnapshot(taskId, task),
+    appendTaskDebugRound: (taskId, round) => appendTaskDebugRound(taskId, round),
   });
-  appendTaskChatMessage = taskChatState.appendTaskChatMessage;
+  const { applyAgentProgress, clearTaskActivity } = taskChatState;
   appendTaskDebugRound = workspaceState.appendTaskDebugRound;
 
   const {
@@ -180,18 +165,12 @@ export function useWorkspaceApp() {
   } = useWorkspaceTaskActions({
     workspaceState,
     taskChatState,
-    liveTurns,
     sendingTaskId,
     cancellingTaskId,
     busy,
     errorMessage,
     chatPaneRef,
     clearTaskActivity,
-    upsertLiveTurn,
-    archiveFailedTurn,
-    clearLiveTurn,
-    clearArchivedFailedTurns,
-    clearArchivedIntermediateTurns,
     openCreateNoteDialog,
     openEditNoteDialog,
     openCreateMemoryDialog,
@@ -263,9 +242,12 @@ export function useWorkspaceApp() {
   async function initialize() {
     debugChat('workspace-app', 'initialize:start');
     await initializeWindowState();
-    unlistenAgentProgress = await listen<BackendAgentProgressEvent>('march://agent-progress', (event) => {
-      debugChat('workspace-app', 'event:received', summarizeAgentEvent(event.payload));
-      applyAgentProgress(event.payload);
+    unlistenTaskWorkingChanged = await listen<TaskWorkingChangedEvent>('march://task-working-changed', (event) => {
+      taskActivityStatuses.value[event.payload.task_id] = event.payload.working ? 'working' : 'review';
+      debugChat('workspace-app', 'task-working:changed', {
+        taskId: event.payload.task_id,
+        working: event.payload.working,
+      });
     });
     unlistenMemoryChanged = await listen('march://memory-changed', async () => {
       debugChat('workspace-app', 'memory-changed:received', {
@@ -294,15 +276,85 @@ export function useWorkspaceApp() {
     debugChat('workspace-app', 'refreshWorkspace:init:start');
     await refreshWorkspace();
     debugChat('workspace-app', 'refreshWorkspace:init:done', summarizeSnapshot(snapshot.value));
+    stopTaskSubscriptionWatch = watch(
+      workspaceState.activeTaskIdNumber,
+      async (taskId, previousTaskId) => {
+        const generation = ++taskSubscriptionGeneration;
+        if (previousTaskId) {
+          if (unlistenTaskProgress) {
+            unlistenTaskProgress();
+            unlistenTaskProgress = null;
+          }
+          await invoke('unsubscribe_task', { taskId: previousTaskId });
+        }
+
+        if (generation !== taskSubscriptionGeneration || !taskId) {
+          return;
+        }
+
+        const eventName = `march://task-progress:${taskId}`;
+        const localUnlisten = await listen<BackendAgentProgressEvent>(eventName, (event) => {
+          debugChat('workspace-app', 'event:received', summarizeAgentEvent(event.payload));
+          applyAgentProgress(event.payload);
+        });
+        if (generation !== taskSubscriptionGeneration) {
+          localUnlisten();
+          await invoke('unsubscribe_task', { taskId });
+          return;
+        }
+        unlistenTaskProgress = localUnlisten;
+
+        let subscription = await invoke<BackendTaskSubscriptionView>('subscribe_task', {
+          taskId,
+          sinceSeq: taskChatState.getTaskLastSeq(taskId),
+        });
+        if (generation !== taskSubscriptionGeneration) {
+          localUnlisten();
+          await invoke('unsubscribe_task', { taskId });
+          return;
+        }
+
+        if (subscription.status === 'gap_too_large') {
+          debugChat('workspace-app', 'task-subscription:gap-too-large', { taskId });
+          await taskChatState.loadTaskHistory(taskId);
+          if (generation !== taskSubscriptionGeneration) {
+            localUnlisten();
+            await invoke('unsubscribe_task', { taskId });
+            return;
+          }
+          subscription = await invoke<BackendTaskSubscriptionView>('subscribe_task', {
+            taskId,
+            sinceSeq: taskChatState.getTaskLastSeq(taskId),
+          });
+          if (generation !== taskSubscriptionGeneration) {
+            localUnlisten();
+            await invoke('unsubscribe_task', { taskId });
+            return;
+          }
+        }
+
+        debugChat('workspace-app', 'task-subscription:ready', {
+          taskId,
+          status: subscription.status,
+          lastSeq: taskChatState.getTaskLastSeq(taskId),
+        });
+      },
+      { immediate: true },
+    );
     await refreshProviderSettings();
     debugChat('workspace-app', 'initialize:done');
   }
 
   function dispose() {
     debugChat('workspace-app', 'dispose:start');
-    if (unlistenAgentProgress) {
-      unlistenAgentProgress();
-      unlistenAgentProgress = null;
+    taskSubscriptionGeneration += 1;
+    if (unlistenTaskProgress) {
+      unlistenTaskProgress();
+      unlistenTaskProgress = null;
+    }
+    if (unlistenTaskWorkingChanged) {
+      unlistenTaskWorkingChanged();
+      unlistenTaskWorkingChanged = null;
     }
     if (unlistenMemoryChanged) {
       unlistenMemoryChanged();
@@ -311,6 +363,10 @@ export function useWorkspaceApp() {
     if (unlistenBackendNotice) {
       unlistenBackendNotice();
       unlistenBackendNotice = null;
+    }
+    if (stopTaskSubscriptionWatch) {
+      stopTaskSubscriptionWatch();
+      stopTaskSubscriptionWatch = null;
     }
     disposeWindowState();
     debugChat('workspace-app', 'dispose:done');

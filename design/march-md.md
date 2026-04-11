@@ -512,22 +512,26 @@ const liveBlock    = computed(() => parser.getLiveBlock())
 
 ## 与现有代码的集成
 
-`ChatMessageList.vue` 中两处 `<MarkdownRender>` 替换为 `<MarchMd>`：
+`<TimelineRenderer />` 组件遍历 `AssistantMessage.timeline`，对每个 `{ kind: 'text' }` 条目渲染 `<MarchMd>`，传入拼合文本与 streaming 状态：
 
 ```vue
-<!-- 历史消息（已完成） -->
+<!-- TimelineRenderer 内部，渲染单个 TextChunk -->
+
+<!-- 历史消息内的文本条目（Turn 已 done） -->
 <MarchMd
-  :content="renderAssistantContent(message.content)"
+  :content="entry.text"
   :final="true"
 />
 
-<!-- Streaming 中的消息 -->
+<!-- Streaming 中最后一个 TextChunk（Turn 仍 streaming 且该 entry 是 timeline 末尾） -->
 <MarchMd
-  :content="renderAssistantContent(liveTurn.content)"
-  :final="liveTurn.state !== 'streaming'"
-  :cursor="liveTurn.state === 'streaming'"
+  :content="entry.text"
+  :final="false"
+  :cursor="true"
 />
 ```
+
+完整的 TextChunk 文本由 `chatEventReducer` 增量追加维护，`<TimelineRenderer />` 直接读取 `entry.text`，无需手动拼合。`<MarchMd>` 自身收到 `:final="true"` 或 `:cursor="false"` 后按最终态渲染，不再激活 Live Tail。
 
 移除 `markstream-vue` 相关的 import（`main.ts` 第 6 行）及 CSS 覆盖样式。
 

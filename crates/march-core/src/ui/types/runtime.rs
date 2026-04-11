@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
+
+use super::{UiReplyRef, UiTurnTrigger};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiWorkspaceSnapshot {
@@ -32,13 +33,74 @@ pub struct UiTaskSummary {
 pub struct UiTaskSnapshot {
     pub task: UiTaskSummary,
     pub active_agent: String,
-    pub history: Vec<UiTurnView>,
+    pub last_seq: u64,
+    pub timeline: Vec<UiTaskTimelineEntry>,
     pub notes: Vec<UiNoteView>,
     pub open_files: Vec<UiOpenFileView>,
     pub hints: Vec<UiHintView>,
     pub system_status: UiSystemStatusView,
     pub runtime: Option<UiRuntimeSnapshot>,
     pub debug_trace: Option<UiDebugTraceView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UiTaskTimelineEntry {
+    UserMessage(UiUserMessageView),
+    Turn(UiTimelineTurnView),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiTaskHistoryView {
+    pub timeline: Vec<UiTaskTimelineEntry>,
+    pub last_seq: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiUserMessageView {
+    pub user_message_id: String,
+    pub content: String,
+    pub images: Vec<UiImageAttachmentView>,
+    pub mentions: Vec<String>,
+    pub replies: Vec<UiReplyRef>,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiTimelineTurnView {
+    pub turn_id: String,
+    pub agent_id: String,
+    pub agent_display_name: String,
+    pub trigger: UiTurnTrigger,
+    pub state: String,
+    pub error_message: Option<String>,
+    pub timestamp: i64,
+    pub messages: Vec<UiAssistantMessageView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiAssistantMessageView {
+    pub message_id: String,
+    pub turn_id: String,
+    pub state: String,
+    pub reasoning: String,
+    pub timeline: Vec<UiAssistantTimelineEntryView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UiAssistantTimelineEntryView {
+    Text {
+        text: String,
+    },
+    Tool {
+        tool_call_id: String,
+        tool_name: String,
+        arguments: String,
+        status: String,
+        preview: Option<String>,
+        duration_ms: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,58 +189,6 @@ pub struct UiSkillSearchView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UiTurnView {
-    pub role: UiRoleView,
-    pub agent: String,
-    pub agent_display_name: String,
-    pub content: String,
-    pub images: Vec<UiImageAttachmentView>,
-    pub tool_summaries: Vec<UiToolSummaryView>,
-    pub timestamp: i64,
-}
-
-impl UiTurnView {
-    pub fn assistant_message(
-        agent: impl Into<String>,
-        agent_display_name: impl Into<String>,
-        content: impl Into<String>,
-        tool_summaries: Vec<UiToolSummaryView>,
-        timestamp: i64,
-    ) -> Self {
-        Self {
-            role: UiRoleView::Assistant,
-            agent: agent.into(),
-            agent_display_name: agent_display_name.into(),
-            content: content.into(),
-            images: Vec::new(),
-            tool_summaries,
-            timestamp,
-        }
-    }
-
-    pub fn from_system_time(
-        agent: impl Into<String>,
-        agent_display_name: impl Into<String>,
-        content: impl Into<String>,
-        tool_summaries: Vec<UiToolSummaryView>,
-        timestamp: SystemTime,
-    ) -> Self {
-        Self::assistant_message(
-            agent,
-            agent_display_name,
-            content,
-            tool_summaries,
-            timestamp
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .try_into()
-                .unwrap_or(i64::MAX),
-        )
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiImageAttachmentView {
     pub id: String,
@@ -186,14 +196,6 @@ pub struct UiImageAttachmentView {
     pub media_type: String,
     pub data_url: String,
     pub source_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UiRoleView {
-    System,
-    User,
-    Assistant,
-    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

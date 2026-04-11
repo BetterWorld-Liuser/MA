@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 
-use crate::context::{ContentBlock, Role, ToolSummary};
+use crate::context::ContentBlock;
 use crate::paths::canonicalize_clean;
 
 use super::TaskTitleSource;
@@ -60,42 +60,6 @@ impl TaskTitleSource {
             other => bail!("unknown task title source in database: {}", other),
         }
     }
-}
-
-pub fn role_to_db(role: Role) -> &'static str {
-    match role {
-        Role::System => "system",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-    }
-}
-
-pub fn role_from_db(role: &str) -> Result<Role> {
-    match role {
-        "system" => Ok(Role::System),
-        "user" => Ok(Role::User),
-        "assistant" => Ok(Role::Assistant),
-        "tool" => Ok(Role::Tool),
-        other => bail!("unknown role in database: {}", other),
-    }
-}
-
-pub fn encode_tool_summaries(tool_summaries: &[ToolSummary]) -> Result<Option<String>> {
-    if tool_summaries.is_empty() {
-        return Ok(None);
-    }
-
-    serde_json::to_string(tool_summaries)
-        .map(Some)
-        .context("failed to encode tool summaries as json")
-}
-
-pub fn decode_tool_summaries(raw: Option<&str>) -> Result<Vec<ToolSummary>> {
-    let Some(raw) = raw else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_str(raw).context("failed to decode tool summaries from json")
 }
 
 pub fn encode_content_blocks(content: &[ContentBlock]) -> Result<String> {

@@ -1,8 +1,8 @@
 import { nextTick, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import type { BackendWorkspaceSnapshot, ChatMessage, LiveTurn } from '@/data/mock';
+import type { BackendWorkspaceSnapshot } from '@/data/mock';
 import { toDebugRoundItem } from '@/data/mock';
-import { debugChat, summarizeLiveTurn, summarizeSnapshot } from '@/lib/chatDebug';
+import { debugChat, summarizeSnapshot } from '@/lib/chatDebug';
 import {
   augmentComposerMessage,
   extractBase64Payload,
@@ -18,17 +18,11 @@ type ChatPaneHandle = { focusComposer: () => void };
 type MessageActionsOptions = {
   workspaceState: WorkspaceSnapshotState;
   taskChatState: TaskChatState;
-  liveTurns: Ref<Record<number, LiveTurn>>;
   sendingTaskId: Ref<number | null>;
   cancellingTaskId: Ref<number | null>;
   errorMessage: Ref<string>;
   chatPaneRef: Ref<ChatPaneHandle | null>;
   clearTaskActivity: (taskId: number) => void;
-  upsertLiveTurn: (taskId: number, turn: LiveTurn) => void;
-  archiveFailedTurn: (taskId: number, turn: LiveTurn) => void;
-  clearLiveTurn: (taskId: number) => void;
-  clearArchivedFailedTurns: (taskId: number) => void;
-  clearArchivedIntermediateTurns: (taskId: number) => void;
   openConfirmDialog: (options: {
     title: string;
     description: string;
@@ -43,17 +37,11 @@ type MessageActionsOptions = {
 export function createMessageActions({
   workspaceState,
   taskChatState,
-  liveTurns,
   sendingTaskId,
   cancellingTaskId,
   errorMessage,
   chatPaneRef,
   clearTaskActivity,
-  upsertLiveTurn,
-  archiveFailedTurn,
-  clearLiveTurn,
-  clearArchivedFailedTurns,
-  clearArchivedIntermediateTurns,
   openConfirmDialog,
   closeConfirmDialog,
   runWorkspaceAction,
@@ -69,7 +57,7 @@ export function createMessageActions({
     clearDeletedTaskOptimism,
     syncTaskContextSnapshot,
   } = workspaceState;
-  const { appendTaskChatMessage, clearTaskChat } = taskChatState;
+  const { optimisticAppendUserMessage, clearTaskTimeline } = taskChatState;
 
   function applyCompletedTaskSnapshot(nextSnapshot: BackendWorkspaceSnapshot, taskId: number) {
     debugChat('message-actions', 'apply-completed-snapshot:start', {
@@ -111,7 +99,7 @@ export function createMessageActions({
         ...nextActiveTask,
         runtime: nextActiveTask.runtime ?? currentActiveTask.runtime,
         debug_trace: nextActiveTask.debug_trace ?? currentActiveTask.debug_trace,
-        history: mergeCompletedTaskHistory(currentActiveTask.history, nextActiveTask.history),
+        timeline: mergeCompletedTaskTimeline(currentActiveTask.timeline, nextActiveTask.timeline),
       },
     };
     debugChat('message-actions', 'apply-completed-snapshot:merged', summarizeSnapshot(snapshot.value));
@@ -123,7 +111,6 @@ export function createMessageActions({
     // response does not clear the bubble before the final assistant event lands.
     debugChat('message-actions', 'send:finalize-success', {
       taskId,
-      liveTurn: summarizeLiveTurn(liveTurns.value[taskId]),
       snapshot: summarizeSnapshot(snapshot.value),
     });
     errorMessage.value = '';
@@ -160,16 +147,7 @@ export function createMessageActions({
       skills: payload.skills.length,
       images: payload.images.length,
     });
-    appendTaskChatMessage(taskId, buildPendingUserMessage(content, payload));
-    upsertLiveTurn(taskId, {
-      turnId: `pending-${Date.now()}`,
-      author: 'March',
-      state: 'pending',
-      statusLabel: '已发送，正在准备',
-      content: '',
-      errorMessage: '',
-      tools: [],
-    });
+    optimisticAppendUserMessage(taskId, buildPendingUserMessage(content, payload));
     sendingTaskId.value = taskId;
   }
 
@@ -177,20 +155,7 @@ export function createMessageActions({
     debugChat('message-actions', 'send:finalize-failed', {
       taskId,
       error: humanizeError(error),
-      liveTurn: summarizeLiveTurn(liveTurns.value[taskId]),
     });
-    const currentLiveTurn = liveTurns.value[taskId];
-    if (currentLiveTurn) {
-      const failedTurn: LiveTurn = {
-        ...currentLiveTurn,
-        state: 'error',
-        statusLabel: '本轮执行失败',
-        errorMessage: humanizeError(error),
-      };
-      upsertLiveTurn(taskId, failedTurn);
-      archiveFailedTurn(taskId, failedTurn);
-      clearLiveTurn(taskId);
-    }
     errorMessage.value = humanizeError(error);
   }
 
@@ -206,6 +171,8 @@ export function createMessageActions({
       input: {
         taskId,
         requestId,
+        mentions: payload.mentions,
+        replies: payload.replies,
         contentBlocks: [
           ...(content ? [{ type: 'text', text: content }] : []),
           ...payload.images.map((image) => ({
@@ -296,11 +263,8 @@ export function createMessageActions({
           return;
         }
         const numericTaskId = Number(taskId);
-        clearLiveTurn(numericTaskId);
         clearTaskActivity(numericTaskId);
-        clearArchivedFailedTurns(numericTaskId);
-        clearArchivedIntermediateTurns(numericTaskId);
-        clearTaskChat(numericTaskId);
+        clearTaskTimeline(numericTaskId);
         clearDeletedTaskOptimism(numericTaskId);
         if (sendingTaskId.value === numericTaskId) {
           sendingTaskId.value = null;
@@ -338,7 +302,6 @@ export function createMessageActions({
         taskId,
         sendingTaskId: sendingTaskId.value,
         cancellingTaskId: cancellingTaskId.value,
-        liveTurn: summarizeLiveTurn(liveTurns.value[taskId]),
       });
       if (sendingTaskId.value === taskId) {
         sendingTaskId.value = null;
@@ -349,23 +312,20 @@ export function createMessageActions({
     }
   }
 
-  async function cancelCurrentTurn() {
+  async function cancelCurrentTurn(turnId?: string) {
     if (!sendingTaskId.value || cancellingTaskId.value === sendingTaskId.value) {
       return;
     }
 
     const taskId = sendingTaskId.value;
     cancellingTaskId.value = taskId;
-    const currentLiveTurn = liveTurns.value[taskId];
-    if (currentLiveTurn) {
-      upsertLiveTurn(taskId, {
-        ...currentLiveTurn,
-        statusLabel: '正在中断…',
-      });
-    }
 
     try {
-      await invoke('cancel_turn', { taskId });
+      if (turnId) {
+        await invoke('cancel_turn', { turnId });
+      } else {
+        await invoke('cancel_task', { taskId });
+      }
     } catch (error) {
       cancellingTaskId.value = null;
       errorMessage.value = humanizeError(error);
@@ -382,23 +342,20 @@ export function createMessageActions({
   };
 }
 
-function buildPendingUserMessage(content: string, payload: ComposerPayload): ChatMessage {
+function buildPendingUserMessage(content: string, payload: ComposerPayload) {
   return {
-    role: 'user',
-    author: 'User',
-    time: new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    }),
-    timestamp: Date.now(),
+    id: `pending-user:${Date.now()}`,
+    ts: Date.now(),
     content,
+    mentions: payload.mentions,
+    replies: payload.replies,
     images: payload.images,
   };
 }
 
-function mergeCompletedTaskHistory(
-  currentHistory: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'],
-  nextHistory: NonNullable<BackendWorkspaceSnapshot['active_task']>['history'],
+function mergeCompletedTaskTimeline(
+  currentTimeline: NonNullable<BackendWorkspaceSnapshot['active_task']>['timeline'],
+  nextTimeline: NonNullable<BackendWorkspaceSnapshot['active_task']>['timeline'],
 ) {
-  return nextHistory.length >= currentHistory.length ? nextHistory : currentHistory;
+  return nextTimeline.length >= currentTimeline.length ? nextTimeline : currentTimeline;
 }

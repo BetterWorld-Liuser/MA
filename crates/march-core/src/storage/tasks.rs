@@ -5,15 +5,18 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, Row, params};
 
 use crate::agents::MARCH_AGENT_NAME;
-use crate::context::{ConversationHistory, DisplayTurn, Hint, NoteEntry};
+use crate::context::{Hint, NoteEntry};
 
 use super::codec::{
-    decode_content_blocks, decode_tool_summaries, decode_working_directory,
-    normalize_working_directory, optional_system_time, role_from_db, system_time_from_unix,
-    unix_timestamp,
+    decode_content_blocks, decode_working_directory, normalize_working_directory,
+    optional_system_time, system_time_from_unix, unix_timestamp,
 };
 use super::{
-    MarchStorage, PersistedNote, PersistedOpenFile, PersistedTask, TaskRecord, TaskTitleSource,
+    MarchStorage, PersistedAssistantMessage, PersistedAssistantMessageState,
+    PersistedAssistantTimelineEntry, PersistedNote, PersistedOpenFile, PersistedReplyRef,
+    PersistedTask, PersistedTaskTimeline, PersistedTaskTimelineEntry, PersistedToolCallState,
+    PersistedTurn, PersistedTurnState, PersistedTurnTrigger, PersistedUserMessage, TaskRecord,
+    TaskTitleSource,
 };
 
 #[derive(Debug, Clone)]
@@ -113,10 +116,11 @@ impl MarchStorage {
                     model_frequency_penalty,
                     model_max_output_tokens,
                     active_agent,
+                    last_event_seq,
                     created_at,
                     last_active
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     name,
                     title_source.as_db_value(),
@@ -130,6 +134,7 @@ impl MarchStorage {
                     normalized_frequency_penalty,
                     normalized_max_output_tokens.map(i64::from),
                     MARCH_AGENT_NAME,
+                    0_i64,
                     now_ts,
                     now_ts
                 ],
@@ -150,6 +155,7 @@ impl MarchStorage {
             model_frequency_penalty: normalized_frequency_penalty,
             model_max_output_tokens: normalized_max_output_tokens,
             active_agent: MARCH_AGENT_NAME.to_string(),
+            last_event_seq: 0,
             created_at: now,
             last_active: now,
         })
@@ -195,10 +201,22 @@ impl MarchStorage {
 
         transaction
             .execute(
-                "DELETE FROM conversation_turns WHERE task_id = ?1",
+                "DELETE FROM task_message_timeline_entries WHERE task_id = ?1",
                 params![task_id],
             )
-            .context("failed to delete task conversation turns")?;
+            .context("failed to delete task message timeline entries")?;
+        transaction
+            .execute(
+                "DELETE FROM task_turn_messages WHERE task_id = ?1",
+                params![task_id],
+            )
+            .context("failed to delete task turn messages")?;
+        transaction
+            .execute(
+                "DELETE FROM task_timeline_entries WHERE task_id = ?1",
+                params![task_id],
+            )
+            .context("failed to delete task timeline entries")?;
         transaction
             .execute("DELETE FROM notes WHERE task_id = ?1", params![task_id])
             .context("failed to delete task notes")?;
@@ -245,6 +263,31 @@ impl MarchStorage {
         require_task_found(affected, task_id)?;
 
         Ok(())
+    }
+
+    pub fn load_task_last_event_seq(&self, task_id: i64) -> Result<u64> {
+        let raw = self
+            .connection
+            .query_row(
+                "SELECT last_event_seq FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("failed to load task last_event_seq")?
+            .with_context(|| format!("task {} not found", task_id))?;
+        u64::try_from(raw).context("task last_event_seq must be non-negative")
+    }
+
+    pub fn update_task_last_event_seq(&self, task_id: i64, seq: u64) -> Result<()> {
+        let affected = self
+            .connection
+            .execute(
+                "UPDATE tasks SET last_event_seq = ?2 WHERE id = ?1",
+                params![task_id, i64::try_from(seq).context("task event seq overflow")?],
+            )
+            .context("failed to update task last_event_seq")?;
+        require_task_found(affected, task_id)
     }
 
     pub fn update_task_model_settings(
@@ -378,7 +421,7 @@ impl MarchStorage {
 
     pub fn load_task(&self, task_id: i64) -> Result<PersistedTask> {
         let task = self.load_task_record(task_id)?;
-        let history = self.load_conversation_history(task_id)?;
+        let timeline = self.load_task_timeline(task_id)?;
         let notes = self.load_notes(task_id)?;
         let open_files = self.load_open_files(task_id)?;
         let hints = self.load_hints()?;
@@ -386,7 +429,7 @@ impl MarchStorage {
         Ok(PersistedTask {
             active_agent: task.active_agent.clone(),
             task,
-            history,
+            timeline,
             notes,
             open_files,
             hints,
@@ -413,42 +456,174 @@ impl MarchStorage {
         raw.decode(&self.workspace_root)
     }
 
-    fn load_conversation_history(&self, task_id: i64) -> Result<ConversationHistory> {
+
+    fn load_task_timeline(&self, task_id: i64) -> Result<PersistedTaskTimeline> {
+        let mut entry_statement = self
+            .connection
+            .prepare(
+                "SELECT kind, user_message_id, turn_id, content, mentions_json, replies_json, agent_id, trigger_json, state, error_message, created_at
+                 FROM task_timeline_entries
+                 WHERE task_id = ?1
+                 ORDER BY position ASC, id ASC",
+            )
+            .context("failed to prepare task timeline query")?;
+
+        let rows = entry_statement
+            .query_map(params![task_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(10)?,
+                ))
+            })
+            .context("failed to query task timeline entries")?;
+
+        let mut timeline = Vec::new();
+        for row in rows {
+            let (
+                kind,
+                user_message_id,
+                turn_id,
+                content,
+                mentions_json,
+                replies_json,
+                agent_id,
+                trigger_json,
+                state,
+                error_message,
+                created_at,
+            ) = row.context("failed to decode task timeline row")?;
+
+            match kind.as_str() {
+                "user_message" => {
+                    timeline.push(PersistedTaskTimelineEntry::UserMessage(PersistedUserMessage {
+                        user_message_id: user_message_id
+                            .with_context(|| format!("missing user_message_id for task {}", task_id))?,
+                        content: decode_content_blocks(content.as_deref().unwrap_or("[]"))?,
+                        mentions: decode_json_list(mentions_json.as_deref())?,
+                        replies: decode_reply_refs(replies_json.as_deref())?,
+                        timestamp: system_time_from_unix(created_at)?,
+                    }));
+                }
+                "turn" => {
+                    let turn_id = turn_id
+                        .with_context(|| format!("missing turn_id for task {}", task_id))?;
+                    timeline.push(PersistedTaskTimelineEntry::Turn(PersistedTurn {
+                        turn_id: turn_id.clone(),
+                        agent_id: agent_id.unwrap_or_else(|| MARCH_AGENT_NAME.to_string()),
+                        trigger: decode_turn_trigger(trigger_json.as_deref())?,
+                        state: decode_turn_state(state.as_deref())?,
+                        error_message,
+                        timestamp: system_time_from_unix(created_at)?,
+                        messages: self.load_turn_messages(task_id, &turn_id)?,
+                    }));
+                }
+                other => bail!("unknown task timeline entry kind in database: {}", other),
+            }
+        }
+
+        Ok(timeline)
+    }
+
+    fn load_turn_messages(
+        &self,
+        task_id: i64,
+        turn_id: &str,
+    ) -> Result<Vec<PersistedAssistantMessage>> {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT role, agent, content, tool_summaries, created_at
-                 FROM conversation_turns
-                 WHERE task_id = ?1
-                 ORDER BY created_at ASC, id ASC",
+                "SELECT message_id, state, reasoning
+                 FROM task_turn_messages
+                 WHERE task_id = ?1 AND turn_id = ?2
+                 ORDER BY position ASC, id ASC",
             )
-            .context("failed to prepare conversation query")?;
+            .context("failed to prepare turn messages query")?;
 
         let rows = statement
-            .query_map(params![task_id], |row| {
+            .query_map(params![task_id, turn_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, i64>(4)?,
                 ))
             })
-            .context("failed to query conversation history")?;
+            .context("failed to query turn messages")?;
 
-        let mut turns = Vec::new();
+        let mut messages = Vec::new();
         for row in rows {
-            let (role, agent, content, tool_summaries_json, created_at) =
-                row.context("failed to decode conversation row")?;
-            turns.push(DisplayTurn {
-                role: role_from_db(&role)?,
-                agent,
-                content: decode_content_blocks(&content)?,
-                tool_calls: decode_tool_summaries(tool_summaries_json.as_deref())?,
-                timestamp: system_time_from_unix(created_at)?,
+            let (message_id, state, reasoning) = row.context("failed to decode turn message row")?;
+            messages.push(PersistedAssistantMessage {
+                message_id: message_id.clone(),
+                turn_id: turn_id.to_string(),
+                state: decode_message_state(&state)?,
+                reasoning,
+                timeline: self.load_message_timeline_entries(task_id, &message_id)?,
             });
         }
-        Ok(ConversationHistory { turns })
+
+        Ok(messages)
+    }
+
+    fn load_message_timeline_entries(
+        &self,
+        task_id: i64,
+        message_id: &str,
+    ) -> Result<Vec<PersistedAssistantTimelineEntry>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT kind, text, tool_call_id, tool_name, arguments, status, preview, duration_ms
+                 FROM task_message_timeline_entries
+                 WHERE task_id = ?1 AND message_id = ?2
+                 ORDER BY position ASC, id ASC",
+            )
+            .context("failed to prepare message timeline entries query")?;
+
+        let rows = statement
+            .query_map(params![task_id, message_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                ))
+            })
+            .context("failed to query message timeline entries")?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            let (kind, text, tool_call_id, tool_name, arguments, status, preview, duration_ms) =
+                row.context("failed to decode message timeline entry row")?;
+            match kind.as_str() {
+                "text" => entries.push(PersistedAssistantTimelineEntry::Text {
+                    text: text.unwrap_or_default(),
+                }),
+                "tool" => entries.push(PersistedAssistantTimelineEntry::Tool {
+                    tool_call_id: tool_call_id.unwrap_or_default(),
+                    tool_name: tool_name.unwrap_or_default(),
+                    arguments: arguments.unwrap_or_default(),
+                    status: decode_tool_call_state(status.as_deref())?,
+                    preview,
+                    duration_ms: duration_ms.and_then(|value| u64::try_from(value).ok()),
+                }),
+                other => bail!("unknown message timeline entry kind in database: {}", other),
+            }
+        }
+
+        Ok(entries)
     }
 
     fn load_notes(&self, task_id: i64) -> Result<Vec<PersistedNote>> {
@@ -551,7 +726,7 @@ impl MarchStorage {
     }
 }
 
-const TASK_RECORD_SELECT_COLUMNS: &str = "id, name, title_source, title_locked, working_directory, created_at, last_active, \
+const TASK_RECORD_SELECT_COLUMNS: &str = "id, name, title_source, title_locked, working_directory, created_at, last_active, last_event_seq, \
      selected_model_config_id, selected_model, model_temperature, model_top_p, \
      model_presence_penalty, model_frequency_penalty, model_max_output_tokens, active_agent";
 
@@ -563,6 +738,7 @@ struct RawTaskRecord {
     working_directory: Option<String>,
     created_at: i64,
     last_active: i64,
+    last_event_seq: i64,
     selected_model_config_id: Option<i64>,
     selected_model: Option<String>,
     model_temperature: Option<f32>,
@@ -583,6 +759,7 @@ impl RawTaskRecord {
             working_directory: row.get("working_directory")?,
             created_at: row.get("created_at")?,
             last_active: row.get("last_active")?,
+            last_event_seq: row.get("last_event_seq")?,
             selected_model_config_id: row.get("selected_model_config_id")?,
             selected_model: row.get("selected_model")?,
             model_temperature: row.get("model_temperature")?,
@@ -611,6 +788,8 @@ impl RawTaskRecord {
                 .model_max_output_tokens
                 .and_then(|value| u32::try_from(value).ok()),
             active_agent: self.active_agent,
+            last_event_seq: u64::try_from(self.last_event_seq)
+                .context("task last_event_seq must be non-negative")?,
             created_at: system_time_from_unix(self.created_at)?,
             last_active: system_time_from_unix(self.last_active)?,
         })
@@ -626,6 +805,56 @@ fn normalize_model_id(model: Option<String>) -> Option<String> {
             Some(trimmed)
         }
     })
+}
+
+fn decode_json_list(raw: Option<&str>) -> Result<Vec<String>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(raw).context("failed to decode string list from json")
+}
+
+fn decode_reply_refs(raw: Option<&str>) -> Result<Vec<PersistedReplyRef>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_str(raw).context("failed to decode reply refs from json")
+}
+
+fn decode_turn_trigger(raw: Option<&str>) -> Result<PersistedTurnTrigger> {
+    let Some(raw) = raw else {
+        return Ok(PersistedTurnTrigger::User {
+            id: "legacy-missing-trigger".to_string(),
+        });
+    };
+    serde_json::from_str(raw).context("failed to decode turn trigger from json")
+}
+
+fn decode_message_state(raw: &str) -> Result<PersistedAssistantMessageState> {
+    match raw {
+        "streaming" => Ok(PersistedAssistantMessageState::Streaming),
+        "done" => Ok(PersistedAssistantMessageState::Done),
+        other => bail!("unknown message state in database: {}", other),
+    }
+}
+
+fn decode_turn_state(raw: Option<&str>) -> Result<PersistedTurnState> {
+    match raw.unwrap_or("done") {
+        "streaming" => Ok(PersistedTurnState::Streaming),
+        "done" => Ok(PersistedTurnState::Done),
+        "failed" => Ok(PersistedTurnState::Failed),
+        "cancelled" => Ok(PersistedTurnState::Cancelled),
+        other => bail!("unknown turn state in database: {}", other),
+    }
+}
+
+fn decode_tool_call_state(raw: Option<&str>) -> Result<PersistedToolCallState> {
+    match raw.unwrap_or("ok") {
+        "running" => Ok(PersistedToolCallState::Running),
+        "ok" => Ok(PersistedToolCallState::Ok),
+        "error" => Ok(PersistedToolCallState::Error),
+        other => bail!("unknown tool call state in database: {}", other),
+    }
 }
 
 fn require_task_found(affected: usize, task_id: i64) -> Result<()> {

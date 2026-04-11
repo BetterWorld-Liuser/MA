@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::events::UiReplyRef;
 use super::provider::UiServerToolView;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +28,8 @@ pub struct UiDeleteTaskRequest {
 pub struct UiSendMessageRequest {
     pub task_id: Option<i64>,
     pub request_id: Option<String>,
+    pub mentions: Vec<String>,
+    pub replies: Vec<UiReplyRef>,
     pub content_blocks: Vec<UiComposerContentBlock>,
 }
 

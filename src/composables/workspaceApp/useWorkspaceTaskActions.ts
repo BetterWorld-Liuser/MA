@@ -1,5 +1,5 @@
 import type { Ref } from 'vue';
-import type { BackendMemoryDetailView, LiveTurn } from '@/data/mock';
+import type { BackendMemoryDetailView } from '@/data/mock';
 import type { ComposerPayload, TaskChatState, WorkspaceSnapshotState } from './types';
 import { createContextItemActions } from './contextItemActions';
 import { createMessageActions } from './messageActions';
@@ -9,18 +9,12 @@ import { createWorkspaceActionRunner } from './workspaceActionRunner';
 type UseWorkspaceTaskActionsOptions = {
   workspaceState: WorkspaceSnapshotState;
   taskChatState: TaskChatState;
-  liveTurns: Ref<Record<number, LiveTurn>>;
   sendingTaskId: Ref<number | null>;
   cancellingTaskId: Ref<number | null>;
   busy: Ref<boolean>;
   errorMessage: Ref<string>;
   chatPaneRef: Ref<{ focusComposer: () => void } | null>;
   clearTaskActivity: (taskId: number) => void;
-  upsertLiveTurn: (taskId: number, turn: LiveTurn) => void;
-  archiveFailedTurn: (taskId: number, turn: LiveTurn) => void;
-  clearLiveTurn: (taskId: number) => void;
-  clearArchivedFailedTurns: (taskId: number) => void;
-  clearArchivedIntermediateTurns: (taskId: number) => void;
   openCreateNoteDialog: () => void;
   openEditNoteDialog: (input: { id: string; content: string }) => void;
   openConfirmDialog: (options: {
@@ -64,18 +58,12 @@ type UseWorkspaceTaskActionsOptions = {
 export function useWorkspaceTaskActions({
   workspaceState,
   taskChatState,
-  liveTurns,
   sendingTaskId,
   cancellingTaskId,
   busy,
   errorMessage,
   chatPaneRef,
   clearTaskActivity,
-  upsertLiveTurn,
-  archiveFailedTurn,
-  clearLiveTurn,
-  clearArchivedFailedTurns,
-  clearArchivedIntermediateTurns,
   openCreateNoteDialog,
   openEditNoteDialog,
   openConfirmDialog,
@@ -98,17 +86,11 @@ export function useWorkspaceTaskActions({
   const messageActions = createMessageActions({
     workspaceState,
     taskChatState,
-    liveTurns,
     sendingTaskId,
     cancellingTaskId,
     errorMessage,
     chatPaneRef,
     clearTaskActivity,
-    upsertLiveTurn,
-    archiveFailedTurn,
-    clearLiveTurn,
-    clearArchivedFailedTurns,
-    clearArchivedIntermediateTurns,
     openConfirmDialog,
     closeConfirmDialog,
     runWorkspaceAction,
@@ -185,7 +167,7 @@ export function useWorkspaceTaskActions({
     selectTask,
     deleteTask,
     sendMessage: (payload: ComposerPayload) => messageActions.sendMessage(payload),
-    cancelCurrentTurn: () => messageActions.cancelCurrentTurn(),
+    cancelCurrentTurn: (turnId?: string) => messageActions.cancelCurrentTurn(turnId),
     addNote: () => contextItemActions.addNote(),
     editNote: (noteId: string) => contextItemActions.editNote(noteId),
     addMemory: () => contextItemActions.addMemory(),

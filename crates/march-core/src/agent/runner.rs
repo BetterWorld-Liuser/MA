@@ -7,8 +7,8 @@ use super::prompting::{append_assistant_tool_call_message, render_prompt};
 use super::tool_calls::{format_tool_error, preview_tool_result, summarize_tool_call};
 use super::{
     AgentProgressEvent, AgentRunResult, AgentSession, AgentStatusPhase, AgentToolStatus,
-    AssistantMessageCheckpoint, AssistantMessageCheckpointType, DebugRound, DebugToolCall,
-    FinalAssistantMessage, TURN_CANCELLED_ERROR_MESSAGE, ToolOutcome, TurnCancellation,
+    DebugRound, DebugToolCall, FinalAssistantMessage, TURN_CANCELLED_ERROR_MESSAGE, ToolOutcome,
+    TurnCancellation,
 };
 
 impl AgentSession {
@@ -107,6 +107,13 @@ impl AgentSession {
             let mut conversation = crate::provider::build_messages(&context);
             conversation.extend(transient_messages.clone());
             let mut content_preview = String::new();
+            let message_id = format!("assistant-message-{iteration}");
+            on_event(
+                self,
+                AgentProgressEvent::MessageStarted {
+                    message_id: message_id.clone(),
+                },
+            )?;
             on_event(
                 self,
                 AgentProgressEvent::Status {
@@ -127,17 +134,9 @@ impl AgentSession {
                                 content_preview.push_str(delta);
                                 on_event(
                                     self,
-                                    AgentProgressEvent::Status {
-                                        agent: self.active_agent_name().to_string(),
-                                        phase: AgentStatusPhase::Streaming,
-                                        label: "正在生成回复".to_string(),
-                                    },
-                                )?;
-                                on_event(
-                                    self,
                                     AgentProgressEvent::AssistantTextPreview {
-                                        agent: self.active_agent_name().to_string(),
-                                        message: content_preview.clone(),
+                                        message_id: message_id.clone(),
+                                        delta: delta.clone(),
                                     },
                                 )?;
                             }
@@ -174,9 +173,8 @@ impl AgentSession {
                     Some(text) if !text.trim().is_empty() => text,
                     _ => bail!("provider returned no tool calls and no text; cannot end turn"),
                 };
-                let final_message_id = format!("assistant-final-{iteration}");
                 let final_message = FinalAssistantMessage {
-                    message_id: final_message_id.clone(),
+                    message_id: message_id.clone(),
                     message: final_message,
                 };
                 self.add_assistant_turn(
@@ -185,11 +183,9 @@ impl AgentSession {
                 );
                 on_event(
                     self,
-                    AgentProgressEvent::AssistantMessageCheckpoint(AssistantMessageCheckpoint {
-                        message_id: final_message_id,
-                        message: final_message.message.clone(),
-                        checkpoint_type: AssistantMessageCheckpointType::Final,
-                    }),
+                    AgentProgressEvent::MessageFinished {
+                        message_id: message_id.clone(),
+                    },
                 )?;
                 on_event(
                     self,
@@ -212,16 +208,12 @@ impl AgentSession {
                 });
             }
 
-            if let Some(ref assistant_text) = assistant_text {
-                on_event(
-                    self,
-                    AgentProgressEvent::AssistantMessageCheckpoint(AssistantMessageCheckpoint {
-                        message_id: format!("assistant-intermediate-{iteration}"),
-                        message: assistant_text.clone(),
-                        checkpoint_type: AssistantMessageCheckpointType::Intermediate,
-                    }),
-                )?;
-            }
+            on_event(
+                self,
+                AgentProgressEvent::MessageFinished {
+                    message_id: message_id.clone(),
+                },
+            )?;
 
             append_assistant_tool_call_message(
                 &mut transient_messages,
@@ -244,6 +236,7 @@ impl AgentSession {
                 on_event(
                     self,
                     AgentProgressEvent::ToolStarted {
+                        message_id: message_id.clone(),
                         tool_call_id: tool_call.id.clone(),
                         tool_name: tool_call.name.clone(),
                         summary: tool_summary.clone(),
@@ -254,6 +247,7 @@ impl AgentSession {
                         on_event(
                             self,
                             AgentProgressEvent::ToolFinished {
+                                message_id: message_id.clone(),
                                 tool_call_id: tool_call.id.clone(),
                                 status: AgentToolStatus::Success,
                                 summary: outcome
@@ -272,6 +266,7 @@ impl AgentSession {
                         on_event(
                             self,
                             AgentProgressEvent::ToolFinished {
+                                message_id: message_id.clone(),
                                 tool_call_id: tool_call.id.clone(),
                                 status: AgentToolStatus::Error,
                                 summary: tool_summary.clone(),

@@ -6,19 +6,26 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
 use crate::agents::MARCH_AGENT_NAME;
-use crate::context::{ConversationHistory, Hint, NoteEntry};
+use crate::context::{Hint, NoteEntry};
 use crate::paths::clean_path;
 
 mod codec;
 mod persist;
 mod tasks;
+mod timeline;
 
 use codec::unix_timestamp;
 use persist::{
-    replace_conversation_history, replace_hints, replace_notes, replace_open_files,
+    replace_hints, replace_notes, replace_open_files, replace_task_timeline,
     update_task_last_active,
 };
 pub use tasks::TaskCreateOptions;
+pub use timeline::{
+    PersistedAssistantMessage, PersistedAssistantMessageState, PersistedAssistantTimelineEntry,
+    PersistedReplyRef, PersistedTaskTimeline, PersistedTaskTimelineEntry, PersistedToolCallState,
+    PersistedTurn, PersistedTurnState, PersistedTurnTrigger, PersistedUserMessage,
+    history_from_timeline, turn_agent_id,
+};
 
 pub struct MarchStorage {
     workspace_root: PathBuf,
@@ -41,6 +48,7 @@ pub struct TaskRecord {
     pub model_frequency_penalty: Option<f32>,
     pub model_max_output_tokens: Option<u32>,
     pub active_agent: String,
+    pub last_event_seq: u64,
     pub created_at: SystemTime,
     pub last_active: SystemTime,
 }
@@ -52,14 +60,14 @@ pub enum TaskTitleSource {
     Manual,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedOpenFile {
     pub scope: String,
     pub path: PathBuf,
     pub locked: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedNote {
     pub scope: String,
     pub id: String,
@@ -70,7 +78,7 @@ pub struct PersistedNote {
 pub struct PersistedTask {
     pub task: TaskRecord,
     pub active_agent: String,
-    pub history: ConversationHistory,
+    pub timeline: PersistedTaskTimeline,
     pub notes: Vec<PersistedNote>,
     pub open_files: Vec<PersistedOpenFile>,
     pub hints: Vec<Hint>,
@@ -79,7 +87,7 @@ pub struct PersistedTask {
 #[derive(Debug, Clone)]
 pub struct PersistedTaskState {
     pub active_agent: String,
-    pub history: ConversationHistory,
+    pub timeline: Option<PersistedTaskTimeline>,
     pub notes: Vec<PersistedNote>,
     pub open_files: Vec<PersistedOpenFile>,
     pub hints: Vec<Hint>,
@@ -122,7 +130,9 @@ impl MarchStorage {
             .context("failed to start sqlite transaction")?;
 
         update_task_last_active(&transaction, task_id, state.last_active)?;
-        replace_conversation_history(&transaction, task_id, &state.history)?;
+        if let Some(timeline) = state.timeline.as_deref() {
+            replace_task_timeline(&transaction, task_id, timeline)?;
+        }
         replace_notes(&transaction, task_id, &state.notes)?;
         replace_open_files(&transaction, task_id, &state.open_files)?;
         replace_hints(&transaction, &state.hints)?;
@@ -151,18 +161,51 @@ impl MarchStorage {
                     model_frequency_penalty REAL,
                     model_max_output_tokens INTEGER,
                     active_agent TEXT NOT NULL DEFAULT 'march',
+                    last_event_seq INTEGER NOT NULL DEFAULT 0,
                     created_at  INTEGER NOT NULL,
                     last_active INTEGER NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS conversation_turns (
-                    id             INTEGER PRIMARY KEY,
-                    task_id        INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-                    role           TEXT    NOT NULL,
-                    agent          TEXT    NOT NULL DEFAULT 'march',
-                    content        TEXT    NOT NULL,
-                    tool_summaries TEXT,
-                    created_at     INTEGER NOT NULL
+                CREATE TABLE IF NOT EXISTS task_timeline_entries (
+                    id               INTEGER PRIMARY KEY,
+                    task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    position         INTEGER NOT NULL,
+                    kind             TEXT    NOT NULL,
+                    user_message_id  TEXT,
+                    turn_id          TEXT,
+                    content          TEXT,
+                    mentions_json    TEXT,
+                    replies_json     TEXT,
+                    agent_id         TEXT,
+                    trigger_json     TEXT,
+                    state            TEXT,
+                    error_message    TEXT,
+                    created_at       INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS task_turn_messages (
+                    id               INTEGER PRIMARY KEY,
+                    task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    turn_id          TEXT    NOT NULL,
+                    message_id       TEXT    NOT NULL,
+                    state            TEXT    NOT NULL,
+                    reasoning        TEXT    NOT NULL,
+                    position         INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS task_message_timeline_entries (
+                    id               INTEGER PRIMARY KEY,
+                    task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    message_id       TEXT    NOT NULL,
+                    kind             TEXT    NOT NULL,
+                    text             TEXT,
+                    tool_call_id     TEXT,
+                    tool_name        TEXT,
+                    arguments        TEXT,
+                    status           TEXT,
+                    preview          TEXT,
+                    duration_ms      INTEGER,
+                    position         INTEGER NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS notes (
@@ -194,9 +237,27 @@ impl MarchStorage {
             )
             .context("failed to initialize sqlite schema")?;
         self.ensure_task_columns()?;
-        self.ensure_conversation_turn_columns()?;
+        self.ensure_timeline_indexes()?;
         self.ensure_note_columns()?;
         self.ensure_open_file_columns()?;
+        Ok(())
+    }
+
+    fn ensure_timeline_indexes(&self) -> Result<()> {
+        self.connection
+            .execute_batch(
+                "
+                CREATE INDEX IF NOT EXISTS idx_task_timeline_entries_task_position
+                    ON task_timeline_entries(task_id, position);
+                CREATE INDEX IF NOT EXISTS idx_task_timeline_entries_task_turn
+                    ON task_timeline_entries(task_id, turn_id);
+                CREATE INDEX IF NOT EXISTS idx_task_turn_messages_task_turn_position
+                    ON task_turn_messages(task_id, turn_id, position);
+                CREATE INDEX IF NOT EXISTS idx_task_message_timeline_entries_task_message_position
+                    ON task_message_timeline_entries(task_id, message_id, position);
+                ",
+            )
+            .context("failed to ensure timeline indexes")?;
         Ok(())
     }
 
@@ -333,27 +394,23 @@ impl MarchStorage {
             )
             .context("failed to backfill tasks.active_agent column")?;
 
-        Ok(())
-    }
-
-    fn ensure_conversation_turn_columns(&self) -> Result<()> {
-        let columns = self.table_columns("conversation_turns")?;
-        if !columns.iter().any(|column| column == "agent") {
+        if !columns.iter().any(|column| column == "last_event_seq") {
             self.connection
                 .execute(
-                    "ALTER TABLE conversation_turns ADD COLUMN agent TEXT NOT NULL DEFAULT 'march'",
+                    "ALTER TABLE tasks ADD COLUMN last_event_seq INTEGER NOT NULL DEFAULT 0",
                     [],
                 )
-                .context("failed to add conversation_turns.agent column")?;
+                .context("failed to add tasks.last_event_seq column")?;
         }
         self.connection
             .execute(
-                "UPDATE conversation_turns
-                 SET agent = ?1
-                 WHERE agent IS NULL OR TRIM(agent) = ''",
-                params![MARCH_AGENT_NAME],
+                "UPDATE tasks
+                 SET last_event_seq = 0
+                 WHERE last_event_seq IS NULL OR last_event_seq < 0",
+                [],
             )
-            .context("failed to backfill conversation_turns.agent column")?;
+            .context("failed to backfill tasks.last_event_seq column")?;
+
         Ok(())
     }
 
@@ -419,7 +476,7 @@ mod tests {
     use indexmap::IndexMap;
     use std::time::{Duration, UNIX_EPOCH};
 
-    use crate::context::{ContentBlock, DisplayTurn, Role, ToolSummary};
+    use crate::context::ContentBlock;
 
     #[test]
     fn storage_roundtrips_task_state() {
@@ -436,24 +493,33 @@ mod tests {
                 task.id,
                 &PersistedTaskState {
                     active_agent: MARCH_AGENT_NAME.to_string(),
-                    history: ConversationHistory::new(vec![
-                        DisplayTurn {
-                            role: Role::User,
-                            agent: MARCH_AGENT_NAME.to_string(),
+                    timeline: Some(vec![
+                        PersistedTaskTimelineEntry::UserMessage(PersistedUserMessage {
+                            user_message_id: "user-1".to_string(),
                             content: vec![ContentBlock::text("继续")],
-                            tool_calls: Vec::new(),
+                            mentions: Vec::new(),
+                            replies: Vec::new(),
                             timestamp: UNIX_EPOCH + Duration::from_secs(1),
-                        },
-                        DisplayTurn {
-                            role: Role::Assistant,
-                            agent: MARCH_AGENT_NAME.to_string(),
-                            content: vec![ContentBlock::text("开始实现持久化")],
-                            tool_calls: vec![ToolSummary {
-                                name: "write_file".to_string(),
-                                summary: "创建了 storage 模块".to_string(),
-                            }],
+                        }),
+                        PersistedTaskTimelineEntry::Turn(PersistedTurn {
+                            turn_id: "turn-1".to_string(),
+                            agent_id: MARCH_AGENT_NAME.to_string(),
+                            trigger: PersistedTurnTrigger::User {
+                                id: "user-1".to_string(),
+                            },
+                            state: PersistedTurnState::Done,
+                            error_message: None,
                             timestamp: UNIX_EPOCH + Duration::from_secs(2),
-                        },
+                            messages: vec![PersistedAssistantMessage {
+                                message_id: "message-1".to_string(),
+                                turn_id: "turn-1".to_string(),
+                                state: PersistedAssistantMessageState::Done,
+                                reasoning: String::new(),
+                                timeline: vec![PersistedAssistantTimelineEntry::Text {
+                                    text: "开始实现持久化".to_string(),
+                                }],
+                            }],
+                        }),
                     ]),
                     notes: notes
                         .into_iter()
@@ -484,7 +550,7 @@ mod tests {
         let loaded = storage.load_task(task.id).expect("load task");
 
         assert_eq!(loaded.task.name, "demo");
-        assert_eq!(loaded.history.turns.len(), 2);
+        assert_eq!(loaded.timeline.len(), 2);
         assert_eq!(loaded.notes.len(), 2);
         assert_eq!(loaded.open_files.len(), 2);
         assert!(loaded.open_files[1].locked);
@@ -574,101 +640,6 @@ mod tests {
             explicit_loaded.task.selected_model.as_deref(),
             Some("custom-model")
         );
-    }
-
-    #[test]
-    fn delete_task_cleans_up_legacy_child_rows_without_cascade() {
-        let workdir = temp_workspace();
-        let ma_dir = workdir.join(".march");
-        fs::create_dir_all(&ma_dir).expect("create .ma dir");
-        let db_path = ma_dir.join("march.db");
-        let connection = Connection::open(&db_path).expect("open legacy db");
-
-        connection
-            .execute_batch(
-                "
-                PRAGMA foreign_keys = ON;
-
-                CREATE TABLE tasks (
-                    id          INTEGER PRIMARY KEY,
-                    name        TEXT    NOT NULL,
-                    created_at  INTEGER NOT NULL,
-                    last_active INTEGER NOT NULL
-                );
-
-                CREATE TABLE conversation_turns (
-                    id             INTEGER PRIMARY KEY,
-                    task_id        INTEGER NOT NULL REFERENCES tasks(id),
-                    role           TEXT    NOT NULL,
-                    content        TEXT    NOT NULL,
-                    tool_summaries TEXT,
-                    created_at     INTEGER NOT NULL
-                );
-
-                CREATE TABLE notes (
-                    task_id  INTEGER NOT NULL REFERENCES tasks(id),
-                    note_id  TEXT    NOT NULL,
-                    content  TEXT    NOT NULL,
-                    position INTEGER NOT NULL,
-                    PRIMARY KEY (task_id, note_id)
-                );
-
-                CREATE TABLE open_files (
-                    task_id  INTEGER NOT NULL REFERENCES tasks(id),
-                    path     TEXT    NOT NULL,
-                    position INTEGER NOT NULL,
-                    locked   INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (task_id, path)
-                );
-                ",
-            )
-            .expect("create legacy schema");
-
-        connection
-            .execute(
-                "INSERT INTO tasks (id, name, created_at, last_active) VALUES (1, 'legacy', 1, 1)",
-                [],
-            )
-            .expect("insert task");
-        connection
-            .execute(
-                "INSERT INTO conversation_turns (task_id, role, content, created_at) VALUES (1, 'user', 'hello', 1)",
-                [],
-            )
-            .expect("insert turn");
-        connection
-            .execute(
-                "INSERT INTO notes (task_id, note_id, content, position) VALUES (1, 'target', 'keep', 0)",
-                [],
-            )
-            .expect("insert note");
-        connection
-            .execute(
-                "INSERT INTO open_files (task_id, path, position, locked) VALUES (1, 'src/main.rs', 0, 0)",
-                [],
-            )
-            .expect("insert open file");
-        drop(connection);
-
-        let storage = MarchStorage::open(&workdir).expect("open migrated storage");
-        storage.delete_task(1).expect("delete legacy task");
-
-        assert!(storage.list_tasks().expect("list tasks").is_empty());
-        let verification = Connection::open(&db_path).expect("reopen db");
-        let turn_count: i64 = verification
-            .query_row("SELECT COUNT(*) FROM conversation_turns", [], |row| {
-                row.get(0)
-            })
-            .expect("count turns");
-        let note_count: i64 = verification
-            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
-            .expect("count notes");
-        let open_file_count: i64 = verification
-            .query_row("SELECT COUNT(*) FROM open_files", [], |row| row.get(0))
-            .expect("count open files");
-        assert_eq!(turn_count, 0);
-        assert_eq!(note_count, 0);
-        assert_eq!(open_file_count, 0);
     }
 
     fn temp_workspace() -> PathBuf {

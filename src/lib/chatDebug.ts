@@ -1,4 +1,4 @@
-import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, LiveTurn } from '@/data/mock';
+import type { BackendAgentProgressEvent, BackendWorkspaceSnapshot, Turn } from '@/data/mock';
 
 declare global {
   interface Window {
@@ -33,7 +33,7 @@ export function summarizeSnapshot(snapshot: BackendWorkspaceSnapshot | null | un
     hasSnapshot: true,
     tasksCount: snapshot.tasks.length,
     activeTaskId: snapshot.active_task?.task.id ?? null,
-    activeHistoryLength: snapshot.active_task?.history.length ?? 0,
+    activeTimelineLength: snapshot.active_task?.timeline.length ?? 0,
     notesCount: snapshot.active_task?.notes.length ?? 0,
     openFilesCount: snapshot.active_task?.open_files.length ?? 0,
     hintsCount: snapshot.active_task?.hints.length ?? 0,
@@ -42,46 +42,55 @@ export function summarizeSnapshot(snapshot: BackendWorkspaceSnapshot | null | un
   };
 }
 
-export function summarizeLiveTurn(turn: LiveTurn | null | undefined) {
+export function summarizeTurn(turn: Turn | null | undefined) {
   if (!turn) {
     return {
-      hasLiveTurn: false,
+      hasTurn: false,
     };
   }
 
   return {
-    hasLiveTurn: true,
+    hasTurn: true,
     turnId: turn.turnId,
     state: turn.state,
-    statusLabel: turn.statusLabel,
-    contentLength: turn.content.length,
-    toolsCount: turn.tools.length,
+    statusLabel: turn.statusLabel ?? null,
+    messagesCount: turn.messages.length,
   };
 }
 
 export function summarizeAgentEvent(event: BackendAgentProgressEvent) {
   switch (event.kind) {
+    case 'user_message_appended':
+      return {
+        kind: event.kind,
+        taskId: event.task_id,
+        seq: event.seq,
+        userMessageId: event.user_message_id,
+        contentLength: event.content.length,
+      };
     case 'turn_started':
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
-        userMessageLength: event.user_message.length,
         agent: event.agent,
       };
-    case 'status':
+    case 'message_started':
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
-        phase: event.phase,
-        label: event.label,
+        messageId: event.message_id,
       };
     case 'tool_started':
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
+        messageId: event.message_id,
         toolCallId: event.tool_call_id,
         toolName: event.tool_name,
         summary: event.summary,
@@ -90,60 +99,50 @@ export function summarizeAgentEvent(event: BackendAgentProgressEvent) {
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
+        messageId: event.message_id,
         toolCallId: event.tool_call_id,
         status: event.status,
         summary: event.summary,
       };
-    case 'assistant_text_preview':
+    case 'assistant_stream_delta':
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
-        messageLength: event.message.length,
-      };
-    case 'assistant_message_checkpoint':
-      return {
-        kind: event.kind,
-        taskId: event.task_id,
-        turnId: event.turn_id,
-        checkpointType: event.checkpoint_type,
         messageId: event.message_id,
-        contentLength: event.content.length,
+        field: event.field,
+        deltaLength: event.delta.length,
       };
-    case 'final_assistant_message':
+    case 'message_finished':
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
-        assistantMessageTimestamp: event.assistant_message.timestamp,
-        assistantMessageLength: event.assistant_message.content.length,
-        taskHistoryLength: event.task.history.length,
+        messageId: event.message_id,
+      };
+    case 'turn_finished':
+      return {
+        kind: event.kind,
+        taskId: event.task_id,
+        seq: event.seq,
+        turnId: event.turn_id,
+        reason: event.reason,
+        taskTimelineLength: event.task.timeline.length,
         debugRoundsCount: event.task.debug_trace?.rounds.length ?? 0,
       };
     case 'round_complete':
       return {
         kind: event.kind,
         taskId: event.task_id,
+        seq: event.seq,
         turnId: event.turn_id,
         iteration: event.debug_round.iteration,
-        taskHistoryLength: event.task.history.length,
+        taskTimelineLength: event.task.timeline.length,
         debugRoundsCount: event.task.debug_trace?.rounds.length ?? 0,
-      };
-    case 'turn_failed':
-      return {
-        kind: event.kind,
-        taskId: event.task_id,
-        turnId: event.turn_id,
-        stage: event.stage,
-        message: event.message,
-      };
-    case 'turn_cancelled':
-      return {
-        kind: event.kind,
-        taskId: event.task_id,
-        turnId: event.turn_id,
-        taskHistoryLength: event.task.history.length,
       };
   }
 }

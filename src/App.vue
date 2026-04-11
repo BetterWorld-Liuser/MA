@@ -55,8 +55,7 @@
         />
         <ChatPane
           ref="chatPaneRef"
-          :chat="chatView.chat"
-          :live-turn="chatView.liveTurn"
+          :timeline="chatView.timeline"
           :task-id="activeTaskIdNumber"
           :selected-model="composerView.selectedModel"
           :selected-temperature="composerView.selectedTemperature"

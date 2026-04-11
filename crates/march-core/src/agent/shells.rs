@@ -1,16 +1,20 @@
 use std::env;
 use std::ffi::OsString;
-use std::future::pending;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+#[cfg(windows)]
 use encoding_rs::GBK;
+#[cfg(not(windows))]
+use encoding_rs::UTF_8;
+use encoding_rs::{CoderResult, Decoder, Encoding};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 
 use crate::agent::{CommandOutputStreamUpdate, TurnCancellation};
 
@@ -53,23 +57,9 @@ pub fn decode_command_output(bytes: &[u8]) -> String {
         return String::new();
     }
 
-    #[cfg(windows)]
-    {
-        let (decoded, _, had_errors) = GBK.decode(bytes);
-        if !had_errors {
-            return strip_ansi_control_sequences(decoded.trim());
-        }
-    }
-
-    strip_ansi_control_sequences(String::from_utf8_lossy(bytes).trim())
-}
-
-fn strip_ansi_control_sequences(input: &str) -> String {
-    let stripped = strip_ansi_escapes::strip(input.as_bytes());
-    String::from_utf8_lossy(&stripped)
-        .chars()
-        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
-        .collect()
+    let mut decoder = StreamOutputDecoder::new(command_output_encoding());
+    decoder.push(bytes, true);
+    decoder.finish()
 }
 
 pub fn platform_label() -> &'static str {
@@ -118,30 +108,15 @@ pub async fn shell_command_with_cancel(
     cancellation: &TurnCancellation,
     on_output: &mut impl FnMut(CommandOutputStreamUpdate) -> Result<()>,
 ) -> Result<std::process::Output> {
-    let mut process = match shell {
-        CommandShell::Sh => {
-            let mut process = TokioCommand::new(program);
-            process.args(["-lc", command]);
-            process
-        }
-        CommandShell::Bash => {
-            let mut process = TokioCommand::new(program);
-            process.args(["-lc", command]);
-            process
-        }
-        CommandShell::PowerShell => {
-            let mut process = TokioCommand::new(program);
-            process.args(["-NoProfile", "-Command", command]);
-            process
-        }
-        CommandShell::Cmd => {
-            let mut process = TokioCommand::new(program);
-            process.args(["/C", command]);
-            process
-        }
+    let shell_args: &[&str] = match shell {
+        CommandShell::Sh | CommandShell::Bash => &["-lc", command],
+        CommandShell::PowerShell => &["-NoProfile", "-Command", command],
+        CommandShell::Cmd => &["/C", command],
     };
 
+    let mut process = TokioCommand::new(program);
     process
+        .args(shell_args)
         .current_dir(working_directory)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -161,100 +136,88 @@ async fn collect_child_output(
     on_output: &mut impl FnMut(CommandOutputStreamUpdate) -> Result<()>,
 ) -> Result<std::process::Output> {
     const OUTPUT_STREAM_THROTTLE: Duration = Duration::from_millis(50);
+    const CHILD_TERMINATION_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let (tx, mut rx) = mpsc::unbounded_channel::<(StreamKind, Vec<u8>)>();
-    let mut pipe_readers = Some(PipeReaders {
+    let pipe_readers = PipeReaders {
         stdout_task: spawn_pipe_reader(stdout, StreamKind::Stdout, tx.clone()),
         stderr_task: spawn_pipe_reader(stderr, StreamKind::Stderr, tx),
-    });
+    };
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
     let mut output_cache = OutputSnapshotCache::default();
     let mut timeout_sleep = Box::pin(tokio::time::sleep(timeout));
-    let mut output_flush = None;
+    let mut output_interval = tokio::time::interval(OUTPUT_STREAM_THROTTLE);
+    output_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    output_interval.tick().await;
     let mut pending_output = false;
-    let status = loop {
+
+    let child_exit = loop {
         tokio::select! {
             _ = cancellation.cancelled() => {
-                finalize_child_output(
-                    &mut child,
-                    &mut rx,
-                    pipe_readers.take().expect("pipe readers should exist until finalized"),
-                    &mut stdout_bytes,
-                    &mut stderr_bytes,
-                    true,
-                ).await;
-                return Err(command_interruption_error("turn cancelled", command, &stdout_bytes, &stderr_bytes));
+                break ChildExit::Interrupted("turn cancelled".to_string());
             }
             _ = &mut timeout_sleep => {
-                finalize_child_output(
-                    &mut child,
-                    &mut rx,
-                    pipe_readers.take().expect("pipe readers should exist until finalized"),
-                    &mut stdout_bytes,
-                    &mut stderr_bytes,
-                    true,
-                ).await;
-                return Err(command_interruption_error(
-                    &format!(
-                        "command timed out after {:.3}s (timeout {:.3}s)",
-                        timeout.as_secs_f64(),
-                        timeout.as_secs_f64(),
-                    ),
-                    command,
-                    &stdout_bytes,
-                    &stderr_bytes,
+                break ChildExit::Interrupted(format!(
+                    "command timed out after {:.3}s (timeout {:.3}s)",
+                    timeout.as_secs_f64(),
+                    timeout.as_secs_f64(),
                 ));
             }
             status = child.wait() => {
-                break status.context("failed to wait for command completion")?;
+                break ChildExit::Completed(status.context("failed to wait for command completion")?);
             }
             Some((stream, chunk)) = rx.recv() => {
                 append_stream_chunk(stream, chunk, &mut stdout_bytes, &mut stderr_bytes);
-                if !pending_output {
-                    output_flush = Some(Box::pin(tokio::time::sleep(OUTPUT_STREAM_THROTTLE)));
-                    pending_output = true;
-                }
+                pending_output = true;
             }
-            _ = async {
-                if let Some(flush) = output_flush.as_mut() {
-                    flush.await;
-                } else {
-                    pending::<()>().await;
-                }
-            }, if pending_output => {
-                emit_output_update(on_output, &mut output_cache, &stdout_bytes, &stderr_bytes)?;
+            _ = output_interval.tick(), if pending_output => {
+                emit_output_update(on_output, &mut output_cache, &stdout_bytes, &stderr_bytes, false)?;
                 pending_output = false;
-                output_flush = None;
             }
         }
     };
 
+    let terminate = matches!(child_exit, ChildExit::Interrupted(_));
     finalize_child_output(
         &mut child,
         &mut rx,
-        pipe_readers
-            .take()
-            .expect("pipe readers should exist until finalized"),
+        pipe_readers,
         &mut stdout_bytes,
         &mut stderr_bytes,
-        false,
+        terminate,
+        CHILD_TERMINATION_WAIT_TIMEOUT,
     )
     .await;
+
     if pending_output
         || stdout_bytes.len() != output_cache.stdout_bytes_len
         || stderr_bytes.len() != output_cache.stderr_bytes_len
     {
-        emit_output_update(on_output, &mut output_cache, &stdout_bytes, &stderr_bytes)?;
+        emit_output_update(
+            on_output,
+            &mut output_cache,
+            &stdout_bytes,
+            &stderr_bytes,
+            true,
+        )?;
     }
 
-    Ok(std::process::Output {
-        status,
-        stdout: stdout_bytes,
-        stderr: stderr_bytes,
-    })
+    match child_exit {
+        ChildExit::Completed(status) => Ok(std::process::Output {
+            status,
+            stdout: stdout_bytes,
+            stderr: stderr_bytes,
+        }),
+        ChildExit::Interrupted(reason) => Err(command_interruption_error(
+            &reason,
+            command,
+            &stdout_bytes,
+            &stderr_bytes,
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -274,6 +237,13 @@ struct OutputSnapshotCache {
     stderr: String,
     stdout_bytes_len: usize,
     stderr_bytes_len: usize,
+    stdout_decoder: StreamOutputDecoder,
+    stderr_decoder: StreamOutputDecoder,
+}
+
+enum ChildExit {
+    Completed(std::process::ExitStatus),
+    Interrupted(String),
 }
 
 fn spawn_pipe_reader<R>(
@@ -315,12 +285,12 @@ fn append_stream_chunk(
     }
 }
 
-fn drain_pipe_channel(
+async fn drain_pipe_channel_until_closed(
     rx: &mut mpsc::UnboundedReceiver<(StreamKind, Vec<u8>)>,
     stdout_bytes: &mut Vec<u8>,
     stderr_bytes: &mut Vec<u8>,
 ) {
-    while let Ok((stream, chunk)) = rx.try_recv() {
+    while let Some((stream, chunk)) = rx.recv().await {
         append_stream_chunk(stream, chunk, stdout_bytes, stderr_bytes);
     }
 }
@@ -330,31 +300,48 @@ fn emit_output_update(
     cache: &mut OutputSnapshotCache,
     stdout_bytes: &[u8],
     stderr_bytes: &[u8],
+    final_chunk: bool,
 ) -> Result<()> {
-    update_output_cache(stdout_bytes, &mut cache.stdout, &mut cache.stdout_bytes_len);
-    update_output_cache(stderr_bytes, &mut cache.stderr, &mut cache.stderr_bytes_len);
+    update_output_cache(
+        stdout_bytes,
+        &mut cache.stdout,
+        &mut cache.stdout_bytes_len,
+        &mut cache.stdout_decoder,
+        final_chunk,
+    );
+    update_output_cache(
+        stderr_bytes,
+        &mut cache.stderr,
+        &mut cache.stderr_bytes_len,
+        &mut cache.stderr_decoder,
+        final_chunk,
+    );
     on_output(CommandOutputStreamUpdate {
         stdout: cache.stdout.clone(),
         stderr: cache.stderr.clone(),
     })
 }
 
-fn update_output_cache(bytes: &[u8], cached_text: &mut String, cached_len: &mut usize) {
-    if bytes.len() < *cached_len {
-        *cached_text = decode_command_output(bytes);
-        *cached_len = bytes.len();
-        return;
-    }
-
+fn update_output_cache(
+    bytes: &[u8],
+    cached_text: &mut String,
+    cached_len: &mut usize,
+    decoder: &mut StreamOutputDecoder,
+    final_chunk: bool,
+) {
     if bytes.len() == *cached_len {
+        if final_chunk {
+            *cached_text = decoder.finish();
+        }
         return;
     }
 
-    // Stream updates are preview snapshots. We incrementally decode only the
-    // newly appended bytes here so long-running commands do not repeatedly
-    // re-decode the full accumulated buffer on every throttle tick. The final
-    // command result still decodes from the full raw buffers in one pass.
-    cached_text.push_str(&decode_command_output(&bytes[*cached_len..]));
+    // Reader tasks only append bytes, so we can safely feed just the unseen
+    // suffix into a stateful decoder. This keeps throttled updates O(delta)
+    // without breaking on chunk boundaries that split a multibyte character or
+    // ANSI escape sequence.
+    decoder.push(&bytes[*cached_len..], final_chunk);
+    *cached_text = decoder.current_text().to_string();
     *cached_len = bytes.len();
 }
 
@@ -365,15 +352,15 @@ async fn finalize_child_output(
     stdout_bytes: &mut Vec<u8>,
     stderr_bytes: &mut Vec<u8>,
     terminate: bool,
+    wait_timeout: Duration,
 ) {
     if terminate {
         request_child_termination(child).await;
-        let _ = child.wait().await;
+        let _ = tokio::time::timeout(wait_timeout, child.wait()).await;
     }
 
-    drain_pipe_channel(rx, stdout_bytes, stderr_bytes);
     join_pipe_readers(pipe_readers).await;
-    drain_pipe_channel(rx, stdout_bytes, stderr_bytes);
+    drain_pipe_channel_until_closed(rx, stdout_bytes, stderr_bytes).await;
 }
 
 async fn join_pipe_readers(pipe_readers: PipeReaders) {
@@ -547,5 +534,142 @@ fn executable_extensions() -> Vec<OsString> {
     #[cfg(not(windows))]
     {
         Vec::new()
+    }
+}
+
+struct StreamOutputDecoder {
+    decoder: Option<Decoder>,
+    ansi_stripper: IncrementalAnsiStripper,
+    text: String,
+}
+
+impl Default for StreamOutputDecoder {
+    fn default() -> Self {
+        Self::new(command_output_encoding())
+    }
+}
+
+impl StreamOutputDecoder {
+    fn new(encoding: &'static Encoding) -> Self {
+        Self {
+            decoder: Some(encoding.new_decoder_without_bom_handling()),
+            ansi_stripper: IncrementalAnsiStripper::default(),
+            text: String::new(),
+        }
+    }
+
+    fn current_text(&self) -> &str {
+        self.text.trim()
+    }
+
+    fn push(&mut self, bytes: &[u8], is_last: bool) {
+        if bytes.is_empty() && !is_last {
+            return;
+        }
+
+        let sanitized = self.ansi_stripper.push(bytes, is_last);
+        if sanitized.is_empty() && !is_last {
+            return;
+        }
+
+        let mut decoded = String::new();
+        if let Some(decoder) = self.decoder.as_mut() {
+            let mut remaining = sanitized.as_slice();
+            loop {
+                let (result, read, _) = decoder.decode_to_string(remaining, &mut decoded, is_last);
+                remaining = &remaining[read..];
+                match result {
+                    CoderResult::InputEmpty => break,
+                    CoderResult::OutputFull => continue,
+                }
+            }
+        }
+        self.text.push_str(&decoded);
+
+        if is_last {
+            self.decoder = None;
+        }
+    }
+
+    fn finish(&mut self) -> String {
+        if self.decoder.is_some() {
+            self.push(&[], true);
+        }
+        self.current_text().to_string()
+    }
+}
+
+fn command_output_encoding() -> &'static Encoding {
+    #[cfg(windows)]
+    {
+        GBK
+    }
+
+    #[cfg(not(windows))]
+    {
+        UTF_8
+    }
+}
+
+#[derive(Default)]
+struct IncrementalAnsiStripper {
+    state: AnsiState,
+}
+
+#[derive(Default)]
+enum AnsiState {
+    #[default]
+    Ground,
+    Escape,
+    Csi,
+    Osc,
+    OscEscape,
+    EscapeSequence,
+}
+
+impl IncrementalAnsiStripper {
+    fn push(&mut self, bytes: &[u8], is_last: bool) -> Vec<u8> {
+        let mut output = Vec::with_capacity(bytes.len());
+        for &byte in bytes {
+            match self.state {
+                AnsiState::Ground => match byte {
+                    0x1B => self.state = AnsiState::Escape,
+                    b'\n' | b'\t' => output.push(byte),
+                    _ if !(byte as char).is_ascii_control() => output.push(byte),
+                    _ => {}
+                },
+                AnsiState::Escape => match byte {
+                    b'[' => self.state = AnsiState::Csi,
+                    b']' => self.state = AnsiState::Osc,
+                    _ => self.state = AnsiState::EscapeSequence,
+                },
+                AnsiState::Csi => {
+                    if (0x40..=0x7E).contains(&byte) {
+                        self.state = AnsiState::Ground;
+                    }
+                }
+                AnsiState::Osc => match byte {
+                    0x07 => self.state = AnsiState::Ground,
+                    0x1B => self.state = AnsiState::OscEscape,
+                    _ => {}
+                },
+                AnsiState::OscEscape => {
+                    self.state = if byte == b'\\' {
+                        AnsiState::Ground
+                    } else {
+                        AnsiState::Osc
+                    };
+                }
+                AnsiState::EscapeSequence => {
+                    self.state = AnsiState::Ground;
+                }
+            }
+        }
+
+        if is_last {
+            self.state = AnsiState::Ground;
+        }
+
+        output
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -18,7 +18,8 @@ use march::ui::{
     UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
     UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
-    UiTaskModelSelectorView, UiTestProviderConnectionRequest, UiTestProviderConnectionResult,
+    UiTaskHistoryView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
+    UiTestProviderConnectionResult,
     UiToggleOpenFileLockRequest, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
     UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
     UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_model_capabilities, fetch_probe_models,
@@ -29,7 +30,11 @@ use march::ui::{
 struct AppState {
     workspace_path: PathBuf,
     cancellations: Mutex<HashMap<i64, Arc<TurnCancellation>>>,
+    turn_cancellations: Mutex<HashMap<String, Arc<TurnCancellation>>>,
     in_flight_turns: Mutex<HashMap<i64, String>>,
+    working_turn_counts: Mutex<HashMap<i64, usize>>,
+    event_sequences: Mutex<HashMap<i64, u64>>,
+    event_buffers: Mutex<HashMap<i64, VecDeque<UiAgentProgressEvent>>>,
     memory_watcher: Mutex<MemoryWatcherState>,
 }
 
@@ -45,6 +50,25 @@ struct BackendNoticePayload {
     source: String,
     message: String,
     timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TaskWorkingChangedPayload {
+    task_id: i64,
+    working: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TaskSubscriptionStatus {
+    Subscribed,
+    GapTooLarge,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskSubscriptionView {
+    status: TaskSubscriptionStatus,
 }
 
 impl MemoryWatcherState {
@@ -126,6 +150,7 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const DEFAULT_WINDOW_WIDTH: u32 = 1440;
 const DEFAULT_WINDOW_HEIGHT: u32 = 900;
 const WINDOW_WORKAREA_MARGIN: u32 = 32;
+const TASK_EVENT_BUFFER_CAPACITY: usize = 1000;
 
 fn emit_backend_notice(
     app: &tauri::AppHandle,
@@ -243,6 +268,176 @@ fn emit_progress_notice(app: &tauri::AppHandle, event: &UiAgentProgressEvent) {
     emit_provider_notice(app, event);
 }
 
+fn handle_task_working_transition(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    event: &UiAgentProgressEvent,
+) -> Result<(), String> {
+    let task_id = match event {
+        UiAgentProgressEvent::TurnStarted { task_id, .. }
+        | UiAgentProgressEvent::TurnFinished { task_id, .. } => *task_id,
+        _ => return Ok(()),
+    };
+
+    let mut counts = state
+        .working_turn_counts
+        .lock()
+        .map_err(|_| "failed to acquire working-turn registry".to_string())?;
+    let count = counts.entry(task_id).or_insert(0);
+    let mut emit_payload = None;
+
+    match event {
+        UiAgentProgressEvent::TurnStarted { .. } => {
+            let was_idle = *count == 0;
+            *count += 1;
+            if was_idle {
+                emit_payload = Some(TaskWorkingChangedPayload {
+                    task_id,
+                    working: true,
+                });
+            }
+        }
+        UiAgentProgressEvent::TurnFinished { .. } => {
+            if *count > 0 {
+                *count -= 1;
+            }
+            if *count == 0 {
+                counts.remove(&task_id);
+                emit_payload = Some(TaskWorkingChangedPayload {
+                    task_id,
+                    working: false,
+                });
+            }
+        }
+        _ => {}
+    }
+
+    drop(counts);
+
+    if let Some(payload) = emit_payload {
+        app.emit("march://task-working-changed", &payload)
+            .map_err(|error| format!("failed to emit task-working-changed: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn sync_turn_cancellation_registry(
+    state: &AppState,
+    turn_id: String,
+    cancellation: Arc<TurnCancellation>,
+) -> Result<(), String> {
+    let mut turn_cancellations = state
+        .turn_cancellations
+        .lock()
+        .map_err(|_| "failed to acquire turn cancellation registry".to_string())?;
+    turn_cancellations.insert(turn_id, cancellation);
+
+    Ok(())
+}
+
+fn clear_turn_cancellation_registry(state: &AppState, event: &UiAgentProgressEvent) -> Result<(), String> {
+    if let UiAgentProgressEvent::TurnFinished { turn_id, .. } = event {
+        let mut turn_cancellations = state
+            .turn_cancellations
+            .lock()
+            .map_err(|_| "failed to acquire turn cancellation registry".to_string())?;
+        turn_cancellations.remove(turn_id);
+    }
+
+    Ok(())
+}
+
+fn task_id_of_event(event: &UiAgentProgressEvent) -> i64 {
+    match event {
+        UiAgentProgressEvent::UserMessageAppended { task_id, .. }
+        | UiAgentProgressEvent::TurnStarted { task_id, .. }
+        | UiAgentProgressEvent::MessageStarted { task_id, .. }
+        | UiAgentProgressEvent::ToolStarted { task_id, .. }
+        | UiAgentProgressEvent::ToolFinished { task_id, .. }
+        | UiAgentProgressEvent::AssistantStreamDelta { task_id, .. }
+        | UiAgentProgressEvent::MessageFinished { task_id, .. }
+        | UiAgentProgressEvent::TurnFinished { task_id, .. }
+        | UiAgentProgressEvent::RoundComplete { task_id, .. } => *task_id,
+    }
+}
+
+fn set_event_seq(event: &mut UiAgentProgressEvent, seq: u64) {
+    match event {
+        UiAgentProgressEvent::UserMessageAppended { seq: value, .. }
+        | UiAgentProgressEvent::TurnStarted { seq: value, .. }
+        | UiAgentProgressEvent::MessageStarted { seq: value, .. }
+        | UiAgentProgressEvent::ToolStarted { seq: value, .. }
+        | UiAgentProgressEvent::ToolFinished { seq: value, .. }
+        | UiAgentProgressEvent::AssistantStreamDelta { seq: value, .. }
+        | UiAgentProgressEvent::MessageFinished { seq: value, .. }
+        | UiAgentProgressEvent::TurnFinished { seq: value, .. }
+        | UiAgentProgressEvent::RoundComplete { seq: value, .. } => *value = seq,
+    }
+}
+
+fn next_task_event_seq(state: &AppState, task_id: i64) -> Result<u64, String> {
+    let mut sequences = state
+        .event_sequences
+        .lock()
+        .map_err(|_| "failed to acquire event sequence registry".to_string())?;
+
+    let current = if let Some(current) = sequences.get(&task_id).copied() {
+        current
+    } else {
+        let storage = march::storage::MarchStorage::open(&state.workspace_path)
+            .map_err(|error| error.to_string())?;
+        let current = storage
+            .load_task_last_event_seq(task_id)
+            .map_err(|error| error.to_string())?;
+        sequences.insert(task_id, current);
+        current
+    };
+
+    let next = current.saturating_add(1);
+    sequences.insert(task_id, next);
+    drop(sequences);
+
+    let storage =
+        march::storage::MarchStorage::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    storage
+        .update_task_last_event_seq(task_id, next)
+        .map_err(|error| error.to_string())?;
+    Ok(next)
+}
+
+fn task_progress_event_name(task_id: i64) -> String {
+    format!("march://task-progress:{task_id}")
+}
+
+fn event_seq(event: &UiAgentProgressEvent) -> u64 {
+    match event {
+        UiAgentProgressEvent::UserMessageAppended { seq, .. }
+        | UiAgentProgressEvent::TurnStarted { seq, .. }
+        | UiAgentProgressEvent::MessageStarted { seq, .. }
+        | UiAgentProgressEvent::ToolStarted { seq, .. }
+        | UiAgentProgressEvent::ToolFinished { seq, .. }
+        | UiAgentProgressEvent::AssistantStreamDelta { seq, .. }
+        | UiAgentProgressEvent::MessageFinished { seq, .. }
+        | UiAgentProgressEvent::TurnFinished { seq, .. }
+        | UiAgentProgressEvent::RoundComplete { seq, .. } => *seq,
+    }
+}
+
+fn buffer_task_event(state: &AppState, event: UiAgentProgressEvent) -> Result<(), String> {
+    let task_id = task_id_of_event(&event);
+    let mut buffers = state
+        .event_buffers
+        .lock()
+        .map_err(|_| "failed to acquire event buffer registry".to_string())?;
+    let buffer = buffers.entry(task_id).or_default();
+    buffer.push_back(event);
+    while buffer.len() > TASK_EVENT_BUFFER_CAPACITY {
+        buffer.pop_front();
+    }
+    Ok(())
+}
+
 /// Keep the first-launch window inside the monitor work area.
 ///
 /// March uses a custom title bar and a roomy three-column layout. On Windows with
@@ -302,6 +497,82 @@ fn load_workspace_snapshot(
             .workspace_snapshot(active_task_id)
             .map_err(|error| error.to_string()),
     )
+}
+
+#[tauri::command]
+fn get_task_history(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    task_id: i64,
+) -> Result<UiTaskHistoryView, String> {
+    let backend = UiAppBackend::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    report_command_result(
+        &app,
+        "get_task_history",
+        backend.task_history(task_id).map_err(|error| error.to_string()),
+    )
+}
+
+#[tauri::command]
+fn subscribe_task(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    task_id: i64,
+    since_seq: u64,
+) -> Result<TaskSubscriptionView, String> {
+    let replay_events = {
+        let buffers = state
+            .event_buffers
+            .lock()
+            .map_err(|_| "failed to acquire event buffer registry".to_string())?;
+        let Some(buffer) = buffers.get(&task_id) else {
+            return report_command_result(
+                &app,
+                "subscribe_task",
+                Ok(TaskSubscriptionView {
+                    status: TaskSubscriptionStatus::Subscribed,
+                }),
+            );
+        };
+
+        if let Some(oldest_seq) = buffer.front().map(event_seq)
+            && since_seq > 0
+            && oldest_seq > since_seq.saturating_add(1)
+        {
+            return report_command_result(
+                &app,
+                "subscribe_task",
+                Ok(TaskSubscriptionView {
+                    status: TaskSubscriptionStatus::GapTooLarge,
+                }),
+            );
+        }
+
+        buffer
+            .iter()
+            .filter(|event| event_seq(event) > since_seq)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    for event in replay_events {
+        app.emit(&task_progress_event_name(task_id), &event)
+            .map_err(|error| format!("failed to emit task replay event: {error}"))?;
+    }
+
+    report_command_result(
+        &app,
+        "subscribe_task",
+        Ok(TaskSubscriptionView {
+            status: TaskSubscriptionStatus::Subscribed,
+        }),
+    )
+}
+
+#[tauri::command]
+fn unsubscribe_task(app: tauri::AppHandle, task_id: i64) -> Result<(), String> {
+    let _ = task_id;
+    report_command_result(&app, "unsubscribe_task", Ok(()))
 }
 
 #[tauri::command]
@@ -411,16 +682,31 @@ async fn send_message(
     let request = UiSendMessageRequest {
         task_id: Some(task_id),
         request_id: Some(request_id),
+        mentions: input.mentions,
+        replies: input.replies,
         content_blocks: input.content_blocks,
     };
     let result = backend
         .handle_send_message_with_progress_and_cancel(
             request,
-            |event| {
+            |mut event| {
+                let task_id = task_id_of_event(&event);
+                let seq = next_task_event_seq(&state, task_id).map_err(anyhow::Error::msg)?;
+                set_event_seq(&mut event, seq);
+                buffer_task_event(&state, event.clone()).map_err(anyhow::Error::msg)?;
+                clear_turn_cancellation_registry(&state, &event)
+                    .map_err(anyhow::Error::msg)?;
                 emit_progress_notice(&app, &event);
-                app.emit("march://agent-progress", &event).map_err(|error| {
+                handle_task_working_transition(&app, &state, &event)
+                    .map_err(anyhow::Error::msg)?;
+                app.emit(&task_progress_event_name(task_id), &event)
+                    .map_err(|error| {
                     anyhow::anyhow!("failed to emit agent progress event: {}", error)
                 })
+            },
+            |turn_id, turn_cancellation| {
+                sync_turn_cancellation_registry(&state, turn_id, turn_cancellation)
+                    .map_err(anyhow::Error::msg)
             },
             cancellation.as_ref(),
         )
@@ -441,7 +727,7 @@ async fn send_message(
 }
 
 #[tauri::command]
-fn cancel_turn(
+fn cancel_task(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     task_id: i64,
@@ -451,6 +737,22 @@ fn cancel_turn(
         .lock()
         .map_err(|_| "failed to acquire cancellation registry".to_string())?;
     if let Some(cancellation) = cancellations.get(&task_id) {
+        cancellation.cancel();
+    }
+    report_command_result(&app, "cancel_task", Ok(()))
+}
+
+#[tauri::command]
+fn cancel_turn(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    turn_id: String,
+) -> Result<(), String> {
+    let turn_cancellations = state
+        .turn_cancellations
+        .lock()
+        .map_err(|_| "failed to acquire turn cancellation registry".to_string())?;
+    if let Some(cancellation) = turn_cancellations.get(&turn_id) {
         cancellation.cancel();
     }
     report_command_result(&app, "cancel_turn", Ok(()))
@@ -972,7 +1274,7 @@ pub fn run() {
     std::env::set_current_dir(&workspace_path).expect("failed to switch to workspace root");
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_dialog::init())
         .setup({
             let watcher_workspace_path = workspace_path.clone();
             move |app| {
@@ -983,7 +1285,11 @@ pub fn run() {
                 app.manage(AppState {
                     workspace_path: watcher_workspace_path.clone(),
                     cancellations: Mutex::new(HashMap::new()),
+                    turn_cancellations: Mutex::new(HashMap::new()),
                     in_flight_turns: Mutex::new(HashMap::new()),
+                    working_turn_counts: Mutex::new(HashMap::new()),
+                    event_sequences: Mutex::new(HashMap::new()),
+                    event_buffers: Mutex::new(HashMap::new()),
                     memory_watcher: Mutex::new(memory_watcher),
                 });
                 Ok(())
@@ -991,10 +1297,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_workspace_snapshot,
+            get_task_history,
+            subscribe_task,
+            unsubscribe_task,
             create_task,
             select_task,
             delete_task,
             send_message,
+            cancel_task,
             cancel_turn,
             upsert_note,
             delete_note,

@@ -4,15 +4,15 @@ import type {
   BackendRuntimeSnapshot,
   BackendWorkspaceSnapshot,
   ChatImageAttachment,
-  ChatMessage,
   ContextUsage,
   DebugRoundItem,
   HintItem,
-  LiveTurn,
   MemoryItem,
   NoteItem,
   OpenFileItem,
+  ReplyRef,
   SkillItem,
+  TaskTimelineEntry,
   TaskItem,
   WorkspaceView,
 } from '@/data/mock';
@@ -31,10 +31,19 @@ export type MemoryEditorDialogHandle = {
 
 export type ComposerPayload = {
   content: string;
+  mentions: string[];
+  replies: ReplyRef[];
   directories: string[];
   files: string[];
   skills: string[];
   images: ChatImageAttachment[];
+};
+
+export type ComposerReplyPreview = {
+  kind: ReplyRef['kind'];
+  id: string;
+  author: string;
+  summary: string;
 };
 
 export type RunWorkspaceAction = (action: () => Promise<void>) => Promise<boolean>;
@@ -45,8 +54,7 @@ export type WorkspaceTaskListView = {
 };
 
 export type WorkspaceChatView = {
-  chat: ChatMessage[];
-  liveTurn?: LiveTurn;
+  timeline: TaskTimelineEntry[];
 };
 
 export type WorkspaceComposerView = {
@@ -96,10 +104,22 @@ export type WorkspaceSnapshotState = {
 
 export type TaskChatState = {
   chatView: Readonly<Ref<WorkspaceChatView>>;
-  appendTaskChatMessage: (taskId: number, message: ChatMessage) => void;
-  hydrateTaskChat: (taskId: number, messages: ChatMessage[]) => void;
-  clearTaskChat: (taskId: number) => void;
-  markTaskChatNeedsHydration: (taskId: number) => void;
+  hydrateTaskTimeline: (taskId: number, timeline: TaskTimelineEntry[]) => void;
+  optimisticAppendUserMessage: (
+    taskId: number,
+    input: {
+      id: string;
+      content: string;
+      ts?: number;
+      mentions?: string[];
+      replies?: ReplyRef[];
+      images?: ChatImageAttachment[];
+    },
+  ) => void;
+  clearTaskTimeline: (taskId: number) => void;
+  markTaskTimelineNeedsHydration: (taskId: number) => void;
+  loadTaskHistory: (taskId: number) => Promise<void>;
+  getTaskLastSeq: (taskId: number) => number;
 };
 
 export function humanizeError(error: unknown) {
@@ -124,4 +144,23 @@ export function augmentComposerMessage(payload: ComposerPayload) {
 export function extractBase64Payload(dataUrl: string) {
   const separatorIndex = dataUrl.indexOf(',');
   return separatorIndex >= 0 ? dataUrl.slice(separatorIndex + 1) : dataUrl;
+}
+
+export function extractAgentMentionsFromComposerText(content: string) {
+  const matches = content.matchAll(/(^|\s)@([^\s@]+)/g);
+  const mentions = new Set<string>();
+
+  for (const match of matches) {
+    const rawName = match[2]?.trim().toLowerCase();
+    if (!rawName) {
+      continue;
+    }
+
+    const normalizedName = rawName.replace(/[,:，：。!！?？]+$/g, '');
+    if (normalizedName) {
+      mentions.add(normalizedName);
+    }
+  }
+
+  return [...mentions];
 }

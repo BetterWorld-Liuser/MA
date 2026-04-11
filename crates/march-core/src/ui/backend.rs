@@ -25,8 +25,8 @@ use crate::storage::{
 use super::provider::provider_config_for_session;
 use super::util::{resolve_context_window_fallback, system_time_to_unix};
 use super::{
-    DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentFailureStage, UiAgentProfileView,
-    UiAgentProgressEvent, UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock,
+    DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentProfileView, UiAgentProgressEvent,
+    UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock,
     UiCreateTaskRequest, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteMemoryRequest,
     UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
     UiDeleteTaskRequest, UiGetMemoryRequest, UiListMemoriesRequest, UiLoadWorkspaceImageRequest,
@@ -37,6 +37,7 @@ use super::{
     UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
     UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
     UiWorkspaceImageView, UiWorkspaceSnapshot,
+    UiAssistantStreamField, UiTurnFinishedReason, UiTurnTrigger,
 };
 
 mod messaging;
@@ -59,42 +60,8 @@ fn ui_agent_config() -> AgentConfig {
 fn should_auto_title(task: &PersistedTask, user_message: &str) -> bool {
     task.task.title_source == TaskTitleSource::Default
         && !task.task.title_locked
-        && task.history.turns.is_empty()
+        && task.timeline.is_empty()
         && user_message.trim().chars().count() >= 4
-}
-
-fn classify_turn_failure(error: &anyhow::Error) -> (UiAgentFailureStage, bool) {
-    let message = error.to_string().to_ascii_lowercase();
-
-    if message.contains("tool ")
-        || message.contains("invalid ")
-        || message.contains("failed to decode arguments for tool")
-        || message.contains("write_file")
-        || message.contains("replace_lines")
-        || message.contains("insert_lines")
-        || message.contains("delete_lines")
-        || message.contains("run_command")
-        || message.contains("open_file")
-    {
-        return (UiAgentFailureStage::Tool, true);
-    }
-
-    if message.contains("provider")
-        || message.contains("chat completion")
-        || message.contains("model list")
-        || message.contains("request chat")
-        || message.contains("stream")
-        || message.contains("assistant text without tool calls")
-        || message.contains("neither assistant text nor tool calls")
-    {
-        return (UiAgentFailureStage::Provider, true);
-    }
-
-    if message.contains("context") {
-        return (UiAgentFailureStage::Context, true);
-    }
-
-    (UiAgentFailureStage::Internal, false)
 }
 
 async fn resolve_context_window_with_provider(
@@ -149,10 +116,12 @@ fn content_block_from_ui(block: UiComposerContentBlock) -> ContentBlock {
     }
 }
 
-fn detect_agent_mention(text: &str, session: &AgentSession) -> Option<String> {
-    text.split_whitespace().find_map(|segment| {
+fn extract_agent_mentions(text: &str, session: &AgentSession) -> Vec<String> {
+    let mut mentions = Vec::new();
+
+    for segment in text.split_whitespace() {
         if !segment.contains('@') {
-            return None;
+            continue;
         }
         let candidate = segment
             .trim()
@@ -162,8 +131,12 @@ fn detect_agent_mention(text: &str, session: &AgentSession) -> Option<String> {
             })
             .to_ascii_lowercase();
         if candidate.is_empty() {
-            return None;
+            continue;
         }
-        session.has_agent(&candidate).then_some(candidate)
-    })
+        if session.has_agent(&candidate) && !mentions.iter().any(|entry| entry == &candidate) {
+            mentions.push(candidate);
+        }
+    }
+
+    mentions
 }

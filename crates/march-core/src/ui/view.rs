@@ -2,13 +2,10 @@ use std::path::PathBuf;
 
 use indexmap::IndexMap;
 
-use crate::agent::{
-    AgentSession, AgentStatusPhase, AgentToolStatus, AssistantMessageCheckpointType, DebugRound,
-    DebugToolCall,
-};
+use crate::agent::{AgentSession, AgentToolStatus, DebugRound, DebugToolCall};
 use crate::agents::{AgentProfile, AgentProfileSource, MARCH_AGENT_NAME};
 use crate::context::{
-    ContentBlock, ContextPressure, DisplayTurn, FileSnapshot, Hint, ModifiedBy, Role, SystemStatus,
+    ContentBlock, ContextPressure, FileSnapshot, Hint, ModifiedBy, SystemStatus,
     ToolSummary, join_text_blocks,
 };
 use crate::memory::{MemoryIndexEntry, MemoryRecord, MemoryScope};
@@ -17,17 +14,22 @@ use crate::provider::format_provider_response_for_debug;
 use crate::settings::{
     ProviderModelRecord, ProviderRecord, ProviderSettingsSnapshot, ServerToolConfig,
 };
-use crate::storage::{PersistedOpenFile, PersistedTask, TaskRecord};
+use crate::storage::{
+    PersistedAssistantMessage, PersistedAssistantMessageState, PersistedAssistantTimelineEntry,
+    PersistedOpenFile, PersistedTask, PersistedTaskTimelineEntry, PersistedToolCallState,
+    PersistedTurn, PersistedTurnState, PersistedUserMessage, TaskRecord,
+};
 
 use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
 use super::{
-    UiAgentProfileView, UiAgentStatusPhase, UiAgentToolStatus, UiAssistantMessageCheckpointType,
-    UiContextPressureView, UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView,
-    UiDebugToolCallView, UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
-    UiMemoryDetailView, UiMemoryEntryView, UiModelCapabilitiesView, UiModifiedByView, UiNoteView,
-    UiOpenFileView, UiProviderModelView, UiProviderSettingsView, UiProviderView, UiRoleView,
-    UiRuntimeSnapshot, UiServerToolView, UiShellView, UiSkillView, UiSystemStatusView,
-    UiTaskSnapshot, UiTaskSummary, UiToolSummaryView, UiTurnView,
+    UiAgentProfileView, UiAgentToolStatus, UiContextPressureView, UiContextUsageSectionView,
+    UiContextUsageView, UiDebugRoundView, UiDebugToolCallView, UiDebugTraceView,
+    UiFileSnapshotView, UiHintView, UiImageAttachmentView, UiMemoryDetailView,
+    UiMemoryEntryView, UiModelCapabilitiesView, UiModifiedByView, UiNoteView, UiOpenFileView,
+    UiProviderModelView, UiProviderSettingsView, UiProviderView, UiRuntimeSnapshot,
+    UiServerToolView, UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot,
+    UiTaskSummary, UiToolSummaryView, UiTaskTimelineEntry, UiUserMessageView,
+    UiTimelineTurnView, UiAssistantMessageView, UiAssistantTimelineEntryView,
 };
 
 impl UiTaskSnapshot {
@@ -35,16 +37,19 @@ impl UiTaskSnapshot {
         let PersistedTask {
             task,
             active_agent,
-            history,
+            timeline,
             notes,
             open_files,
             hints,
+            ..
         } = task;
+        let last_seq = task.last_event_seq;
 
         Self {
             task: UiTaskSummary::from(task),
             active_agent,
-            history: history.turns.into_iter().map(UiTurnView::from).collect(),
+            last_seq,
+            timeline: timeline.into_iter().map(UiTaskTimelineEntry::from).collect(),
             notes: notes
                 .into_iter()
                 .map(|note| UiNoteView {
@@ -65,8 +70,10 @@ impl UiTaskSnapshot {
     }
 
     pub fn with_agent_display_names(mut self, session: &AgentSession) -> Self {
-        for turn in &mut self.history {
-            turn.agent_display_name = session.display_name_for_agent(&turn.agent);
+        for entry in &mut self.timeline {
+            if let UiTaskTimelineEntry::Turn(turn) = entry {
+                turn.agent_display_name = session.display_name_for_agent(&turn.agent_id);
+            }
         }
         self
     }
@@ -275,25 +282,114 @@ impl From<TaskRecord> for UiTaskSummary {
     }
 }
 
-impl From<DisplayTurn> for UiTurnView {
-    fn from(turn: DisplayTurn) -> Self {
+impl From<PersistedTaskTimelineEntry> for UiTaskTimelineEntry {
+    fn from(entry: PersistedTaskTimelineEntry) -> Self {
+        match entry {
+            PersistedTaskTimelineEntry::UserMessage(message) => {
+                UiTaskTimelineEntry::UserMessage(UiUserMessageView::from(message))
+            }
+            PersistedTaskTimelineEntry::Turn(turn) => {
+                UiTaskTimelineEntry::Turn(UiTimelineTurnView::from(turn))
+            }
+        }
+    }
+}
+
+impl From<PersistedUserMessage> for UiUserMessageView {
+    fn from(message: PersistedUserMessage) -> Self {
         Self {
-            role: UiRoleView::from(turn.role),
-            agent_display_name: turn.agent.clone(),
-            agent: turn.agent,
-            content: join_text_blocks(&turn.content),
-            images: turn
+            user_message_id: message.user_message_id,
+            content: join_text_blocks(&message.content),
+            images: message
                 .content
                 .iter()
                 .enumerate()
                 .filter_map(|(index, block)| image_attachment_from_content_block(block, index))
                 .collect(),
-            tool_summaries: turn
-                .tool_calls
+            mentions: message.mentions,
+            replies: message
+                .replies
                 .into_iter()
-                .map(UiToolSummaryView::from)
+                .map(|reply| match reply {
+                    crate::storage::PersistedReplyRef::Turn { id } => super::UiReplyRef::Turn { id },
+                    crate::storage::PersistedReplyRef::UserMessage { id } => {
+                        super::UiReplyRef::UserMessage { id }
+                    }
+                })
                 .collect(),
+            timestamp: system_time_to_unix(message.timestamp),
+        }
+    }
+}
+
+impl From<PersistedTurn> for UiTimelineTurnView {
+    fn from(turn: PersistedTurn) -> Self {
+        Self {
+            turn_id: turn.turn_id,
+            agent_id: turn.agent_id,
+            agent_display_name: String::new(),
+            trigger: match turn.trigger {
+                crate::storage::PersistedTurnTrigger::User { id } => super::UiTurnTrigger::User { id },
+                crate::storage::PersistedTurnTrigger::Turn { id } => super::UiTurnTrigger::Turn { id },
+            },
+            state: match turn.state {
+                PersistedTurnState::Streaming => "streaming",
+                PersistedTurnState::Done => "done",
+                PersistedTurnState::Failed => "failed",
+                PersistedTurnState::Cancelled => "cancelled",
+            }
+            .to_string(),
+            error_message: turn.error_message,
             timestamp: system_time_to_unix(turn.timestamp),
+            messages: turn.messages.into_iter().map(UiAssistantMessageView::from).collect(),
+        }
+    }
+}
+
+impl From<PersistedAssistantMessage> for UiAssistantMessageView {
+    fn from(message: PersistedAssistantMessage) -> Self {
+        Self {
+            message_id: message.message_id,
+            turn_id: message.turn_id,
+            state: match message.state {
+                PersistedAssistantMessageState::Streaming => "streaming",
+                PersistedAssistantMessageState::Done => "done",
+            }
+            .to_string(),
+            reasoning: message.reasoning,
+            timeline: message
+                .timeline
+                .into_iter()
+                .map(UiAssistantTimelineEntryView::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<PersistedAssistantTimelineEntry> for UiAssistantTimelineEntryView {
+    fn from(entry: PersistedAssistantTimelineEntry) -> Self {
+        match entry {
+            PersistedAssistantTimelineEntry::Text { text } => Self::Text { text },
+            PersistedAssistantTimelineEntry::Tool {
+                tool_call_id,
+                tool_name,
+                arguments,
+                status,
+                preview,
+                duration_ms,
+            } => Self::Tool {
+                tool_call_id,
+                tool_name,
+                arguments,
+                status: match status {
+                    PersistedToolCallState::Running => "running",
+                    PersistedToolCallState::Ok => "ok",
+                    PersistedToolCallState::Error => "error",
+                }
+                .to_string(),
+                preview,
+                duration_ms,
+            },
         }
     }
 }
@@ -329,17 +425,6 @@ fn image_attachment_from_content_block(
         data_url: format!("data:{};base64,{}", media_type, data_base64),
         source_path: normalized_source_path,
     })
-}
-
-impl From<Role> for UiRoleView {
-    fn from(role: Role) -> Self {
-        match role {
-            Role::System => Self::System,
-            Role::User => Self::User,
-            Role::Assistant => Self::Assistant,
-            Role::Tool => Self::Tool,
-        }
-    }
 }
 
 impl From<ToolSummary> for UiToolSummaryView {
@@ -540,31 +625,11 @@ impl From<MemoryRecord> for UiMemoryDetailView {
     }
 }
 
-impl From<AgentStatusPhase> for UiAgentStatusPhase {
-    fn from(value: AgentStatusPhase) -> Self {
-        match value {
-            AgentStatusPhase::BuildingContext => Self::BuildingContext,
-            AgentStatusPhase::WaitingModel => Self::WaitingModel,
-            AgentStatusPhase::RunningTool => Self::RunningTool,
-            AgentStatusPhase::Streaming => Self::Streaming,
-        }
-    }
-}
-
 impl From<AgentToolStatus> for UiAgentToolStatus {
     fn from(value: AgentToolStatus) -> Self {
         match value {
             AgentToolStatus::Success => Self::Success,
             AgentToolStatus::Error => Self::Error,
-        }
-    }
-}
-
-impl From<AssistantMessageCheckpointType> for UiAssistantMessageCheckpointType {
-    fn from(value: AssistantMessageCheckpointType) -> Self {
-        match value {
-            AssistantMessageCheckpointType::Intermediate => Self::Intermediate,
-            AssistantMessageCheckpointType::Final => Self::Final,
         }
     }
 }

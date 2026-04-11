@@ -50,6 +50,7 @@ const TURN_CANCELLED_ERROR_MESSAGE: &str = "turn cancelled";
 #[derive(Debug)]
 pub struct TurnCancellation {
     cancelled: watch::Sender<bool>,
+    parent_cancelled: Option<watch::Sender<bool>>,
 }
 
 impl Default for TurnCancellation {
@@ -61,7 +62,18 @@ impl Default for TurnCancellation {
 impl TurnCancellation {
     pub fn new() -> Self {
         let (cancelled, _) = watch::channel(false);
-        Self { cancelled }
+        Self {
+            cancelled,
+            parent_cancelled: None,
+        }
+    }
+
+    pub fn child_of(parent: &TurnCancellation) -> Self {
+        let (cancelled, _) = watch::channel(false);
+        Self {
+            cancelled,
+            parent_cancelled: Some(parent.cancelled.clone()),
+        }
     }
 
     pub fn never() -> &'static Self {
@@ -75,6 +87,10 @@ impl TurnCancellation {
 
     pub fn is_cancelled(&self) -> bool {
         *self.cancelled.borrow()
+            || self
+                .parent_cancelled
+                .as_ref()
+                .is_some_and(|parent| *parent.borrow())
     }
 
     pub async fn cancelled(&self) {
@@ -83,8 +99,30 @@ impl TurnCancellation {
         }
 
         let mut receiver = self.cancelled.subscribe();
-        while !*receiver.borrow() {
-            if receiver.changed().await.is_err() {
+        let mut parent_receiver = self.parent_cancelled.as_ref().map(watch::Sender::subscribe);
+        loop {
+            if *receiver.borrow()
+                || parent_receiver
+                    .as_ref()
+                    .is_some_and(|parent| *parent.borrow())
+            {
+                return;
+            }
+
+            if let Some(parent) = parent_receiver.as_mut() {
+                tokio::select! {
+                    changed = receiver.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                    changed = parent.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                }
+            } else if receiver.changed().await.is_err() {
                 return;
             }
         }
@@ -160,17 +198,22 @@ pub struct AgentRunResult {
 
 #[derive(Debug, Clone)]
 pub enum AgentProgressEvent {
+    MessageStarted {
+        message_id: String,
+    },
     Status {
         agent: String,
         phase: AgentStatusPhase,
         label: String,
     },
     ToolStarted {
+        message_id: String,
         tool_call_id: String,
         tool_name: String,
         summary: String,
     },
     ToolFinished {
+        message_id: String,
         tool_call_id: String,
         status: AgentToolStatus,
         summary: String,
@@ -178,10 +221,12 @@ pub enum AgentProgressEvent {
         detail: Option<String>,
     },
     AssistantTextPreview {
-        agent: String,
-        message: String,
+        message_id: String,
+        delta: String,
     },
-    AssistantMessageCheckpoint(AssistantMessageCheckpoint),
+    MessageFinished {
+        message_id: String,
+    },
     FinalAssistantMessage(FinalAssistantMessage),
     RoundCompleted(DebugRound),
 }
@@ -198,19 +243,6 @@ pub enum AgentStatusPhase {
 pub enum AgentToolStatus {
     Success,
     Error,
-}
-
-#[derive(Debug, Clone)]
-pub struct AssistantMessageCheckpoint {
-    pub message_id: String,
-    pub message: String,
-    pub checkpoint_type: AssistantMessageCheckpointType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssistantMessageCheckpointType {
-    Intermediate,
-    Final,
 }
 
 #[derive(Debug, Clone)]

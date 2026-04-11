@@ -9,7 +9,6 @@ import {
   type BackendRuntimeSnapshot,
   type BackendWorkspaceSnapshot,
   type DebugRoundItem,
-  type LiveTurn,
   type TaskActivityStatus,
   type WorkspaceView,
 } from '@/data/mock';
@@ -17,13 +16,11 @@ import { debugChat } from '@/lib/chatDebug';
 import type { WorkspaceSnapshotState } from './types';
 
 type UseWorkspaceSnapshotStateOptions = {
-  liveTurns: Readonly<{ value: Record<number, LiveTurn> }>;
   taskActivityStatuses: Readonly<{ value: Record<number, TaskActivityStatus> }>;
 };
 
 export function useWorkspaceSnapshotState({
   snapshot,
-  liveTurns,
   taskActivityStatuses,
 }: UseWorkspaceSnapshotStateOptions & {
   snapshot: Ref<BackendWorkspaceSnapshot | null>;
@@ -63,7 +60,6 @@ export function useWorkspaceSnapshotState({
           activityStatus: task.id === String(activeTaskId) ? undefined : activityStatus,
         };
       }),
-      liveTurn: activeTaskId ? liveTurns.value[activeTaskId] : undefined,
     };
   });
 
@@ -314,7 +310,6 @@ function buildEmptyTaskWorkspace(
     selectedFrequencyPenalty: undefined,
     selectedMaxOutputTokens: undefined,
     workingDirectory: overrides.workingDirectory,
-    chat: [],
     notes: [],
     openFiles: [],
     hints: [],
@@ -327,8 +322,8 @@ function buildEmptyTaskWorkspace(
       limit: workspace.contextUsage.limit || '128k',
       sections: [],
     },
+    timeline: [],
     debugRounds: [],
-    liveTurn: undefined,
   };
 }
 
@@ -350,7 +345,6 @@ function applyOptimisticActiveTask(workspace: WorkspaceView, optimisticTaskId: s
     selectedPresencePenalty: undefined,
     selectedFrequencyPenalty: undefined,
     selectedMaxOutputTokens: undefined,
-    chat: [],
     notes: [],
     openFiles: [],
     hints: [],
@@ -363,7 +357,7 @@ function applyOptimisticActiveTask(workspace: WorkspaceView, optimisticTaskId: s
       limit: workspace.contextUsage.limit || '128k',
       sections: [],
     },
+    timeline: [],
     debugRounds: [],
-    liveTurn: undefined,
   };
 }

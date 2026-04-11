@@ -3,13 +3,13 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use rusqlite::{Transaction, params};
 
-use crate::context::{ConversationHistory, Hint};
+use crate::context::Hint;
 
-use super::codec::{
-    encode_content_blocks, encode_tool_summaries, optional_unix_timestamp, role_to_db,
-    unix_timestamp,
+use super::codec::{encode_content_blocks, optional_unix_timestamp, unix_timestamp};
+use super::{
+    PersistedAssistantMessageState, PersistedAssistantTimelineEntry, PersistedNote,
+    PersistedOpenFile, PersistedTaskTimelineEntry, PersistedToolCallState, PersistedTurnState,
 };
-use super::{PersistedNote, PersistedOpenFile};
 
 pub fn update_task_last_active(
     transaction: &Transaction<'_>,
@@ -22,42 +22,6 @@ pub fn update_task_last_active(
             params![task_id, unix_timestamp(last_active)?],
         )
         .context("failed to update task last_active")?;
-    Ok(())
-}
-
-pub fn replace_conversation_history(
-    transaction: &Transaction<'_>,
-    task_id: i64,
-    history: &ConversationHistory,
-) -> Result<()> {
-    transaction
-        .execute(
-            "DELETE FROM conversation_turns WHERE task_id = ?1",
-            params![task_id],
-        )
-        .context("failed to clear conversation history")?;
-
-    let mut insert = transaction
-        .prepare(
-            "INSERT INTO conversation_turns
-             (task_id, role, agent, content, tool_summaries, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .context("failed to prepare conversation insert")?;
-
-    for turn in &history.turns {
-        let summaries = encode_tool_summaries(&turn.tool_calls)?;
-        insert
-            .execute(params![
-                task_id,
-                role_to_db(turn.role),
-                turn.agent,
-                encode_content_blocks(&turn.content)?,
-                summaries,
-                unix_timestamp(turn.timestamp)?,
-            ])
-            .context("failed to insert conversation turn")?;
-    }
     Ok(())
 }
 
@@ -89,6 +53,181 @@ pub fn replace_notes(
             .context("failed to insert note")?;
     }
     Ok(())
+}
+
+pub fn replace_task_timeline(
+    transaction: &Transaction<'_>,
+    task_id: i64,
+    timeline: &[PersistedTaskTimelineEntry],
+) -> Result<()> {
+    transaction
+        .execute(
+            "DELETE FROM task_message_timeline_entries WHERE task_id = ?1",
+            params![task_id],
+        )
+        .context("failed to clear task message timeline entries")?;
+    transaction
+        .execute("DELETE FROM task_turn_messages WHERE task_id = ?1", params![task_id])
+        .context("failed to clear task turn messages")?;
+    transaction
+        .execute(
+            "DELETE FROM task_timeline_entries WHERE task_id = ?1",
+            params![task_id],
+        )
+        .context("failed to clear task timeline entries")?;
+
+    let mut insert_entry = transaction
+        .prepare(
+            "INSERT INTO task_timeline_entries
+             (task_id, position, kind, user_message_id, turn_id, content, mentions_json, replies_json, agent_id, trigger_json, state, error_message, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        )
+        .context("failed to prepare timeline entry insert")?;
+    let mut insert_message = transaction
+        .prepare(
+            "INSERT INTO task_turn_messages
+             (task_id, turn_id, message_id, state, reasoning, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .context("failed to prepare turn message insert")?;
+    let mut insert_message_entry = transaction
+        .prepare(
+            "INSERT INTO task_message_timeline_entries
+             (task_id, message_id, kind, text, tool_call_id, tool_name, arguments, status, preview, duration_ms, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        )
+        .context("failed to prepare message timeline entry insert")?;
+
+    for (position, entry) in timeline.iter().enumerate() {
+        match entry {
+            PersistedTaskTimelineEntry::UserMessage(message) => {
+                insert_entry
+                    .execute(params![
+                        task_id,
+                        position as i64,
+                        "user_message",
+                        message.user_message_id,
+                        Option::<String>::None,
+                        encode_content_blocks(&message.content)?,
+                        serde_json::to_string(&message.mentions)
+                            .context("failed to encode mentions")?,
+                        serde_json::to_string(&message.replies)
+                            .context("failed to encode replies")?,
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        unix_timestamp(message.timestamp)?,
+                    ])
+                    .context("failed to insert user timeline entry")?;
+            }
+            PersistedTaskTimelineEntry::Turn(turn) => {
+                insert_entry
+                    .execute(params![
+                        task_id,
+                        position as i64,
+                        "turn",
+                        Option::<String>::None,
+                        turn.turn_id,
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        turn.agent_id,
+                        serde_json::to_string(&turn.trigger)
+                            .context("failed to encode turn trigger")?,
+                        encode_turn_state(turn.state),
+                        turn.error_message,
+                        unix_timestamp(turn.timestamp)?,
+                    ])
+                    .context("failed to insert turn timeline entry")?;
+
+                for (message_position, message) in turn.messages.iter().enumerate() {
+                    insert_message
+                        .execute(params![
+                            task_id,
+                            turn.turn_id,
+                            message.message_id,
+                            encode_message_state(message.state),
+                            message.reasoning,
+                            message_position as i64,
+                        ])
+                        .context("failed to insert turn message")?;
+
+                    for (timeline_position, timeline_entry) in message.timeline.iter().enumerate() {
+                        match timeline_entry {
+                            PersistedAssistantTimelineEntry::Text { text } => {
+                                insert_message_entry
+                                    .execute(params![
+                                        task_id,
+                                        message.message_id,
+                                        "text",
+                                        text,
+                                        Option::<String>::None,
+                                        Option::<String>::None,
+                                        Option::<String>::None,
+                                        Option::<String>::None,
+                                        Option::<String>::None,
+                                        Option::<i64>::None,
+                                        timeline_position as i64,
+                                    ])
+                                    .context("failed to insert text timeline entry")?;
+                            }
+                            PersistedAssistantTimelineEntry::Tool {
+                                tool_call_id,
+                                tool_name,
+                                arguments,
+                                status,
+                                preview,
+                                duration_ms,
+                            } => {
+                                insert_message_entry
+                                    .execute(params![
+                                        task_id,
+                                        message.message_id,
+                                        "tool",
+                                        Option::<String>::None,
+                                        tool_call_id,
+                                        tool_name,
+                                        arguments,
+                                        encode_tool_call_state(*status),
+                                        preview,
+                                        duration_ms.map(|value| value as i64),
+                                        timeline_position as i64,
+                                    ])
+                                    .context("failed to insert tool timeline entry")?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn encode_message_state(state: PersistedAssistantMessageState) -> &'static str {
+    match state {
+        PersistedAssistantMessageState::Streaming => "streaming",
+        PersistedAssistantMessageState::Done => "done",
+    }
+}
+
+fn encode_turn_state(state: PersistedTurnState) -> &'static str {
+    match state {
+        PersistedTurnState::Streaming => "streaming",
+        PersistedTurnState::Done => "done",
+        PersistedTurnState::Failed => "failed",
+        PersistedTurnState::Cancelled => "cancelled",
+    }
+}
+
+fn encode_tool_call_state(state: PersistedToolCallState) -> &'static str {
+    match state {
+        PersistedToolCallState::Running => "running",
+        PersistedToolCallState::Ok => "ok",
+        PersistedToolCallState::Error => "error",
+    }
 }
 
 pub fn replace_open_files(

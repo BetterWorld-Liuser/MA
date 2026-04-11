@@ -18,107 +18,110 @@
 
 ## 基础结构
 
+`Task.timeline` 是 UserMessage 和 Turn 按 `seq` 交错的扁平列表，`<ChatMessageList />` 按序遍历渲染：
+
 ```text
-┌──────────────────────────────────────────────┐
-│ March  14:32                                 │
-│ 好的，我先看一下现有结构……                     │
-│ ┌─ read_file src/auth.rs                    │
-│ ├─ replace_lines 12-30                      │
-│ └─ run_command cargo test                   │
-│                                              │
-│                           用户  14:32        │
-│           帮我把 auth 模块拆成更小的单元       │
-│                                              │
-│ March  14:33                                 │
-│ 已完成，auth 模块拆成了三个文件                │
-├──────────────────────────────────────────────┤
-│ 输入框                                 [发送] │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  ← UserMessage ──────────────────────────────── │
+│                              用户  14:32          │
+│              帮我把 auth 模块拆成更小的单元         │
+│                                                  │
+│  ← TurnGroup（Turn state: done）──────────────── │
+│  🤖 March  ← 来自用户消息                         │
+│  ▶ 3 个动作                                      │  ← 折叠摘要（点击展开）
+│  ─────────────── 最终消息 ─────────────────────── │
+│  已完成，auth 模块拆成了三个文件                    │
+│                                                  │
+│  ← UserMessage ──────────────────────────────── │
+│                              用户  14:35          │
+│   @reviewer @architect 分别看看拆分结果            │
+│                                                  │
+│  ← TurnGroup（Turn state: streaming）──────────  │
+│  🔵 代码审查员  ← 来自用户消息                      │
+│  ┌─ read_file src/auth_token.rs                 │
+│  ├─ read_file src/auth_session.rs               │
+│  └─ ...                                         │
+│                                                  │
+│  ← TurnGroup（Turn state: streaming）──────────  │
+│  🟢 架构师  ← 来自用户消息                         │
+│  ┌─ read_file src/auth_token.rs    ✓            │
+│  └─ ...                                         │
+├──────────────────────────────────────────────────┤
+│ 输入框                              [中断所有][发送] │
+└──────────────────────────────────────────────────┘
 ```
 
 - 完整对话历史，用户可以翻回去
-- AI 消息固定在左侧，用户消息固定在右侧
+- UserMessage 固定在右侧；TurnGroup 固定在左侧，头部显示 agent 名 + 触发来源
+- 并发 streaming 的多个 Turn 就是相邻的独立卡片，不做 side-by-side 或嵌套缩进
 - 顶部不放置无信息增益的重复标题
 
 ---
 
 ## 消息状态模型
 
-用户发送消息后，中栏立刻插入一条新的 AI 消息槽位，经历以下状态：
+中栏数据结构是 `TaskTimelineEntry[]`——按 `seq` 严格排序的扁平列表，条目只有两种：`UserMessage` 和 `Turn`。
 
-1. `pending`：用户消息已送出，AI 轮次已创建，尚未产出内容
-2. `running`：当前轮正在执行，可能在构建上下文、调用工具、等待模型输出
-3. `streaming`：AI 正在流式输出自然语言内容
-4. `done`：当前轮完成
-5. `interrupted`：用户主动点击中断；已产出的部分输出和工具调用列表保留在历史消息中，带轻量视觉标记（消息右上角 `⚠ 已中断`，整体 opacity 略低），提示用户这是未完成的回复
-6. `error`：当前轮出错，显示错误摘要（超时 / API 报错 / 工具执行失败等具体来源）和重试入口；**重试等同于重新发送同一条用户消息，从头开始新一轮 agent loop**，不尝试从出错点恢复
+**Turn 的四种状态：**
 
-同一 task 内，agent 轮次仍按顺序串行执行，不支持两个轮次同时向后端并发推进；但这不应等价于“锁死输入框”。当前轮处于 `pending` / `running` / `streaming` 时，用户仍可以继续编辑下一条消息，等本轮结束后再发送。发送新消息时，March 使用当时最新的 chat 快照、工作目录、模型选择与右栏上下文状态重新构建下一轮输入，而不是复用上一轮开始时的旧前端草稿状态。
+| 状态 | 含义 |
+|------|------|
+| `streaming` | 该 turn 正在执行（可能有多个并发 turn 同时处于此状态） |
+| `done` | 该 turn 正常结束，已折叠为「N 个动作 ▸」摘要 + 最终消息 |
+| `failed` | 该 turn 出错，折叠摘要后显示错误信息，提供重试入口（重试 = 重新发送同一条用户消息） |
+| `cancelled` | 用户主动取消，已产出内容保留并折叠，带轻量视觉标记 |
 
-### 中间对话的展示策略
+**并发执行**：一条 UserMessage 可通过 `mentions`（@Agent）和 `replies`（引用 Turn）同时激活多个 agent，各自独立运行为独立的 Turn。任意时刻同一 task 内可能存在多个 `state='streaming'` 的 Turn，它们在时间线上是相邻的独立卡片，各自 streaming、各自独立折叠，互不干扰。
 
-一轮对话中，AI 可能产生多个阶段性输出（思考过程、中间结论、修正等）。这些中间内容对 AI 而言可能最终会被覆盖，但对用户理解推理过程具有参考价值。
+用户发送消息时，前端立即在时间线末尾乐观插入一条 UserMessage（临时 id）。收到 `user_message_appended` 后替换为正式 id，随即按激活列表依次收到若干 `turn_started`，每个 turn 在时间线末尾插入对应的空 Turn 卡片。
 
-**设计原则：**
+### Turn 内展示策略
 
-- **AI 上下文**：只保留最终有效的内容，中间输出不进入 `recent_chat`
-- **用户视图**：保留完整的思考链条，中间输出以独立消息形式呈现在历史记录中
-- **过渡动画**：当新的 AI 输出覆盖当前活跃消息时，旧消息渐隐（淡出）并沉淀到历史，新消息渐显（淡入）
+一个 Turn 内部含 1+ 条 Message（每条对应一次 LLM API 调用）。Turn 处于 `streaming` 状态时，所有 Message 的 reasoning 与 timeline（TextChunk 和 ToolCall 交错）**按事件到达顺序完全平铺**，呈现为一条连续的操作流水，不做任何预测性分割。
 
-**实现要点：**
+Turn 收到 `turn_finished` 时，前端执行后验折叠：
 
-1. **消息沉淀**：当 AI 产生新的自然语言输出（而非追加增量）时，当前 `liveTurn` 的内容作为一条完整消息固化到 `chat` 历史中，然后 `liveTurn` 切换到新的内容
-2. **过渡动画**：使用 CSS transition 实现消息卡片的淡入淡出
-   - 旧消息：`opacity` 从 1 → 0，持续约 200ms，完成后移动到历史列表
-   - 新消息：`opacity` 从 0 → 1，持续约 200ms
-3. **视觉区分**：中间消息可以带有轻微的样式差异（如略低的 opacity、边框样式），提示用户这是"过程性"内容
-4. **最终收敛**：当本轮结束时，最后一条 `liveTurn` 内容同样沉淀到历史，表示该轮对话完整结束
+1. 该 turn 最后一条 Message 为最终 Message
+2. 最终 Message 之前的所有内容折叠为「N 个动作 ▸」摘要（N 只统计 ToolCall 个数）
+3. 摘要与最终 Message 之间画 `── 最终消息 ──` 分割线
+4. 最终 Message 保持展开；点击摘要可展开恢复平铺
 
-### 收尾原子性
+**边界情况**：Turn 内只有一条 Message 时，不画摘要、不画分割线，直接展开该 Message。
 
-当一轮从 `liveTurn` 收敛为正式历史消息时，聊天区必须满足“收尾原子性”：
+### 折叠原子性
 
-- 不允许先移除 `liveTurn`，再在下一次 snapshot 刷新里补回最终 assistant 消息
-- 不允许因为右栏 debug trace 或 context usage 同步更新，而让中栏消息列表先短暂变短、再重新出现
-- 对用户而言，这一步应该表现为“当前进行中的消息自然沉淀为历史”，而不是“消息闪一下消失，再从别处弹回来”
+`turn_finished` 是某个 Turn 折叠的**唯一触发时机**：
 
-实现上可以接受以下两种方式：
-
-1. 前端先把最终 assistant 消息合入聊天历史，再移除 `liveTurn`
-2. 或者通过单个原子 store update 同时完成“历史追加 + live turn 清理”
-
-不接受的方式：
-
-- 先 `clearLiveTurn()`，等待异步 snapshot 返回后再刷新历史消息
-- 把聊天列表和右栏 debug 列表绑定到同一个粗粒度对象替换上，导致 debug 追加时连带重排聊天区
+- 不允许在 `message_finished` 时触发折叠或分割线渲染
+- 不允许 snapshot 刷新连带改变 streaming Turn 的视图状态
+- 并发 streaming 的多个 Turn 各自独立在收到自己的 `turn_finished` 时折叠，互不影响
+- 右栏 debug trace / context usage 的更新不得导致聊天时间线重建或已完成 Turn 的折叠状态重置
 
 ### 中栏数据源边界
 
-中栏消息流必须有自己独立的数据源，不允许继续作为 `active_task snapshot` 的派生视图存在。
+中栏消息流必须有自己独立的数据源，不允许作为 `active_task snapshot` 的派生视图存在。
 
 具体约束：
 
-- 中栏只读取 `chatRuntimeStore`
-- `chatRuntimeStore` 只负责两类数据：
-  - 正式历史消息列表
-  - 当前 `liveTurn`
+- 中栏只读取 `chatRuntimeStore`，形态为 `Record<taskId, TaskTimelineEntry[]>`
+- `TaskTimelineEntry` 是 `UserMessage | Turn` 的判别联合，是中栏**唯一 source of truth**，不存在 liveTurn 或独立历史消息列表的双结构
 - task snapshot 只能在以下场景参与聊天区：
-  - 首次打开某个 task
+  - 首次打开某个 task（`get_task_history` 拉基线）
   - 切换到另一个 task
   - 应用重启后的恢复
-  - 用户显式触发 resync
+  - `gap_too_large` 触发重拉
 
 不允许的路径：
 
 - 右栏 `notes / open_files / debug_trace / context_usage` 更新时顺带重建聊天列表
 - `send_message` 返回后再用整段 `history` 回填中栏
-- 聊天区同时消费“事件 append”和“snapshot hydrate”两条最终消息来源
+- 聊天区同时消费事件 append 和 snapshot hydrate 两条来源（snapshot 只在切换/初始化时写入）
 
 设计目标：
 
-- 用户发送后，用户消息立即 append 到正式聊天列表
-- 运行过程中，assistant 回复只通过事件流更新当前 `liveTurn`
-- 轮次结束时，`liveTurn` 收口为一条正式 assistant 消息，仅发生一次
+- 用户发送后，UserMessage 立即乐观插入 timeline（临时 id），收到 `user_message_appended` 后替换正式 id
+- 运行过程中，所有内容通过事件流的 `chatEventReducer` 增量写入对应 Turn 的 messages
+- `turn_finished` 到达时，目标 Turn state 置为 done，仅此一次触发折叠，无额外写入动作
 
 ---
 
@@ -190,11 +193,11 @@
 
 ### 运行中输入
 
-- 当前 task 正在运行时，输入框、`@` 面板、图片附件区和任务级运行上下文控件应继续可用，不因为“AI 正在回复”而整体 disabled
-- 运行中底栏主按钮切换为“中断”，而不是继续显示可点击的“发送”；这表达的是“当前轮只能取消，不能并发再发一轮”
-- 若用户在运行中按 `Enter`，前端不应偷偷排队一个隐式请求；只有显式进入下一次发送动作时，才创建新轮次
-- 当前轮结束后，输入框里保留的草稿就是下一轮候选输入；用户可继续修改，也可直接发送
-- 这样设计的目标是把“AI 后台在跑”和“用户前台继续组织下一条请求”解耦，避免把等待时间浪费成纯只读状态
+- 当前 task 有 streaming Turn 时，输入框、`@` 面板、图片附件区和任务级运行上下文控件应继续可用，不因为”AI 正在回复”而整体 disabled
+- 运行中底栏主按钮切换为”中断所有”（等效于 `cancel_task`），每个 TurnGroup 卡片各自提供独立的取消按钮（等效于 `cancel_turn`）；不隐藏”发送”按钮，但用户发送新消息会在当前轮仍 streaming 时排入等待——具体策略取决于后端是否支持队列；无论如何，前端不得偷偷排队隐式请求
+- 若用户在运行中按 `Enter`，只有当后端确认可接受新消息时才创建新一轮；否则应给出明确提示
+- 当所有 streaming Turn 结束后，输入框里保留的草稿就是下一轮候选输入
+- 这样设计的目标是把”AI 后台在跑”和”用户前台继续组织下一条请求”解耦，避免把等待时间浪费成纯只读状态
 
 ---
 
@@ -216,7 +219,7 @@
 
 | 类型 | 行为 |
 |------|------|
-| `@Agent` | 保留在输入文本中，用于切换本轮活跃角色；角色结果在面板中排在文件前面 |
+| `@Agent` | 进入 UserMessage 的 `mentions` 列表，驱动后端为该 agent 创建独立 Turn；在文本中以高亮 tag 内联显示；角色结果在面板中排在文件前面 |
 | `@文本文件` | 加入 `open_files`，出现在右栏监控区 |
 | `@图片文件` | 转为 image content block 注入本条消息，不加入 `open_files`（需模型支持 vision） |
 | `@目录` | 注入目录树结构到本条消息，不加入 `open_files` |

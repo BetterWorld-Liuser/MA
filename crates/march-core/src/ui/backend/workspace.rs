@@ -1,6 +1,7 @@
 use super::*;
+use crate::storage::PersistedTaskTimeline;
 use crate::ui::workspace::{search_mentions, search_skills, search_workspace_entries};
-use crate::ui::{UiRuntimeSnapshot, UiTaskSummary, UiToggleOpenFileLockRequest};
+use crate::ui::{UiRuntimeSnapshot, UiTaskHistoryView, UiTaskSummary, UiToggleOpenFileLockRequest};
 
 impl UiAppBackend {
     pub fn open(workspace_path: impl Into<PathBuf>) -> Result<Self> {
@@ -156,6 +157,16 @@ impl UiAppBackend {
         let persisted = self.storage.load_task(task_id)?;
         let session = self.load_session(task_id)?;
         Ok(UiTaskSnapshot::from_persisted(persisted).with_agent_display_names(&session))
+    }
+
+    pub fn task_history(&self, task_id: i64) -> Result<UiTaskHistoryView> {
+        let persisted = self.storage.load_task(task_id)?;
+        let session = self.load_session(task_id)?;
+        let snapshot = UiTaskSnapshot::from_persisted(persisted).with_agent_display_names(&session);
+        Ok(UiTaskHistoryView {
+            timeline: snapshot.timeline,
+            last_seq: snapshot.last_seq,
+        })
     }
 
     pub fn task_snapshot_with_runtime(
@@ -364,10 +375,10 @@ impl UiAppBackend {
         session: &AgentSession,
         debug_rounds: &[DebugRound],
         context_budget_tokens: usize,
+        timeline: PersistedTaskTimeline,
     ) -> Result<UiTaskSnapshot> {
         let PersistedTaskState {
             active_agent,
-            history,
             notes,
             open_files,
             hints,
@@ -378,7 +389,7 @@ impl UiAppBackend {
         Ok(UiTaskSnapshot::from_persisted(PersistedTask {
             task,
             active_agent,
-            history,
+            timeline,
             notes,
             open_files,
             hints,

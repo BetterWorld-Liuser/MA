@@ -1,1 +1,1 @@
-阅读AGENTS.md文档。
+阅读AGENTS.md文档并遵循其中的要求。

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use super::*;
+use crate::storage::history_from_timeline;
 
 pub const DEFAULT_RUN_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -36,10 +37,11 @@ impl AgentSession {
     pub fn restore(config: AgentConfig, task: PersistedTask) -> Result<Self> {
         let working_directory = task.task.working_directory.clone();
         let open_files = normalize_open_files_for_workspace(&working_directory, task.open_files);
+        let history = history_from_timeline(&task.timeline);
         Self::create(
             config,
             task.task.name,
-            task.history,
+            history,
             open_files,
             working_directory,
             task.active_agent,
@@ -321,7 +323,7 @@ impl AgentSession {
     pub fn persisted_state(&self) -> PersistedTaskState {
         PersistedTaskState {
             active_agent: self.active_agent.clone(),
-            history: self.history.clone(),
+            timeline: None,
             notes: self.persisted_notes(),
             open_files: self.open_files.clone(),
             hints: self.hints.clone(),
