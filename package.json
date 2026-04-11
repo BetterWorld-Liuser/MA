@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:web": "vite",
+    "dev:build-watch": "vite build --watch",
     "typecheck": "tsc",
     "check:shadow-js": "node ./scripts/check-shadow-js.mjs",
     "check": "npm run typecheck && npm run check:shadow-js",
@@ -13,7 +14,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:dev:reuse-web": "tauri dev --no-dev-server",
+    "tauri:dev:reuse-web": "tauri dev --config src-tauri/tauri.reuse-web.conf.json",
     "tauri:build": "tauri build"
   },
   "dependencies": {
@@ -24,7 +25,6 @@
     "@vueuse/core": "^14.2.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-vue-next": "^1.0.0",
     "markstream-vue": "^0.0.10",
     "reka-ui": "^2.9.3",
     "tailwind-merge": "^3.5.0",

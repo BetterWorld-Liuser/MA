@@ -254,11 +254,13 @@ function setMessageText(message: AssistantMessage, text: string): AssistantMessa
   if (lastEntry?.kind === 'text') {
     timeline[timeline.length - 1] = {
       kind: 'text',
+      textId: lastEntry.textId,
       text,
     };
   } else {
     timeline.push({
       kind: 'text',
+      textId: crypto.randomUUID(),
       text,
     });
   }
@@ -274,11 +276,13 @@ function appendMessageTextDelta(message: AssistantMessage, delta: string): Assis
   if (lastEntry?.kind === 'text') {
     timeline[timeline.length - 1] = {
       kind: 'text',
+      textId: lastEntry.textId,
       text: `${lastEntry.text}${delta}`,
     };
   } else {
     timeline.push({
       kind: 'text',
+      textId: crypto.randomUUID(),
       text: delta,
     });
   }

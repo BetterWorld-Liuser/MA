@@ -31,6 +31,7 @@ export type UserMessage = {
 
 export type AssistantTimelineTextEntry = {
   kind: 'text';
+  textId: string;
   text: string;
 };
 
@@ -884,6 +885,7 @@ export function toTaskTimelineEntries(entries: BackendTaskTimelineEntry[]): Task
           if (timelineEntry.kind === 'text') {
             return {
               kind: 'text',
+              textId: crypto.randomUUID(),
               text: timelineEntry.text,
             } satisfies AssistantTimelineTextEntry;
           }

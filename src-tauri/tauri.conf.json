@@ -4,9 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.march.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:build-watch",
     "beforeBuildCommand": "npm run build",
-    "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },
   "app": {

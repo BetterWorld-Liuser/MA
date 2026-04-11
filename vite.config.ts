@@ -51,6 +51,13 @@ export default defineConfig({
     host,
     port: 5173,
     strictPort: true,
+    warmup: {
+      clientFiles: [
+        './src/**/*.vue',
+        './src/**/*.ts',
+        './src/**/*.css',
+      ],
+    },
   },
   preview: {
     host,

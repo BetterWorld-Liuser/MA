@@ -462,7 +462,7 @@ unsubscribe_task(task_id)
 
 ---
 
-## 八、和现有 design 文档的关系
+## 八、和现有架构文档的关系
 
 本方案是对 [ui-chat.md](ui-chat.md) 「中栏数据源边界」「收尾原子性」与 [ui-events.md](ui-events.md) 「运行时显示协议 vs 持久化」两节的具体落地——把"chat 是单一 source of truth"从约束升级成"chat 是唯一容器，liveTurn 这层中间结构本不该存在"。
 

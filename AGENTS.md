@@ -1,14 +1,33 @@
 # March — 项目规则
 
-## 设计中心
+## 知识沉淀
 
-**`design/DESIGN.md` 是整个项目的设计权威文档。**
+**`easysdd/learnings/` 是项目的经验知识库。** 在分析问题、设计方案前，先检索是否有相关历史记录：
 
-- 所有架构决策、模块划分、数据结构设计，必须能从 `design/DESIGN.md` 的核心理念中追溯出来
-- 子系统设计（file watcher、context builder、TUI 等）是 `design/DESIGN.md` 思路的延伸，不是独立存在的
-- 新增功能或改动方向前，先对照 `design/DESIGN.md`，确认与核心设计一致；若有冲突，先更新 `design/DESIGN.md`，再动代码
-- 子系统若有独立设计文档，放在 `design/` 目录下，并在 `design/DESIGN.md` 中引用
-- 不要在代码注释或其他文档里另起炉灶地描述架构——设计讨论的落点是 `design/`
+```bash
+# 按关键词搜索
+python easysdd/tools/search-yaml.py --dir easysdd/learnings --query "{关键词}"
+
+# 按组件过滤
+python easysdd/tools/search-yaml.py --dir easysdd/learnings --filter component~={模块名}
+
+# 列出所有高严重度坑点
+python easysdd/tools/search-yaml.py --dir easysdd/learnings --filter track=pitfall --filter severity=high
+```
+
+- `easysdd-issue-analyze` 根因分析前：搜 `track=pitfall`，看有无相同问题的历史记录
+- `easysdd-feature-design` 方案设计前：搜相关组件的 pitfall 和 knowledge，避免重踩
+
+## 架构中心
+
+**`easysdd/architecture/DESIGN.md` 是整个项目的架构权威文档。**
+
+- 所有架构决策、模块划分、数据结构设计，必须能从 `easysdd/architecture/DESIGN.md` 的核心理念中追溯出来
+- 子系统设计（file watcher、context builder、TUI 等）是 `easysdd/architecture/DESIGN.md` 思路的延伸，不是独立存在的
+- 新增功能或改动方向前，先对照 `easysdd/architecture/DESIGN.md`，确认与核心设计一致；若有冲突，先更新 `easysdd/architecture/DESIGN.md`，再动代码
+- 子系统若有独立架构文档，放在 `easysdd/architecture/` 目录下，并在 `easysdd/architecture/DESIGN.md` 中引用
+- 不要在代码注释或其他文档里另起炉灶地描述架构——架构讨论的落点是 `easysdd/architecture/`
+- 注意区分：`easysdd/architecture/*.md` 是**项目级架构权威**（长期存在，跨 feature 共享）；`easysdd/features/{name}/design.md` 是**单个 feature 的方案 doc**（由 easysdd-feature 工作流产出，和同目录下的 `prd.md` / `acceptance.md` 聚合在一个 feature 目录，生命周期跟随这个 feature）。两者不是同一类文档，不要混
 - 代码实现应保持较丰富的注释，优先解释设计意图、关键流程和不直观的实现细节。
 
 ## UI 约定

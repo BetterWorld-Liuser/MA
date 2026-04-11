@@ -1,12 +1,11 @@
 <template>
   <div class="space-y-2">
-    <template v-for="entry in entries" :key="entry.kind === 'text' ? `text:${entry.text}` : entry.toolCallId">
+    <template v-for="entry in entries" :key="entry.kind === 'text' ? entry.textId : entry.toolCallId">
       <MarkdownRender
         v-if="entry.kind === 'text' && entry.text.trim()"
         custom-id="ma-chat-message"
         :content="renderAssistantContent(entry.text)"
         :final="final"
-        :max-live-nodes="0"
         :render-batch-size="16"
         :render-batch-delay="8"
       />

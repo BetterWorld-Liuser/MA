@@ -342,7 +342,7 @@ CREATE TABLE hints (
 可用 shell：powershell, cmd
 
 工作目录一层结构：
-  - design/
+  - easysdd/
   - src/
   - Cargo.toml
   - README.md
