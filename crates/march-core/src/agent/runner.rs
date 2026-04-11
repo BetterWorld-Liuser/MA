@@ -151,6 +151,13 @@ impl AgentSession {
                 .as_deref()
                 .filter(|text| !text.trim().is_empty())
                 .map(ToOwned::to_owned);
+            flush_missing_assistant_text_delta(
+                self,
+                &mut on_event,
+                &message_id,
+                &mut content_preview,
+                assistant_text.as_deref(),
+            )?;
             let mut debug_round = DebugRound {
                 iteration,
                 context_preview,
@@ -186,10 +193,6 @@ impl AgentSession {
                     AgentProgressEvent::MessageFinished {
                         message_id: message_id.clone(),
                     },
-                )?;
-                on_event(
-                    self,
-                    AgentProgressEvent::FinalAssistantMessage(final_message.clone()),
                 )?;
                 final_messages.push(final_message);
                 debug_rounds.push(debug_round);
@@ -312,8 +315,85 @@ fn ensure_turn_not_cancelled(cancellation: &TurnCancellation) -> Result<()> {
     Ok(())
 }
 
+fn flush_missing_assistant_text_delta<F>(
+    session: &AgentSession,
+    on_event: &mut F,
+    message_id: &str,
+    streamed_preview: &mut String,
+    final_text: Option<&str>,
+) -> Result<()>
+where
+    F: FnMut(&AgentSession, AgentProgressEvent) -> Result<()>,
+{
+    let Some(final_text) = final_text else {
+        return Ok(());
+    };
+
+    let Some(delta) = missing_assistant_text_delta(streamed_preview, final_text) else {
+        return Ok(());
+    };
+
+    streamed_preview.push_str(&delta);
+    on_event(
+        session,
+        AgentProgressEvent::AssistantTextPreview {
+            message_id: message_id.to_string(),
+            delta,
+        },
+    )
+}
+
+fn missing_assistant_text_delta(streamed_preview: &str, final_text: &str) -> Option<String> {
+    if final_text.is_empty() {
+        return None;
+    }
+
+    if streamed_preview.is_empty() {
+        return Some(final_text.to_string());
+    }
+
+    final_text
+        .strip_prefix(streamed_preview)
+        .filter(|delta| !delta.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 pub fn is_turn_cancelled_error(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.to_string().contains(TURN_CANCELLED_ERROR_MESSAGE))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::missing_assistant_text_delta;
+
+    #[test]
+    fn missing_assistant_text_delta_returns_full_text_when_no_streamed_preview_exists() {
+        assert_eq!(
+            missing_assistant_text_delta("", "hello world"),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_assistant_text_delta_returns_only_missing_suffix() {
+        assert_eq!(
+            missing_assistant_text_delta("hello", "hello world"),
+            Some(" world".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_assistant_text_delta_returns_none_when_preview_already_matches() {
+        assert_eq!(
+            missing_assistant_text_delta("hello world", "hello world"),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_assistant_text_delta_returns_none_for_non_prefix_mismatch() {
+        assert_eq!(missing_assistant_text_delta("hello", "goodbye"), None);
+    }
 }

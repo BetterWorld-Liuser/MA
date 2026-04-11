@@ -478,11 +478,12 @@ mod tests {
                 model_frequency_penalty: None,
                 model_max_output_tokens: None,
                 active_agent: MARCH_AGENT_NAME.to_string(),
+                last_event_seq: 0,
                 created_at: SystemTime::now(),
                 last_active: SystemTime::now(),
             },
             active_agent: MARCH_AGENT_NAME.to_string(),
-            history: ConversationHistory::default(),
+            timeline: Vec::new(),
             notes: Vec::new(),
             open_files: vec![
                 PersistedOpenFile {

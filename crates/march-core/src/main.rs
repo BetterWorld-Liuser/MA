@@ -4,8 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
-use march::agent::{AgentConfig, AgentRunResult, AgentSession, DebugRound};
+use march::agent::{AgentConfig, AgentProgressEvent, AgentRunResult, AgentSession, DebugRound};
 use march::context::{ContentBlock, ConversationHistory};
+use march::diagnostics::{
+    DiagnosticChannel, DiagnosticLevel, DiagnosticLogger, DiagnosticRecord, now_timestamp_ms,
+};
+use march::paths::resolve_project_root;
 use march::provider::{OpenAiCompatibleClient, OpenAiCompatibleConfig};
 use march::storage::MarchStorage;
 
@@ -47,18 +51,39 @@ async fn main() -> Result<()> {
     let provider = OpenAiCompatibleClient::new(OpenAiCompatibleConfig::from_env()?);
     let mut debug_enabled = false;
     let debug_logs = DebugLogs::new(cwd.join(".march").join("debug"))?;
+    let diagnostic_logger = DiagnosticLogger::new(&resolve_project_root(&cwd))?;
 
     if let Some(request) = cli_request {
         match session
-            .handle_user_message(&provider, vec![ContentBlock::text(request)])
+            .handle_user_message_with_events(
+                &provider,
+                vec![ContentBlock::text(request)],
+                diagnostic_event_writer(&diagnostic_logger),
+            )
             .await
         {
             Ok(result) => {
+                write_backend_diagnostic(
+                    &diagnostic_logger,
+                    DiagnosticLevel::Info,
+                    "agent-loop",
+                    "turn.completed",
+                    "turn completed successfully",
+                    std::iter::empty::<(String, String)>(),
+                )?;
                 print_agent_result(&result, debug_enabled, &debug_logs)?;
                 session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
             }
             Err(error) => {
+                write_backend_diagnostic(
+                    &diagnostic_logger,
+                    DiagnosticLevel::Error,
+                    "agent-loop",
+                    "turn.failed",
+                    &error.to_string(),
+                    std::iter::empty::<(String, String)>(),
+                )?;
                 session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
                 return Err(error);
@@ -107,15 +132,35 @@ async fn main() -> Result<()> {
         }
 
         match session
-            .handle_user_message(&provider, vec![ContentBlock::text(input)])
+            .handle_user_message_with_events(
+                &provider,
+                vec![ContentBlock::text(input)],
+                diagnostic_event_writer(&diagnostic_logger),
+            )
             .await
         {
             Ok(result) => {
+                write_backend_diagnostic(
+                    &diagnostic_logger,
+                    DiagnosticLevel::Info,
+                    "agent-loop",
+                    "turn.completed",
+                    "turn completed successfully",
+                    std::iter::empty::<(String, String)>(),
+                )?;
                 print_agent_result(&result, debug_enabled, &debug_logs)?;
                 session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
             }
             Err(error) => {
+                write_backend_diagnostic(
+                    &diagnostic_logger,
+                    DiagnosticLevel::Error,
+                    "agent-loop",
+                    "turn.failed",
+                    &error.to_string(),
+                    std::iter::empty::<(String, String)>(),
+                )?;
                 eprintln!("\nError: {error:#}\n");
                 session.flush_memory_usage()?;
                 storage.save_task_state(task_id, &session.persisted_state())?;
@@ -296,4 +341,224 @@ fn open_debug_terminal(title: &str, path: &Path) -> Result<()> {
     );
     Command::new("cmd").args(["/C", &command]).spawn()?;
     Ok(())
+}
+
+fn diagnostic_event_writer<'a>(
+    diagnostic_logger: &'a DiagnosticLogger,
+) -> impl FnMut(&AgentSession, AgentProgressEvent) -> Result<()> + 'a {
+    move |_, event| match event {
+        AgentProgressEvent::MessageStarted { message_id } => write_backend_diagnostic(
+            diagnostic_logger,
+            DiagnosticLevel::Info,
+            "agent-loop",
+            "turn.started",
+            "assistant turn started",
+            [("message_id", message_id)],
+        ),
+        AgentProgressEvent::Status {
+            phase,
+            label,
+            agent,
+        } => {
+            let (event_name, level) = match phase {
+                march::agent::AgentStatusPhase::BuildingContext => {
+                    ("context.built", DiagnosticLevel::Debug)
+                }
+                march::agent::AgentStatusPhase::WaitingModel => {
+                    ("model.requested", DiagnosticLevel::Info)
+                }
+                march::agent::AgentStatusPhase::RunningTool => {
+                    ("tool.phase", DiagnosticLevel::Debug)
+                }
+                march::agent::AgentStatusPhase::Streaming => {
+                    ("streaming.phase", DiagnosticLevel::Debug)
+                }
+            };
+            write_backend_diagnostic(
+                diagnostic_logger,
+                level,
+                "agent-loop",
+                event_name,
+                &label,
+                [("agent", agent)],
+            )
+        }
+        AgentProgressEvent::ToolStarted {
+            tool_name,
+            tool_call_id,
+            summary,
+            ..
+        } => write_backend_diagnostic(
+            diagnostic_logger,
+            DiagnosticLevel::Info,
+            "tool-execution",
+            "tool.started",
+            &summary,
+            [("tool_name", tool_name), ("tool_call_id", tool_call_id)],
+        ),
+        AgentProgressEvent::ToolFinished {
+            tool_call_id,
+            status,
+            summary,
+            ..
+        } => write_backend_diagnostic(
+            diagnostic_logger,
+            match status {
+                march::agent::AgentToolStatus::Success => DiagnosticLevel::Info,
+                march::agent::AgentToolStatus::Error => DiagnosticLevel::Error,
+            },
+            "tool-execution",
+            "tool.finished",
+            &summary,
+            [
+                ("tool_call_id", tool_call_id),
+                (
+                    "status",
+                    match status {
+                        march::agent::AgentToolStatus::Success => "success".to_string(),
+                        march::agent::AgentToolStatus::Error => "error".to_string(),
+                    },
+                ),
+            ],
+        ),
+        AgentProgressEvent::RoundCompleted(round) => write_backend_diagnostic(
+            diagnostic_logger,
+            DiagnosticLevel::Debug,
+            "agent-loop",
+            "round.completed",
+            "provider round completed",
+            [("iteration", round.iteration.to_string())],
+        ),
+        AgentProgressEvent::MessageFinished { .. }
+        | AgentProgressEvent::AssistantTextPreview { .. }
+        | AgentProgressEvent::FinalAssistantMessage(_) => Ok(()),
+    }
+}
+
+fn write_backend_diagnostic<I, K, V>(
+    diagnostic_logger: &DiagnosticLogger,
+    level: DiagnosticLevel,
+    scope: &str,
+    event: &str,
+    message: &str,
+    fields: I,
+) -> Result<()>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
+    diagnostic_logger.write_backend(DiagnosticRecord {
+        timestamp_ms: now_timestamp_ms(),
+        level,
+        channel: DiagnosticChannel::Backend,
+        scope: scope.to_string(),
+        event: event.to_string(),
+        message: message.to_string(),
+        fields: fields
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use march::agent::{
+        AgentConfig, AgentProgressEvent, AgentSession, AgentStatusPhase, AgentToolStatus,
+        DebugRound, DebugToolCall,
+    };
+    use march::context::ConversationHistory;
+    use march::diagnostics::DiagnosticLogger;
+    use march::paths::resolve_project_root;
+
+    use super::diagnostic_event_writer;
+
+    #[test]
+    fn diagnostic_event_writer_records_minimal_backend_turn_flow() {
+        let fixture = temp_workspace("diagnostic-event-writer");
+        let logger =
+            DiagnosticLogger::new(&resolve_project_root(&fixture.join("nested"))).expect("logger");
+        let session = AgentSession::new(
+            AgentConfig::default(),
+            "default",
+            ConversationHistory::default(),
+            [],
+            fixture.join("nested"),
+        )
+        .expect("create session");
+        let mut writer = diagnostic_event_writer(&logger);
+
+        writer(
+            &session,
+            AgentProgressEvent::MessageStarted {
+                message_id: "assistant-message-1".to_string(),
+            },
+        )
+        .expect("write turn started");
+        writer(
+            &session,
+            AgentProgressEvent::Status {
+                agent: "march".to_string(),
+                phase: AgentStatusPhase::WaitingModel,
+                label: "正在调用模型".to_string(),
+            },
+        )
+        .expect("write model requested");
+        writer(
+            &session,
+            AgentProgressEvent::ToolFinished {
+                message_id: "assistant-message-1".to_string(),
+                tool_call_id: "tool-1".to_string(),
+                status: AgentToolStatus::Success,
+                summary: "ran command".to_string(),
+                preview: None,
+                detail: None,
+            },
+        )
+        .expect("write tool finished");
+        writer(
+            &session,
+            AgentProgressEvent::RoundCompleted(DebugRound {
+                iteration: 1,
+                context_preview: String::new(),
+                provider_request_json: String::new(),
+                provider_raw_response: String::new(),
+                tool_calls: vec![DebugToolCall {
+                    id: "tool-1".to_string(),
+                    name: "run_command".to_string(),
+                    arguments_json: "{}".to_string(),
+                }],
+                tool_results: vec!["ok".to_string()],
+            }),
+        )
+        .expect("write round completed");
+
+        let backend_log = fs::read_to_string(
+            fixture
+                .join(".march")
+                .join("diagnostics")
+                .join("backend.log"),
+        )
+        .expect("read backend log");
+
+        assert!(backend_log.contains("turn.started assistant turn started"));
+        assert!(backend_log.contains("model.requested"));
+        assert!(backend_log.contains("tool.finished ran command"));
+        assert!(backend_log.contains("round.completed provider round completed"));
+    }
+
+    fn temp_workspace(prefix: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("march-main-{prefix}-{unique}"));
+        fs::create_dir_all(root.join(".march")).expect("create .march");
+        fs::create_dir_all(root.join("nested")).expect("create nested");
+        root
+    }
 }

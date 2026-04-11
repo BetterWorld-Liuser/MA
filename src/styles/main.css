@@ -537,6 +537,35 @@
   @apply min-w-0 flex-1 truncate font-mono text-[9px] text-text-dim;
 }
 
+@utility assistant-pending-placeholder {
+  @apply inline-flex items-center gap-1.5 py-0.5 text-[11px] leading-none text-text-dim;
+}
+
+@utility assistant-pending-placeholder-label {
+  @apply inline-flex items-center leading-none text-text-muted;
+}
+
+@utility assistant-pending-placeholder-dots {
+  @apply inline-flex items-center gap-1 self-center;
+
+  & span {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-accent) 72%, white 10%);
+    opacity: 0.32;
+    animation: ma-live-pulse 1.2s infinite ease-in-out;
+  }
+
+  & span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  & span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+}
+
 @utility chat-composer-shell {
   @apply relative overflow-visible;
 }
@@ -1426,6 +1455,66 @@
 
   .message-bubble-assistant .markstream-vue a:hover {
     color: var(--color-accent-hover) !important;
+  }
+
+  .message-bubble-assistant .markstream-vue pre,
+  .message-bubble-assistant .markstream-vue [class*='code-block'],
+  .message-bubble-assistant .markstream-vue [class*='CodeBlock'] {
+    max-width: 100% !important;
+    overflow: hidden !important;
+    border: 1px solid var(--ma-line-soft) !important;
+    border-radius: 0.95rem !important;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+      color-mix(in srgb, var(--ma-panel-surface-strong) 92%, #0b0b0b) !important;
+    box-shadow: none !important;
+  }
+
+  .message-bubble-assistant .markstream-vue pre {
+    padding: 0.85rem 0.95rem !important;
+    overflow-x: auto !important;
+  }
+
+  .message-bubble-assistant .markstream-vue pre code,
+  .message-bubble-assistant .markstream-vue [class*='code-block'] code,
+  .message-bubble-assistant .markstream-vue [class*='CodeBlock'] code {
+    display: block !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: color-mix(in srgb, var(--color-text) 92%, white 8%) !important;
+    font-size: 0.92em !important;
+    line-height: 1.6 !important;
+    white-space: pre !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    box-shadow: none !important;
+  }
+
+  .message-bubble-assistant .markstream-vue [class*='code-header'],
+  .message-bubble-assistant .markstream-vue [class*='CodeHeader'],
+  .message-bubble-assistant .markstream-vue [class*='code-toolbar'],
+  .message-bubble-assistant .markstream-vue [class*='CodeToolbar'] {
+    border-bottom: 1px solid var(--ma-line-soft) !important;
+    background: color-mix(in srgb, var(--ma-panel-surface) 94%, black 6%) !important;
+    color: var(--color-text-muted) !important;
+  }
+
+  .message-bubble-assistant .markstream-vue [class*='code-header'] button,
+  .message-bubble-assistant .markstream-vue [class*='CodeHeader'] button,
+  .message-bubble-assistant .markstream-vue [class*='code-toolbar'] button,
+  .message-bubble-assistant .markstream-vue [class*='CodeToolbar'] button {
+    color: var(--color-text-dim) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .message-bubble-assistant .markstream-vue [class*='code-header'] button:hover,
+  .message-bubble-assistant .markstream-vue [class*='CodeHeader'] button:hover,
+  .message-bubble-assistant .markstream-vue [class*='code-toolbar'] button:hover,
+  .message-bubble-assistant .markstream-vue [class*='CodeToolbar'] button:hover {
+    color: var(--color-text) !important;
+    background: rgba(255, 255, 255, 0.04) !important;
   }
 
   .chat-history-enter-active,

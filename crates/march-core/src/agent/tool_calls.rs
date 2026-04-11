@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::context::ToolSummary;
@@ -638,6 +638,7 @@ struct MemorizeArgs {
     topic: String,
     title: String,
     content: String,
+    #[serde(deserialize_with = "deserialize_tags")]
     tags: Vec<String>,
     scope: Option<String>,
     level: Option<String>,
@@ -654,9 +655,47 @@ struct UpdateMemoryArgs {
     id: String,
     title: Option<String>,
     content: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_tags")]
     tags: Option<Vec<String>>,
     topic: Option<String>,
     memory_type: Option<String>,
+}
+
+fn deserialize_tags<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_tags_impl(deserializer).map(|tags| tags.unwrap_or_default())
+}
+
+fn deserialize_optional_tags<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_tags_impl(deserializer)
+}
+
+fn deserialize_tags_impl<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TagsArg {
+        List(Vec<String>),
+        Single(String),
+    }
+
+    let raw = Option::<TagsArg>::deserialize(deserializer)?;
+    Ok(raw.map(|value| match value {
+        TagsArg::List(list) => list,
+        TagsArg::Single(text) => text
+            .split([',', '，'])
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -693,7 +732,9 @@ struct DeleteAgentArgs {
 mod tests {
     use serde_json::json;
 
-    use super::{looks_like_multiple_json_objects, parse_run_command_args};
+    use super::{
+        MemorizeArgs, UpdateMemoryArgs, looks_like_multiple_json_objects, parse_run_command_args,
+    };
 
     #[test]
     fn parse_run_command_args_accepts_direct_object() {
@@ -759,5 +800,34 @@ mod tests {
         assert!(looks_like_multiple_json_objects(r#"{"a":1}{"b":2}"#));
         assert!(looks_like_multiple_json_objects("{\"a\":1}\n{\"b\":2}"));
         assert!(!looks_like_multiple_json_objects(r#"{"a":1}"#));
+    }
+
+    #[test]
+    fn memorize_args_accept_comma_separated_tag_string() {
+        let args: MemorizeArgs = serde_json::from_value(json!({
+            "id": "user-preference-title",
+            "memory_type": "preference",
+            "topic": "style",
+            "title": "Preferred title",
+            "content": "Call the user 老大.",
+            "tags": "称呼,偏好,老大"
+        }))
+        .expect("comma-separated tag string should parse");
+
+        assert_eq!(args.tags, vec!["称呼", "偏好", "老大"]);
+    }
+
+    #[test]
+    fn update_memory_args_accept_tag_array() {
+        let args: UpdateMemoryArgs = serde_json::from_value(json!({
+            "id": "g:user-preference-title",
+            "tags": ["称呼", "偏好", "老大"]
+        }))
+        .expect("tag array should parse");
+
+        assert_eq!(
+            args.tags,
+            Some(vec!["称呼".into(), "偏好".into(), "老大".into()])
+        );
     }
 }

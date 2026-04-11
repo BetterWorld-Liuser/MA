@@ -25,19 +25,18 @@ use crate::storage::{
 use super::provider::provider_config_for_session;
 use super::util::{resolve_context_window_fallback, system_time_to_unix};
 use super::{
-    DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentProfileView, UiAgentProgressEvent,
-    UiAppBackend, UiCloseOpenFileRequest, UiComposerContentBlock,
-    UiCreateTaskRequest, UiDebugTraceView, UiDeleteAgentRequest, UiDeleteMemoryRequest,
-    UiDeleteNoteRequest, UiDeleteProviderModelRequest, UiDeleteProviderRequest,
-    UiDeleteTaskRequest, UiGetMemoryRequest, UiListMemoriesRequest, UiLoadWorkspaceImageRequest,
-    UiMemoryDetailView, UiMentionTargetView, UiOpenFilesRequest, UiProviderSettingsView,
-    UiRestoreMarchPromptRequest, UiSearchSkillsRequest, UiSearchWorkspaceEntriesRequest,
-    UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
-    UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
-    UiTaskSnapshot, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
+    DEFAULT_TASK_NAME, UI_MAX_RECENT_TURNS, UiAgentProfileView, UiAgentProgressEvent, UiAppBackend,
+    UiAssistantStreamField, UiCloseOpenFileRequest, UiComposerContentBlock, UiCreateTaskRequest,
+    UiDebugTraceView, UiDeleteAgentRequest, UiDeleteMemoryRequest, UiDeleteNoteRequest,
+    UiDeleteProviderModelRequest, UiDeleteProviderRequest, UiDeleteTaskRequest, UiGetMemoryRequest,
+    UiListMemoriesRequest, UiLoadWorkspaceImageRequest, UiMemoryDetailView, UiMentionTargetView,
+    UiOpenFilesRequest, UiProviderSettingsView, UiRestoreMarchPromptRequest, UiSearchSkillsRequest,
+    UiSearchWorkspaceEntriesRequest, UiSelectTaskRequest, UiSendMessageRequest,
+    UiSetDefaultModelRequest, UiSetTaskModelRequest, UiSetTaskModelSettingsRequest,
+    UiSetTaskWorkingDirectoryRequest, UiSkillSearchView, UiTaskSnapshot, UiTurnFinishedReason,
+    UiTurnTrigger, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
     UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
     UiWorkspaceImageView, UiWorkspaceSnapshot,
-    UiAssistantStreamField, UiTurnFinishedReason, UiTurnTrigger,
 };
 
 mod messaging;

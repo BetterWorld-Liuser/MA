@@ -440,7 +440,7 @@ fn memorize_tool() -> ToolDefinition {
             },
             ToolParameter {
                 name: "tags",
-                kind: "string",
+                kind: "string_array",
                 required: true,
                 description: "Keyword list for retrieval. Provide it as an array of strings.",
             },
@@ -508,7 +508,7 @@ fn update_memory_tool() -> ToolDefinition {
             },
             ToolParameter {
                 name: "tags",
-                kind: "string",
+                kind: "string_array",
                 required: false,
                 description: "Optional replacement tag array.",
             },

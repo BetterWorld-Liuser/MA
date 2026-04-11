@@ -29,3 +29,5 @@ target
 .claude
 dist
 node_modules
+.codex
+.march

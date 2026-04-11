@@ -67,7 +67,10 @@ pub fn replace_task_timeline(
         )
         .context("failed to clear task message timeline entries")?;
     transaction
-        .execute("DELETE FROM task_turn_messages WHERE task_id = ?1", params![task_id])
+        .execute(
+            "DELETE FROM task_turn_messages WHERE task_id = ?1",
+            params![task_id],
+        )
         .context("failed to clear task turn messages")?;
     transaction
         .execute(

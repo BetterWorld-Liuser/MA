@@ -16,6 +16,7 @@ import type {
   TaskActivityStatus,
 } from '@/data/mock';
 import { debugChat, summarizeAgentEvent, summarizeSnapshot } from '@/lib/chatDebug';
+import { frontendDiagnosticLogger } from '@/lib/frontendDiagnosticLogger';
 import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
 import { useWorkspaceSnapshotState } from '@/composables/workspaceApp/useWorkspaceSnapshotState';
 import { useTaskTimelineState } from '@/composables/workspaceApp/useTaskTimelineState';
@@ -241,6 +242,7 @@ export function useWorkspaceApp() {
 
   async function initialize() {
     debugChat('workspace-app', 'initialize:start');
+    void frontendDiagnosticLogger.info('workspace-app', 'initialize:start');
     await initializeWindowState();
     unlistenTaskWorkingChanged = await listen<TaskWorkingChangedEvent>('march://task-working-changed', (event) => {
       taskActivityStatuses.value[event.payload.task_id] = event.payload.working ? 'working' : 'review';
@@ -274,8 +276,10 @@ export function useWorkspaceApp() {
       pushBackendNotice(event.payload);
     });
     debugChat('workspace-app', 'refreshWorkspace:init:start');
+    void frontendDiagnosticLogger.debug('workspace-app', 'refreshWorkspace:init:start');
     await refreshWorkspace();
     debugChat('workspace-app', 'refreshWorkspace:init:done', summarizeSnapshot(snapshot.value));
+    void frontendDiagnosticLogger.info('workspace-app', 'refreshWorkspace:init:done', summarizeSnapshot(snapshot.value));
     stopTaskSubscriptionWatch = watch(
       workspaceState.activeTaskIdNumber,
       async (taskId, previousTaskId) => {
@@ -343,6 +347,9 @@ export function useWorkspaceApp() {
     );
     await refreshProviderSettings();
     debugChat('workspace-app', 'initialize:done');
+    void frontendDiagnosticLogger.info('workspace-app', 'initialize:done', {
+      activeTaskId: workspaceState.activeTaskIdNumber.value,
+    });
   }
 
   function dispose() {

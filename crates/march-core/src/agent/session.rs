@@ -1,6 +1,10 @@
 use std::time::Duration;
 
 use super::*;
+use crate::diagnostics::{
+    DiagnosticChannel, DiagnosticLevel, DiagnosticLogger, DiagnosticRecord, now_timestamp_ms,
+};
+use crate::paths::resolve_project_root;
 use crate::storage::history_from_timeline;
 
 pub const DEFAULT_RUN_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -251,6 +255,17 @@ impl AgentSession {
         render_prompt(&context)
     }
 
+    pub fn last_memory_index(&self) -> Option<crate::memory::MemoryIndexView> {
+        self.last_memory_index.clone()
+    }
+
+    pub fn restore_last_memory_index(
+        &mut self,
+        memory_index: Option<crate::memory::MemoryIndexView>,
+    ) {
+        self.last_memory_index = memory_index.filter(|index| !index.is_empty());
+    }
+
     pub async fn run_command_with_output<F>(
         &mut self,
         request: CommandRequest,
@@ -262,6 +277,22 @@ impl AgentSession {
     {
         let started_at = SystemTime::now();
         let selected_shell = self.resolve_shell(request.shell)?;
+        let diagnostic_logger =
+            DiagnosticLogger::new(&resolve_project_root(&self.working_directory))?;
+        let command_text = request.command.clone();
+        let shell_label = selected_shell.kind.label().to_string();
+        let timeout_secs = request.timeout.as_secs().to_string();
+        write_command_diagnostic(
+            &diagnostic_logger,
+            DiagnosticLevel::Info,
+            "command.started",
+            "command started",
+            [
+                ("shell", shell_label.clone()),
+                ("timeout_secs", timeout_secs.clone()),
+                ("command", command_text.clone()),
+            ],
+        )?;
         let tracked_paths = self
             .open_file_snapshots()
             .keys()
@@ -294,9 +325,46 @@ impl AgentSession {
             }
         }
 
-        let output = output?;
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                let error_message = error.to_string();
+                let (event_name, level) = if error_message.contains("command timed out after") {
+                    ("command.timed_out", DiagnosticLevel::Warn)
+                } else if error_message.contains("turn cancelled") {
+                    ("command.cancelled", DiagnosticLevel::Info)
+                } else {
+                    ("command.failed", DiagnosticLevel::Error)
+                };
+                write_command_diagnostic(
+                    &diagnostic_logger,
+                    level,
+                    event_name,
+                    &error_message,
+                    [
+                        ("shell", shell_label),
+                        ("timeout_secs", timeout_secs),
+                        ("command", command_text),
+                    ],
+                )?;
+                return Err(error);
+            }
+        };
         let finished_at = SystemTime::now();
         let duration = finished_at.duration_since(started_at).unwrap_or_default();
+        write_command_diagnostic(
+            &diagnostic_logger,
+            DiagnosticLevel::Info,
+            "command.finished",
+            "command finished",
+            [
+                ("shell", shell_label),
+                ("timeout_secs", timeout_secs),
+                ("command", command_text),
+                ("exit_code", output.status.code().unwrap_or(-1).to_string()),
+                ("duration_ms", duration.as_millis().to_string()),
+            ],
+        )?;
 
         Ok(CommandExecution {
             command: request.command,
@@ -414,5 +482,305 @@ impl AgentSession {
                 .estimate_context_pressure(DEFAULT_CONTEXT_WINDOW_TOKENS)
                 .map(|pressure| pressure.used_percent),
         }
+    }
+}
+
+fn write_command_diagnostic<I, K, V>(
+    diagnostic_logger: &DiagnosticLogger,
+    level: DiagnosticLevel,
+    event: &str,
+    message: &str,
+    fields: I,
+) -> Result<()>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
+    diagnostic_logger.write_backend(DiagnosticRecord {
+        timestamp_ms: now_timestamp_ms(),
+        level,
+        channel: DiagnosticChannel::Backend,
+        scope: "command-execution".to_string(),
+        event: event.to_string(),
+        message: message.to_string(),
+        fields: fields
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use tokio::runtime::Runtime;
+    use tokio::time::sleep;
+
+    use super::*;
+
+    use crate::context::ContentBlock;
+    use crate::memory::{MemorizeRequest, MemoryManager};
+    use crate::storage::{TaskRecord, TaskTitleSource};
+    #[test]
+    fn run_command_writes_finished_diagnostic_log() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let workspace = temp_workspace("run-command-finished");
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                "default",
+                ConversationHistory::default(),
+                [],
+                workspace.clone(),
+            )
+            .expect("create session");
+
+            let (shell, command) = if cfg!(windows) {
+                (CommandShell::PowerShell, "Write-Output 'ok'".to_string())
+            } else {
+                (CommandShell::Sh, "printf 'ok\\n'".to_string())
+            };
+
+            session
+                .run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: Duration::from_secs(5),
+                    },
+                    TurnCancellation::never(),
+                )
+                .await
+                .expect("command should succeed");
+
+            let backend_log = fs::read_to_string(
+                workspace
+                    .join(".march")
+                    .join("diagnostics")
+                    .join("backend.log"),
+            )
+            .expect("read backend log");
+
+            assert!(backend_log.contains("command.started command started"));
+            assert!(backend_log.contains("command.finished command finished"));
+        });
+    }
+
+    #[test]
+    fn run_command_writes_timeout_diagnostic_log() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let workspace = temp_workspace("run-command-timeout");
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                "default",
+                ConversationHistory::default(),
+                [],
+                workspace.clone(),
+            )
+            .expect("create session");
+
+            let (shell, command) = if cfg!(windows) {
+                (
+                    CommandShell::PowerShell,
+                    "Start-Sleep -Seconds 5".to_string(),
+                )
+            } else {
+                (CommandShell::Sh, "sleep 5".to_string())
+            };
+
+            let error = session
+                .run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: Duration::from_secs(1),
+                    },
+                    TurnCancellation::never(),
+                )
+                .await
+                .expect_err("command should time out");
+
+            assert!(error.to_string().contains("command timed out after 1.000s"));
+
+            let backend_log = fs::read_to_string(
+                workspace
+                    .join(".march")
+                    .join("diagnostics")
+                    .join("backend.log"),
+            )
+            .expect("read backend log");
+
+            assert!(backend_log.contains("command.started command started"));
+            assert!(backend_log.contains("command.timed_out"));
+        });
+    }
+
+    #[test]
+    fn run_command_writes_cancelled_diagnostic_log() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let workspace = temp_workspace("run-command-cancelled");
+            let mut session = AgentSession::new(
+                AgentConfig::default(),
+                "default",
+                ConversationHistory::default(),
+                [],
+                workspace.clone(),
+            )
+            .expect("create session");
+
+            let cancellation = Arc::new(TurnCancellation::new());
+            let (shell, command) = if cfg!(windows) {
+                (
+                    CommandShell::PowerShell,
+                    "Start-Sleep -Seconds 5".to_string(),
+                )
+            } else {
+                (CommandShell::Sh, "sleep 5".to_string())
+            };
+
+            let cancel_handle = Arc::clone(&cancellation);
+            tokio::spawn(async move {
+                sleep(Duration::from_millis(150)).await;
+                cancel_handle.cancel();
+            });
+
+            let error = session
+                .run_command(
+                    CommandRequest {
+                        command,
+                        shell,
+                        timeout: Duration::from_secs(5),
+                    },
+                    cancellation.as_ref(),
+                )
+                .await
+                .expect_err("command should be cancelled");
+
+            assert!(error.to_string().contains("turn cancelled"));
+
+            let backend_log = fs::read_to_string(
+                workspace
+                    .join(".march")
+                    .join("diagnostics")
+                    .join("backend.log"),
+            )
+            .expect("read backend log");
+
+            assert!(backend_log.contains("command.started command started"));
+            assert!(backend_log.contains("command.cancelled"));
+        });
+    }
+
+    fn temp_workspace(prefix: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("march-session-{prefix}-{unique}"));
+        fs::create_dir_all(root.join(".march")).expect("create .march");
+        root
+    }
+
+    #[test]
+    fn restored_session_can_reuse_last_memory_index_for_runtime_snapshot() {
+        let workspace = temp_workspace("restore-last-memory-index");
+        let mut manager = MemoryManager::load(&workspace).expect("load memory manager");
+        manager
+            .memorize(
+                MemorizeRequest {
+                    id: "memory-panel-visibility".to_string(),
+                    memory_type: "fact".to_string(),
+                    topic: "memory".to_string(),
+                    title: "Memory panel should retain activated entries".to_string(),
+                    content: "Activated memories should remain visible after the reply finishes."
+                        .to_string(),
+                    tags: vec![
+                        "memory".to_string(),
+                        "panel".to_string(),
+                        "visibility".to_string(),
+                    ],
+                    scope: None,
+                    level: Some("project".to_string()),
+                },
+                MARCH_AGENT_NAME,
+            )
+            .expect("store test memory");
+
+        let mut session = AgentSession::new(
+            AgentConfig::default(),
+            "memory panel visibility",
+            ConversationHistory::default(),
+            [],
+            workspace.clone(),
+        )
+        .expect("create session");
+        session.add_user_turn(vec![ContentBlock::text(
+            "memory panel should keep activated memories visible",
+        )]);
+        session.build_context();
+
+        let last_memory_index = session.last_memory_index();
+        assert!(
+            last_memory_index
+                .as_ref()
+                .is_some_and(|view| !view.entries.is_empty()),
+            "build_context should populate last_memory_index for matching memories"
+        );
+
+        let persisted_state = session.persisted_state();
+        let persisted = PersistedTask {
+            task: TaskRecord {
+                id: 1,
+                name: "memory panel visibility".to_string(),
+                title_source: TaskTitleSource::Default,
+                title_locked: false,
+                working_directory: workspace,
+                selected_model_config_id: None,
+                selected_model: None,
+                model_temperature: None,
+                model_top_p: None,
+                model_presence_penalty: None,
+                model_frequency_penalty: None,
+                model_max_output_tokens: None,
+                active_agent: MARCH_AGENT_NAME.to_string(),
+                last_event_seq: 0,
+                created_at: SystemTime::now(),
+                last_active: SystemTime::now(),
+            },
+            active_agent: MARCH_AGENT_NAME.to_string(),
+            timeline: Vec::new(),
+            notes: persisted_state.notes,
+            open_files: persisted_state.open_files,
+            hints: persisted_state.hints,
+        };
+
+        let restored_without_memory =
+            AgentSession::restore(AgentConfig::default(), persisted.clone())
+                .expect("restore session");
+        assert!(
+            restored_without_memory
+                .ui_runtime_snapshot(DEFAULT_CONTEXT_WINDOW_TOKENS)
+                .memories
+                .is_empty(),
+            "restored sessions start without the transient last_memory_index"
+        );
+
+        let mut restored_with_memory =
+            AgentSession::restore(AgentConfig::default(), persisted).expect("restore session");
+        restored_with_memory.restore_last_memory_index(last_memory_index);
+        let runtime = restored_with_memory.ui_runtime_snapshot(DEFAULT_CONTEXT_WINDOW_TOKENS);
+        assert!(
+            runtime
+                .memories
+                .iter()
+                .any(|memory| memory.id == "p:memory-panel-visibility"),
+            "restored runtime should preserve the target matched memory entry"
+        );
     }
 }

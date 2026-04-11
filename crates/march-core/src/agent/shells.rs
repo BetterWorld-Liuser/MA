@@ -137,6 +137,7 @@ async fn collect_child_output(
 ) -> Result<std::process::Output> {
     const OUTPUT_STREAM_THROTTLE: Duration = Duration::from_millis(50);
     const CHILD_TERMINATION_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+    const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -150,8 +151,11 @@ async fn collect_child_output(
     let mut output_cache = OutputSnapshotCache::default();
     let mut timeout_sleep = Box::pin(tokio::time::sleep(timeout));
     let mut output_interval = tokio::time::interval(OUTPUT_STREAM_THROTTLE);
+    let mut child_exit_poll = tokio::time::interval(CHILD_EXIT_POLL_INTERVAL);
     output_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    child_exit_poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
     output_interval.tick().await;
+    child_exit_poll.tick().await;
     let mut pending_output = false;
 
     let child_exit = loop {
@@ -166,12 +170,20 @@ async fn collect_child_output(
                     timeout.as_secs_f64(),
                 ));
             }
-            status = child.wait() => {
-                break ChildExit::Completed(status.context("failed to wait for command completion")?);
-            }
             Some((stream, chunk)) = rx.recv() => {
                 append_stream_chunk(stream, chunk, &mut stdout_bytes, &mut stderr_bytes);
                 pending_output = true;
+            }
+            _ = child_exit_poll.tick() => {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        break ChildExit::Completed(status);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Err(error).context("failed to poll command completion");
+                    }
+                }
             }
             _ = output_interval.tick(), if pending_output => {
                 emit_output_update(on_output, &mut output_cache, &stdout_bytes, &stderr_bytes, false)?;
@@ -181,7 +193,7 @@ async fn collect_child_output(
     };
 
     let terminate = matches!(child_exit, ChildExit::Interrupted(_));
-    finalize_child_output(
+    let shutdown_status = finalize_child_output(
         &mut child,
         &mut rx,
         pipe_readers,
@@ -191,6 +203,7 @@ async fn collect_child_output(
         CHILD_TERMINATION_WAIT_TIMEOUT,
     )
     .await;
+    append_shutdown_warnings(&mut stderr_bytes, terminate, shutdown_status);
 
     if pending_output
         || stdout_bytes.len() != output_cache.stdout_bytes_len
@@ -353,19 +366,81 @@ async fn finalize_child_output(
     stderr_bytes: &mut Vec<u8>,
     terminate: bool,
     wait_timeout: Duration,
-) {
+) -> ShutdownStatus {
+    let mut status = ShutdownStatus::default();
+
     if terminate {
         request_child_termination(child).await;
-        let _ = tokio::time::timeout(wait_timeout, child.wait()).await;
+        if tokio::time::timeout(wait_timeout, child.wait())
+            .await
+            .is_err()
+        {
+            status.child_wait_timed_out = true;
+        }
     }
 
-    join_pipe_readers(pipe_readers).await;
-    drain_pipe_channel_until_closed(rx, stdout_bytes, stderr_bytes).await;
+    status.pipe_reader_join_timed_out =
+        !join_pipe_readers_with_timeout(pipe_readers, wait_timeout).await;
+    status.pipe_channel_drain_timed_out =
+        !drain_pipe_channel_until_closed_with_timeout(rx, stdout_bytes, stderr_bytes, wait_timeout)
+            .await;
+    status
 }
 
-async fn join_pipe_readers(pipe_readers: PipeReaders) {
-    let _ = pipe_readers.stdout_task.await;
-    let _ = pipe_readers.stderr_task.await;
+async fn join_pipe_readers_with_timeout(pipe_readers: PipeReaders, wait_timeout: Duration) -> bool {
+    let PipeReaders {
+        mut stdout_task,
+        mut stderr_task,
+    } = pipe_readers;
+    let deadline = tokio::time::Instant::now() + wait_timeout;
+
+    if !await_join_handle_until(&mut stdout_task, deadline).await {
+        stderr_task.abort();
+        let _ = stderr_task.await;
+        return false;
+    }
+
+    if !await_join_handle_until(&mut stderr_task, deadline).await {
+        return false;
+    }
+
+    true
+}
+
+async fn await_join_handle_until<T>(
+    handle: &mut JoinHandle<Result<T, std::io::Error>>,
+    deadline: tokio::time::Instant,
+) -> bool {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if tokio::time::timeout(remaining, &mut *handle).await.is_ok() {
+        return true;
+    }
+
+    handle.abort();
+    let _ = handle.await;
+    false
+}
+
+async fn drain_pipe_channel_until_closed_with_timeout(
+    rx: &mut mpsc::UnboundedReceiver<(StreamKind, Vec<u8>)>,
+    stdout_bytes: &mut Vec<u8>,
+    stderr_bytes: &mut Vec<u8>,
+    wait_timeout: Duration,
+) -> bool {
+    if tokio::time::timeout(
+        wait_timeout,
+        drain_pipe_channel_until_closed(rx, stdout_bytes, stderr_bytes),
+    )
+    .await
+    .is_ok()
+    {
+        return true;
+    }
+
+    while let Ok((stream, chunk)) = rx.try_recv() {
+        append_stream_chunk(stream, chunk, stdout_bytes, stderr_bytes);
+    }
+    false
 }
 
 async fn request_child_termination(child: &mut Child) {
@@ -375,6 +450,54 @@ async fn request_child_termination(child: &mut Child) {
     }
 
     let _ = child.start_kill();
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ShutdownStatus {
+    child_wait_timed_out: bool,
+    pipe_reader_join_timed_out: bool,
+    pipe_channel_drain_timed_out: bool,
+}
+
+fn append_shutdown_warnings(
+    stderr_bytes: &mut Vec<u8>,
+    terminated_early: bool,
+    status: ShutdownStatus,
+) {
+    if !terminated_early {
+        return;
+    }
+
+    if status.child_wait_timed_out {
+        append_shutdown_warning(
+            stderr_bytes,
+            "March cleanup warning: timed out while waiting for the shell process to exit after interruption.",
+        );
+    }
+    if status.pipe_reader_join_timed_out {
+        append_shutdown_warning(
+            stderr_bytes,
+            "March cleanup warning: timed out while waiting for command output readers to finish after interruption.",
+        );
+    }
+    if status.pipe_channel_drain_timed_out {
+        append_shutdown_warning(
+            stderr_bytes,
+            "March cleanup warning: timed out while draining remaining command output after interruption.",
+        );
+    }
+}
+
+fn append_shutdown_warning(stderr_bytes: &mut Vec<u8>, warning: &str) {
+    if stderr_bytes.ends_with(b"\n") || stderr_bytes.is_empty() {
+        stderr_bytes.extend_from_slice(warning.as_bytes());
+        stderr_bytes.push(b'\n');
+        return;
+    }
+
+    stderr_bytes.push(b'\n');
+    stderr_bytes.extend_from_slice(warning.as_bytes());
+    stderr_bytes.push(b'\n');
 }
 
 #[cfg(windows)]
@@ -572,18 +695,7 @@ impl StreamOutputDecoder {
             return;
         }
 
-        let mut decoded = String::new();
-        if let Some(decoder) = self.decoder.as_mut() {
-            let mut remaining = sanitized.as_slice();
-            loop {
-                let (result, read, _) = decoder.decode_to_string(remaining, &mut decoded, is_last);
-                remaining = &remaining[read..];
-                match result {
-                    CoderResult::InputEmpty => break,
-                    CoderResult::OutputFull => continue,
-                }
-            }
-        }
+        let decoded = self.decode_sanitized_bytes(&sanitized, is_last, sanitized.len().max(32));
         self.text.push_str(&decoded);
 
         if is_last {
@@ -596,6 +708,35 @@ impl StreamOutputDecoder {
             self.push(&[], true);
         }
         self.current_text().to_string()
+    }
+
+    fn decode_sanitized_bytes(
+        &mut self,
+        sanitized: &[u8],
+        is_last: bool,
+        initial_capacity: usize,
+    ) -> String {
+        let mut decoded = String::new();
+        decoded.reserve(initial_capacity);
+        if let Some(decoder) = self.decoder.as_mut() {
+            let mut remaining = sanitized;
+            loop {
+                let (result, read, _) = decoder.decode_to_string(remaining, &mut decoded, is_last);
+                remaining = &remaining[read..];
+                match result {
+                    CoderResult::InputEmpty => break,
+                    CoderResult::OutputFull => {
+                        // `encoding_rs` writes into the provided String buffer. When the
+                        // buffer has no spare capacity, it can report `OutputFull` without
+                        // consuming input. We must grow the buffer here, otherwise this
+                        // loop can spin forever on small stdout chunks in release builds.
+                        decoded.reserve(remaining.len().max(32));
+                        continue;
+                    }
+                }
+            }
+        }
+        decoded
     }
 }
 
@@ -671,5 +812,101 @@ impl IncrementalAnsiStripper {
         }
 
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{future::pending, process::Stdio, time::Instant};
+
+    use tokio::{process::Command as TokioCommand, runtime::Runtime, sync::mpsc};
+
+    use super::{
+        PipeReaders, ShutdownStatus, StreamKind, append_shutdown_warnings, finalize_child_output,
+    };
+
+    #[test]
+    fn finalize_child_output_stops_waiting_when_pipe_readers_never_finish() {
+        let runtime = Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let mut child = if cfg!(windows) {
+                TokioCommand::new("powershell")
+                    .args(["-NoProfile", "-Command", "exit 0"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn powershell")
+            } else {
+                TokioCommand::new("sh")
+                    .args(["-lc", "exit 0"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn sh")
+            };
+
+            let (tx, mut rx) = mpsc::unbounded_channel::<(StreamKind, Vec<u8>)>();
+            let stdout_task = tokio::spawn(async move {
+                let _keep_sender_alive = tx;
+                pending::<Result<(), std::io::Error>>().await
+            });
+            let stderr_task = tokio::spawn(async { pending::<Result<(), std::io::Error>>().await });
+            let pipe_readers = PipeReaders {
+                stdout_task,
+                stderr_task,
+            };
+            let mut stdout_bytes = Vec::new();
+            let mut stderr_bytes = Vec::new();
+            let started = Instant::now();
+
+            let status = finalize_child_output(
+                &mut child,
+                &mut rx,
+                pipe_readers,
+                &mut stdout_bytes,
+                &mut stderr_bytes,
+                false,
+                std::time::Duration::from_millis(100),
+            )
+            .await;
+
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+            assert_eq!(
+                status,
+                ShutdownStatus {
+                    child_wait_timed_out: false,
+                    pipe_reader_join_timed_out: true,
+                    pipe_channel_drain_timed_out: false,
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn append_shutdown_warnings_adds_human_readable_cleanup_notes() {
+        let mut stderr_bytes = b"Partial stderr".to_vec();
+
+        append_shutdown_warnings(
+            &mut stderr_bytes,
+            true,
+            ShutdownStatus {
+                child_wait_timed_out: true,
+                pipe_reader_join_timed_out: true,
+                pipe_channel_drain_timed_out: false,
+            },
+        );
+
+        let stderr = String::from_utf8(stderr_bytes).expect("valid utf8");
+        assert!(stderr.contains("Partial stderr"));
+        assert!(stderr.contains("timed out while waiting for the shell process to exit"));
+        assert!(stderr.contains("timed out while waiting for command output readers to finish"));
+    }
+
+    #[test]
+    fn stream_output_decoder_grows_buffer_when_decoder_reports_output_full() {
+        let mut decoder = super::StreamOutputDecoder::new(super::command_output_encoding());
+        let decoded = decoder.decode_sanitized_bytes(b"abc", false, 0);
+
+        assert_eq!(decoded, "abc");
     }
 }

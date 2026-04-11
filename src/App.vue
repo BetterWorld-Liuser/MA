@@ -201,6 +201,7 @@ import NoteEditorDialog from '@/components/NoteEditorDialog.vue';
 import SettingsPage from '@/components/SettingsPage.vue';
 import TaskList from '@/components/TaskList.vue';
 import { debugChat } from '@/lib/chatDebug';
+import { frontendDiagnosticLogger } from '@/lib/frontendDiagnosticLogger';
 import { useWorkspaceApp } from '@/composables/useWorkspaceApp';
 
 const workspaceApp = useWorkspaceApp();
@@ -307,11 +308,17 @@ onMounted(() => {
   debugChat('app', 'mounted', {
     appInstanceId,
   });
+  void frontendDiagnosticLogger.info('app', 'mounted', {
+    appInstanceId,
+  });
   void initialize();
 });
 
 onUnmounted(() => {
   debugChat('app', 'unmounted', {
+    appInstanceId,
+  });
+  void frontendDiagnosticLogger.info('app', 'unmounted', {
     appInstanceId,
   });
   dispose();

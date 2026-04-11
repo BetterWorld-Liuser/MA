@@ -417,13 +417,7 @@ fn build_parameters_schema(parameters: &[ToolParameter]) -> Value {
     let mut required = Vec::new();
 
     for parameter in parameters {
-        properties.insert(
-            parameter.name.to_string(),
-            serde_json::json!({
-                "type": json_type_for_parameter(parameter),
-                "description": parameter.description,
-            }),
-        );
+        properties.insert(parameter.name.to_string(), parameter_schema(parameter));
 
         if parameter.required {
             required.push(parameter.name.to_string());
@@ -436,6 +430,20 @@ fn build_parameters_schema(parameters: &[ToolParameter]) -> Value {
         "required": required,
         "additionalProperties": false,
     })
+}
+
+fn parameter_schema(parameter: &ToolParameter) -> Value {
+    match parameter.kind {
+        "string_array" => json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": parameter.description,
+        }),
+        _ => json!({
+            "type": json_type_for_parameter(parameter),
+            "description": parameter.description,
+        }),
+    }
 }
 
 fn json_type_for_parameter(parameter: &ToolParameter) -> &'static str {
@@ -455,4 +463,28 @@ pub fn validate_messages(messages: &[RequestMessage]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::build_parameters_schema;
+    use crate::tools::ToolParameter;
+
+    #[test]
+    fn string_array_parameters_render_as_json_array_schema() {
+        let schema = build_parameters_schema(&[ToolParameter {
+            name: "tags",
+            kind: "string_array",
+            required: true,
+            description: "Keyword list.",
+        }]);
+
+        assert_eq!(schema["properties"]["tags"]["type"], json!("array"));
+        assert_eq!(
+            schema["properties"]["tags"]["items"]["type"],
+            json!("string")
+        );
+    }
 }

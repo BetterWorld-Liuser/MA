@@ -5,8 +5,8 @@ use indexmap::IndexMap;
 use crate::agent::{AgentSession, AgentToolStatus, DebugRound, DebugToolCall};
 use crate::agents::{AgentProfile, AgentProfileSource, MARCH_AGENT_NAME};
 use crate::context::{
-    ContentBlock, ContextPressure, FileSnapshot, Hint, ModifiedBy, SystemStatus,
-    ToolSummary, join_text_blocks,
+    ContentBlock, ContextPressure, FileSnapshot, Hint, ModifiedBy, SystemStatus, ToolSummary,
+    join_text_blocks,
 };
 use crate::memory::{MemoryIndexEntry, MemoryRecord, MemoryScope};
 use crate::paths::clean_path;
@@ -22,14 +22,13 @@ use crate::storage::{
 
 use super::util::{mask_api_key, pretty_json_or_original, system_time_to_unix};
 use super::{
-    UiAgentProfileView, UiAgentToolStatus, UiContextPressureView, UiContextUsageSectionView,
-    UiContextUsageView, UiDebugRoundView, UiDebugToolCallView, UiDebugTraceView,
-    UiFileSnapshotView, UiHintView, UiImageAttachmentView, UiMemoryDetailView,
-    UiMemoryEntryView, UiModelCapabilitiesView, UiModifiedByView, UiNoteView, UiOpenFileView,
-    UiProviderModelView, UiProviderSettingsView, UiProviderView, UiRuntimeSnapshot,
-    UiServerToolView, UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot,
-    UiTaskSummary, UiToolSummaryView, UiTaskTimelineEntry, UiUserMessageView,
-    UiTimelineTurnView, UiAssistantMessageView, UiAssistantTimelineEntryView,
+    UiAgentProfileView, UiAgentToolStatus, UiAssistantMessageView, UiAssistantTimelineEntryView,
+    UiContextPressureView, UiContextUsageSectionView, UiContextUsageView, UiDebugRoundView,
+    UiDebugToolCallView, UiDebugTraceView, UiFileSnapshotView, UiHintView, UiImageAttachmentView,
+    UiMemoryDetailView, UiMemoryEntryView, UiModelCapabilitiesView, UiModifiedByView, UiNoteView,
+    UiOpenFileView, UiProviderModelView, UiProviderSettingsView, UiProviderView, UiRuntimeSnapshot,
+    UiServerToolView, UiShellView, UiSkillView, UiSystemStatusView, UiTaskSnapshot, UiTaskSummary,
+    UiTaskTimelineEntry, UiTimelineTurnView, UiToolSummaryView, UiUserMessageView,
 };
 
 impl UiTaskSnapshot {
@@ -49,7 +48,10 @@ impl UiTaskSnapshot {
             task: UiTaskSummary::from(task),
             active_agent,
             last_seq,
-            timeline: timeline.into_iter().map(UiTaskTimelineEntry::from).collect(),
+            timeline: timeline
+                .into_iter()
+                .map(UiTaskTimelineEntry::from)
+                .collect(),
             notes: notes
                 .into_iter()
                 .map(|note| UiNoteView {
@@ -311,7 +313,9 @@ impl From<PersistedUserMessage> for UiUserMessageView {
                 .replies
                 .into_iter()
                 .map(|reply| match reply {
-                    crate::storage::PersistedReplyRef::Turn { id } => super::UiReplyRef::Turn { id },
+                    crate::storage::PersistedReplyRef::Turn { id } => {
+                        super::UiReplyRef::Turn { id }
+                    }
                     crate::storage::PersistedReplyRef::UserMessage { id } => {
                         super::UiReplyRef::UserMessage { id }
                     }
@@ -329,8 +333,12 @@ impl From<PersistedTurn> for UiTimelineTurnView {
             agent_id: turn.agent_id,
             agent_display_name: String::new(),
             trigger: match turn.trigger {
-                crate::storage::PersistedTurnTrigger::User { id } => super::UiTurnTrigger::User { id },
-                crate::storage::PersistedTurnTrigger::Turn { id } => super::UiTurnTrigger::Turn { id },
+                crate::storage::PersistedTurnTrigger::User { id } => {
+                    super::UiTurnTrigger::User { id }
+                }
+                crate::storage::PersistedTurnTrigger::Turn { id } => {
+                    super::UiTurnTrigger::Turn { id }
+                }
             },
             state: match turn.state {
                 PersistedTurnState::Streaming => "streaming",
@@ -341,7 +349,11 @@ impl From<PersistedTurn> for UiTimelineTurnView {
             .to_string(),
             error_message: turn.error_message,
             timestamp: system_time_to_unix(turn.timestamp),
-            messages: turn.messages.into_iter().map(UiAssistantMessageView::from).collect(),
+            messages: turn
+                .messages
+                .into_iter()
+                .map(UiAssistantMessageView::from)
+                .collect(),
         }
     }
 }

@@ -284,7 +284,10 @@ impl MarchStorage {
             .connection
             .execute(
                 "UPDATE tasks SET last_event_seq = ?2 WHERE id = ?1",
-                params![task_id, i64::try_from(seq).context("task event seq overflow")?],
+                params![
+                    task_id,
+                    i64::try_from(seq).context("task event seq overflow")?
+                ],
             )
             .context("failed to update task last_event_seq")?;
         require_task_found(affected, task_id)
@@ -456,7 +459,6 @@ impl MarchStorage {
         raw.decode(&self.workspace_root)
     }
 
-
     fn load_task_timeline(&self, task_id: i64) -> Result<PersistedTaskTimeline> {
         let mut entry_statement = self
             .connection
@@ -504,18 +506,21 @@ impl MarchStorage {
 
             match kind.as_str() {
                 "user_message" => {
-                    timeline.push(PersistedTaskTimelineEntry::UserMessage(PersistedUserMessage {
-                        user_message_id: user_message_id
-                            .with_context(|| format!("missing user_message_id for task {}", task_id))?,
-                        content: decode_content_blocks(content.as_deref().unwrap_or("[]"))?,
-                        mentions: decode_json_list(mentions_json.as_deref())?,
-                        replies: decode_reply_refs(replies_json.as_deref())?,
-                        timestamp: system_time_from_unix(created_at)?,
-                    }));
+                    timeline.push(PersistedTaskTimelineEntry::UserMessage(
+                        PersistedUserMessage {
+                            user_message_id: user_message_id.with_context(|| {
+                                format!("missing user_message_id for task {}", task_id)
+                            })?,
+                            content: decode_content_blocks(content.as_deref().unwrap_or("[]"))?,
+                            mentions: decode_json_list(mentions_json.as_deref())?,
+                            replies: decode_reply_refs(replies_json.as_deref())?,
+                            timestamp: system_time_from_unix(created_at)?,
+                        },
+                    ));
                 }
                 "turn" => {
-                    let turn_id = turn_id
-                        .with_context(|| format!("missing turn_id for task {}", task_id))?;
+                    let turn_id =
+                        turn_id.with_context(|| format!("missing turn_id for task {}", task_id))?;
                     timeline.push(PersistedTaskTimelineEntry::Turn(PersistedTurn {
                         turn_id: turn_id.clone(),
                         agent_id: agent_id.unwrap_or_else(|| MARCH_AGENT_NAME.to_string()),
@@ -560,7 +565,8 @@ impl MarchStorage {
 
         let mut messages = Vec::new();
         for row in rows {
-            let (message_id, state, reasoning) = row.context("failed to decode turn message row")?;
+            let (message_id, state, reasoning) =
+                row.context("failed to decode turn message row")?;
             messages.push(PersistedAssistantMessage {
                 message_id: message_id.clone(),
                 turn_id: turn_id.to_string(),

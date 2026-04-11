@@ -4,7 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use march::agent::TurnCancellation;
-use serde::Serialize;
+use march::diagnostics::{
+    DiagnosticChannel, DiagnosticLevel, DiagnosticLogger, DiagnosticRecord, now_timestamp_ms,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
 
@@ -19,12 +22,11 @@ use march::ui::{
     UiSelectTaskRequest, UiSendMessageRequest, UiSetDefaultModelRequest, UiSetTaskModelRequest,
     UiSetTaskModelSettingsRequest, UiSetTaskWorkingDirectoryRequest, UiSkillSearchView,
     UiTaskHistoryView, UiTaskModelSelectorView, UiTestProviderConnectionRequest,
-    UiTestProviderConnectionResult,
-    UiToggleOpenFileLockRequest, UiUpsertAgentRequest, UiUpsertMemoryRequest, UiUpsertNoteRequest,
-    UiUpsertProviderModelRequest, UiUpsertProviderRequest, UiWorkspaceEntryView,
-    UiWorkspaceImageView, UiWorkspaceSnapshot, fetch_probe_model_capabilities, fetch_probe_models,
-    fetch_provider_models_for_provider, fetch_task_model_selector,
-    test_provider_connection as run_provider_connection_test,
+    UiTestProviderConnectionResult, UiToggleOpenFileLockRequest, UiUpsertAgentRequest,
+    UiUpsertMemoryRequest, UiUpsertNoteRequest, UiUpsertProviderModelRequest,
+    UiUpsertProviderRequest, UiWorkspaceEntryView, UiWorkspaceImageView, UiWorkspaceSnapshot,
+    fetch_probe_model_capabilities, fetch_probe_models, fetch_provider_models_for_provider,
+    fetch_task_model_selector, test_provider_connection as run_provider_connection_test,
 };
 
 struct AppState {
@@ -69,6 +71,16 @@ enum TaskSubscriptionStatus {
 #[serde(rename_all = "camelCase")]
 struct TaskSubscriptionView {
     status: TaskSubscriptionStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendDiagnosticLogRequest {
+    level: String,
+    scope: String,
+    event: String,
+    message: Option<String>,
+    fields: Option<HashMap<String, String>>,
 }
 
 impl MemoryWatcherState {
@@ -336,7 +348,10 @@ fn sync_turn_cancellation_registry(
     Ok(())
 }
 
-fn clear_turn_cancellation_registry(state: &AppState, event: &UiAgentProgressEvent) -> Result<(), String> {
+fn clear_turn_cancellation_registry(
+    state: &AppState,
+    event: &UiAgentProgressEvent,
+) -> Result<(), String> {
     if let UiAgentProgressEvent::TurnFinished { turn_id, .. } = event {
         let mut turn_cancellations = state
             .turn_cancellations
@@ -398,8 +413,8 @@ fn next_task_event_seq(state: &AppState, task_id: i64) -> Result<u64, String> {
     sequences.insert(task_id, next);
     drop(sequences);
 
-    let storage =
-        march::storage::MarchStorage::open(&state.workspace_path).map_err(|error| error.to_string())?;
+    let storage = march::storage::MarchStorage::open(&state.workspace_path)
+        .map_err(|error| error.to_string())?;
     storage
         .update_task_last_event_seq(task_id, next)
         .map_err(|error| error.to_string())?;
@@ -436,6 +451,35 @@ fn buffer_task_event(state: &AppState, event: UiAgentProgressEvent) -> Result<()
         buffer.pop_front();
     }
     Ok(())
+}
+
+fn parse_frontend_diagnostic_level(level: &str) -> Result<DiagnosticLevel, String> {
+    match level {
+        "debug" => Ok(DiagnosticLevel::Debug),
+        "info" => Ok(DiagnosticLevel::Info),
+        "warn" => Ok(DiagnosticLevel::Warn),
+        "error" => Ok(DiagnosticLevel::Error),
+        other => Err(format!("unsupported diagnostic level: {other}")),
+    }
+}
+
+fn persist_frontend_diagnostic_log(
+    workspace_path: &std::path::Path,
+    request: FrontendDiagnosticLogRequest,
+) -> Result<(), String> {
+    let level = parse_frontend_diagnostic_level(&request.level)?;
+    let logger = DiagnosticLogger::new(workspace_path).map_err(|error| error.to_string())?;
+    logger
+        .write_frontend(DiagnosticRecord {
+            timestamp_ms: now_timestamp_ms(),
+            level,
+            channel: DiagnosticChannel::Frontend,
+            scope: request.scope,
+            event: request.event,
+            message: request.message.unwrap_or_default(),
+            fields: request.fields.unwrap_or_default().into_iter().collect(),
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// Keep the first-launch window inside the monitor work area.
@@ -509,7 +553,9 @@ fn get_task_history(
     report_command_result(
         &app,
         "get_task_history",
-        backend.task_history(task_id).map_err(|error| error.to_string()),
+        backend
+            .task_history(task_id)
+            .map_err(|error| error.to_string()),
     )
 }
 
@@ -681,7 +727,7 @@ async fn send_message(
     };
     let request = UiSendMessageRequest {
         task_id: Some(task_id),
-        request_id: Some(request_id),
+        request_id: Some(request_id.clone()),
         mentions: input.mentions,
         replies: input.replies,
         content_blocks: input.content_blocks,
@@ -694,15 +740,13 @@ async fn send_message(
                 let seq = next_task_event_seq(&state, task_id).map_err(anyhow::Error::msg)?;
                 set_event_seq(&mut event, seq);
                 buffer_task_event(&state, event.clone()).map_err(anyhow::Error::msg)?;
-                clear_turn_cancellation_registry(&state, &event)
-                    .map_err(anyhow::Error::msg)?;
+                clear_turn_cancellation_registry(&state, &event).map_err(anyhow::Error::msg)?;
                 emit_progress_notice(&app, &event);
-                handle_task_working_transition(&app, &state, &event)
-                    .map_err(anyhow::Error::msg)?;
+                handle_task_working_transition(&app, &state, &event).map_err(anyhow::Error::msg)?;
                 app.emit(&task_progress_event_name(task_id), &event)
                     .map_err(|error| {
-                    anyhow::anyhow!("failed to emit agent progress event: {}", error)
-                })
+                        anyhow::anyhow!("failed to emit agent progress event: {}", error)
+                    })
             },
             |turn_id, turn_cancellation| {
                 sync_turn_cancellation_registry(&state, turn_id, turn_cancellation)
@@ -1264,6 +1308,19 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     )
 }
 
+#[tauri::command]
+fn write_frontend_diagnostic_log(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    request: FrontendDiagnosticLogRequest,
+) -> Result<(), String> {
+    report_command_result(
+        &app,
+        "write_frontend_diagnostic_log",
+        persist_frontend_diagnostic_log(&state.workspace_path, request),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = dotenvy::dotenv();
@@ -1274,7 +1331,7 @@ pub fn run() {
     std::env::set_current_dir(&workspace_path).expect("failed to switch to workspace root");
 
     tauri::Builder::default()
-            .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup({
             let watcher_workspace_path = workspace_path.clone();
             move |app| {
@@ -1336,8 +1393,88 @@ pub fn run() {
             search_mentions,
             search_skills,
             load_workspace_image,
-            open_external_url
+            open_external_url,
+            write_frontend_diagnostic_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running March");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{
+        FrontendDiagnosticLogRequest, parse_frontend_diagnostic_level,
+        persist_frontend_diagnostic_log,
+    };
+    use march::diagnostics::DiagnosticLevel;
+
+    #[test]
+    fn parse_frontend_diagnostic_level_accepts_supported_levels() {
+        assert_eq!(
+            parse_frontend_diagnostic_level("debug").expect("debug level"),
+            DiagnosticLevel::Debug
+        );
+        assert_eq!(
+            parse_frontend_diagnostic_level("info").expect("info level"),
+            DiagnosticLevel::Info
+        );
+        assert_eq!(
+            parse_frontend_diagnostic_level("warn").expect("warn level"),
+            DiagnosticLevel::Warn
+        );
+        assert_eq!(
+            parse_frontend_diagnostic_level("error").expect("error level"),
+            DiagnosticLevel::Error
+        );
+    }
+
+    #[test]
+    fn parse_frontend_diagnostic_level_rejects_unknown_levels() {
+        let error = parse_frontend_diagnostic_level("trace").expect_err("unknown level");
+        assert!(error.contains("unsupported diagnostic level"));
+    }
+
+    #[test]
+    fn persist_frontend_diagnostic_log_writes_frontend_log_file() {
+        let workspace = temp_workspace("frontend-diagnostic-log");
+
+        persist_frontend_diagnostic_log(
+            &workspace,
+            FrontendDiagnosticLogRequest {
+                level: "info".to_string(),
+                scope: "main".to_string(),
+                event: "app.mounted".to_string(),
+                message: Some("mounted".to_string()),
+                fields: Some(HashMap::from([(
+                    "appInstanceId".to_string(),
+                    "abc123".to_string(),
+                )])),
+            },
+        )
+        .expect("persist frontend diagnostic log");
+
+        let frontend_log = fs::read_to_string(
+            workspace
+                .join(".march")
+                .join("diagnostics")
+                .join("frontend.log"),
+        )
+        .expect("read frontend log");
+
+        assert!(frontend_log.contains("INFO main app.mounted mounted appInstanceId=abc123"));
+    }
+
+    fn temp_workspace(prefix: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("march-ui-{prefix}-{unique}"));
+        fs::create_dir_all(root.join(".march")).expect("create .march");
+        root
+    }
 }

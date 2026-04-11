@@ -55,6 +55,7 @@ enum TurnWorkerUpdate {
         turn_id: String,
         debug_round: DebugRound,
         current_state: PersistedTaskState,
+        memory_index: Option<crate::memory::MemoryIndexView>,
     },
 }
 
@@ -64,6 +65,7 @@ enum TurnExecutionOutcome {
         turn_id: String,
         pending_turn: PendingTurn,
         completed_state: PersistedTaskState,
+        memory_index: Option<crate::memory::MemoryIndexView>,
         result: AgentRunResult,
         next_agents: Vec<String>,
     },
@@ -71,6 +73,7 @@ enum TurnExecutionOutcome {
         turn_id: String,
         pending_turn: PendingTurn,
         completed_state: PersistedTaskState,
+        memory_index: Option<crate::memory::MemoryIndexView>,
         cancelled: bool,
         error_message: Option<String>,
     },
@@ -183,7 +186,11 @@ impl UiAppBackend {
                     user_message_id: progress_context.user_message_id.clone(),
                     content: content_blocks.clone(),
                     mentions: initial_mentions.clone(),
-                    replies: requested_replies.clone().into_iter().map(reply_ref_from_ui).collect(),
+                    replies: requested_replies
+                        .clone()
+                        .into_iter()
+                        .map(reply_ref_from_ui)
+                        .collect(),
                     timestamp: user_message_timestamp,
                 },
             )),
@@ -209,6 +216,7 @@ impl UiAppBackend {
             final_messages: Vec::new(),
             debug_rounds: Vec::new(),
         };
+        let mut last_memory_index: Option<crate::memory::MemoryIndexView> = None;
         let (turn_updates_tx, mut turn_updates_rx) = unbounded_channel::<TurnWorkerUpdate>();
         let mut running_turns: FuturesUnordered<TurnFuture> = FuturesUnordered::new();
         let mut running_turn_states = IndexMap::<String, RunningTurnState>::new();
@@ -248,7 +256,8 @@ impl UiAppBackend {
                         TurnWorkerUpdate::Progress(event) => {
                             on_progress(event)?;
                         }
-                        TurnWorkerUpdate::RoundComplete { turn_id, debug_round, current_state } => {
+                        TurnWorkerUpdate::RoundComplete { turn_id, debug_round, current_state, memory_index } => {
+                            last_memory_index = memory_index.clone().or(last_memory_index);
                             progress_rounds.push(debug_round.clone());
                             combined_result.debug_rounds.push(debug_round.clone());
                             let Some(running_turn) = running_turn_states.get(&turn_id) else {
@@ -263,6 +272,7 @@ impl UiAppBackend {
                                 progress_task.clone(),
                                 &persisted_before.task,
                                 &preview_state,
+                                memory_index,
                                 &progress_rounds,
                                 context_budget_tokens,
                             )?;
@@ -282,9 +292,11 @@ impl UiAppBackend {
                             turn_id,
                             pending_turn,
                             completed_state,
+                            memory_index,
                             result,
                             next_agents,
                         }) => {
+                            last_memory_index = memory_index.clone().or(last_memory_index);
                             running_turn_states.shift_remove(&turn_id);
                             canonical_state = merge_turn_state(
                                 &pending_turn.persisted_state,
@@ -293,6 +305,7 @@ impl UiAppBackend {
                             );
                             let mut canonical_session =
                                 restore_session_from_state(&persisted_before.task, &canonical_state)?;
+                            canonical_session.restore_last_memory_index(memory_index);
                             save_session_with_timeline(
                                 &mut self.storage,
                                 task_id,
@@ -344,9 +357,11 @@ impl UiAppBackend {
                             turn_id,
                             pending_turn,
                             completed_state,
+                            memory_index,
                             cancelled,
                             error_message,
                         }) => {
+                            last_memory_index = memory_index.clone().or(last_memory_index);
                             running_turn_states.shift_remove(&turn_id);
                             canonical_state = merge_turn_state(
                                 &pending_turn.persisted_state,
@@ -355,6 +370,7 @@ impl UiAppBackend {
                             );
                             let mut canonical_session =
                                 restore_session_from_state(&persisted_before.task, &canonical_state)?;
+                            canonical_session.restore_last_memory_index(memory_index);
                             save_session_with_timeline(
                                 &mut self.storage,
                                 task_id,
@@ -393,7 +409,13 @@ impl UiAppBackend {
                 TurnWorkerUpdate::Progress(event) => {
                     on_progress(event)?;
                 }
-                TurnWorkerUpdate::RoundComplete { turn_id, debug_round, current_state } => {
+                TurnWorkerUpdate::RoundComplete {
+                    turn_id,
+                    debug_round,
+                    current_state,
+                    memory_index,
+                } => {
+                    last_memory_index = memory_index.clone().or(last_memory_index);
                     progress_rounds.push(debug_round.clone());
                     combined_result.debug_rounds.push(debug_round.clone());
                     let Some(running_turn) = running_turn_states.get(&turn_id) else {
@@ -408,6 +430,7 @@ impl UiAppBackend {
                         progress_task.clone(),
                         &persisted_before.task,
                         &preview_state,
+                        memory_index,
                         &progress_rounds,
                         context_budget_tokens,
                     )?;
@@ -422,7 +445,9 @@ impl UiAppBackend {
             }
         }
 
-        let mut final_session = restore_session_from_state(&persisted_before.task, &canonical_state)?;
+        let mut final_session =
+            restore_session_from_state(&persisted_before.task, &canonical_state)?;
+        final_session.restore_last_memory_index(last_memory_index);
         let runtime = final_session.ui_runtime_snapshot(context_budget_tokens);
         save_session_with_timeline(
             &mut self.storage,
@@ -436,11 +461,10 @@ impl UiAppBackend {
         }
         let mut workspace = self.workspace_snapshot(Some(task_id))?;
         if let Some(active_task) = workspace.active_task.take() {
-            workspace.active_task = Some(
-                active_task
-                    .with_runtime(&runtime)
-                    .with_debug_trace(UiDebugTraceView::from_rounds(&combined_result.debug_rounds)),
-            );
+            workspace.active_task =
+                Some(active_task.with_runtime(&runtime).with_debug_trace(
+                    UiDebugTraceView::from_rounds(&combined_result.debug_rounds),
+                ));
         }
         Ok(workspace)
     }
@@ -537,10 +561,12 @@ impl UiAppBackend {
         ));
         Ok(())
     }
-
 }
 
-fn restore_session_from_state(task: &TaskRecord, state: &PersistedTaskState) -> Result<AgentSession> {
+fn restore_session_from_state(
+    task: &TaskRecord,
+    state: &PersistedTaskState,
+) -> Result<AgentSession> {
     AgentSession::restore(
         ui_agent_config(),
         PersistedTask {
@@ -567,7 +593,11 @@ fn execute_pending_turn(
         let mut session = restore_session_from_state(&task, &pending_turn.persisted_state)?;
         session.set_active_agent(pending_turn.agent_name.clone());
         let mut turn_timeline = append_started_turn(
-            pending_turn.persisted_state.timeline.as_deref().unwrap_or(&[]),
+            pending_turn
+                .persisted_state
+                .timeline
+                .as_deref()
+                .unwrap_or(&[]),
             PersistedTurn {
                 turn_id: turn_id.clone(),
                 agent_id: session.active_agent_name().to_string(),
@@ -608,6 +638,7 @@ fn execute_pending_turn(
                     timeline: Some(turn_timeline),
                     ..session.persisted_state()
                 };
+                let memory_index = session.last_memory_index();
                 let next_agents = result
                     .final_messages
                     .last()
@@ -622,6 +653,7 @@ fn execute_pending_turn(
                     turn_id,
                     pending_turn,
                     completed_state,
+                    memory_index,
                     result,
                     next_agents,
                 })
@@ -646,10 +678,12 @@ fn execute_pending_turn(
                     timeline: Some(turn_timeline),
                     ..session.persisted_state()
                 };
+                let memory_index = session.last_memory_index();
                 Ok(TurnExecutionOutcome::Failed {
                     turn_id,
                     pending_turn,
                     completed_state,
+                    memory_index,
                     cancelled,
                     error_message: if cancelled {
                         None
@@ -674,7 +708,9 @@ fn emit_turn_worker_update(
 ) -> Result<()> {
     let runtime = session.ui_runtime_snapshot(context_budget_tokens);
     let update = match event {
-        AgentProgressEvent::Status { .. } | AgentProgressEvent::FinalAssistantMessage(_) => return Ok(()),
+        AgentProgressEvent::Status { .. } | AgentProgressEvent::FinalAssistantMessage(_) => {
+            return Ok(());
+        }
         AgentProgressEvent::ToolStarted {
             message_id,
             tool_call_id,
@@ -742,6 +778,7 @@ fn emit_turn_worker_update(
         AgentProgressEvent::RoundCompleted(debug_round) => TurnWorkerUpdate::RoundComplete {
             turn_id: turn_id.to_string(),
             debug_round,
+            memory_index: session.last_memory_index(),
             current_state: PersistedTaskState {
                 timeline: Some(current_timeline.to_vec()),
                 ..session.persisted_state()
@@ -759,10 +796,12 @@ fn build_live_task_snapshot_from_state(
     task: TaskRecord,
     session_task: &TaskRecord,
     state: &PersistedTaskState,
+    memory_index: Option<crate::memory::MemoryIndexView>,
     debug_rounds: &[DebugRound],
     context_budget_tokens: usize,
 ) -> Result<UiTaskSnapshot> {
-    let session = restore_session_from_state(session_task, state)?;
+    let mut session = restore_session_from_state(session_task, state)?;
+    session.restore_last_memory_index(memory_index);
     UiAppBackend::live_task_snapshot(
         task,
         &session,
@@ -801,7 +840,12 @@ fn merge_turn_state(
     merged
 }
 
-fn merge_keyed_entries<T, K, F>(baseline: &[T], canonical: &[T], completed: &[T], key_of: F) -> Vec<T>
+fn merge_keyed_entries<T, K, F>(
+    baseline: &[T],
+    canonical: &[T],
+    completed: &[T],
+    key_of: F,
+) -> Vec<T>
 where
     T: Clone + PartialEq,
     K: std::hash::Hash + Eq + Clone,
@@ -928,16 +972,19 @@ fn apply_agent_progress_to_persisted_timeline(
     event: AgentProgressEvent,
 ) -> PersistedTaskTimeline {
     let mut next = timeline.to_vec();
-    let Some(PersistedTaskTimelineEntry::Turn(turn)) = next
-        .iter_mut()
-        .find(|entry| matches!(entry, PersistedTaskTimelineEntry::Turn(turn) if turn.turn_id == turn_id))
-    else {
+    let Some(PersistedTaskTimelineEntry::Turn(turn)) = next.iter_mut().find(
+        |entry| matches!(entry, PersistedTaskTimelineEntry::Turn(turn) if turn.turn_id == turn_id),
+    ) else {
         return next;
     };
 
     match event {
         AgentProgressEvent::MessageStarted { message_id } => {
-            if !turn.messages.iter().any(|message| message.message_id == message_id) {
+            if !turn
+                .messages
+                .iter()
+                .any(|message| message.message_id == message_id)
+            {
                 turn.messages.push(PersistedAssistantMessage {
                     message_id,
                     turn_id: turn_id.to_string(),
@@ -954,14 +1001,16 @@ fn apply_agent_progress_to_persisted_timeline(
             summary,
         } => {
             let message = ensure_persisted_message(turn, &message_id);
-            message.timeline.push(PersistedAssistantTimelineEntry::Tool {
-                tool_call_id,
-                tool_name,
-                arguments: String::new(),
-                status: PersistedToolCallState::Running,
-                preview: Some(summary),
-                duration_ms: None,
-            });
+            message
+                .timeline
+                .push(PersistedAssistantTimelineEntry::Tool {
+                    tool_call_id,
+                    tool_name,
+                    arguments: String::new(),
+                    status: PersistedToolCallState::Running,
+                    preview: Some(summary),
+                    duration_ms: None,
+                });
         }
         AgentProgressEvent::ToolFinished {
             message_id,
@@ -1018,10 +1067,9 @@ fn finish_persisted_turn(
     error_message: Option<String>,
 ) -> PersistedTaskTimeline {
     let mut next = timeline.to_vec();
-    if let Some(PersistedTaskTimelineEntry::Turn(turn)) = next
-        .iter_mut()
-        .find(|entry| matches!(entry, PersistedTaskTimelineEntry::Turn(turn) if turn.turn_id == turn_id))
-    {
+    if let Some(PersistedTaskTimelineEntry::Turn(turn)) = next.iter_mut().find(
+        |entry| matches!(entry, PersistedTaskTimelineEntry::Turn(turn) if turn.turn_id == turn_id),
+    ) {
         turn.state = state;
         turn.error_message = error_message;
         for message in &mut turn.messages {
