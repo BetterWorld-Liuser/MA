@@ -54,10 +54,10 @@ export function useTaskTimelineState({
       const taskId = activeTask.task.id;
       syncTaskContextSnapshot(taskId, activeTask);
       if (hydratedTaskIds.value.has(taskId)) {
-        taskLastSeqs.value = {
-          ...taskLastSeqs.value,
-          [taskId]: Math.max(taskLastSeqs.value[taskId] ?? 0, activeTask.last_seq ?? 0),
-        };
+        // Keep the local seq cursor intact for hydrated tasks. The active-task
+        // snapshot is persisted state and can lag behind the buffered replay
+        // events; bumping the cursor here would make subscribe_task skip the
+        // missed turn_finished/message_finished events we need to replay.
         return;
       }
 
