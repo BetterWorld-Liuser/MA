@@ -435,13 +435,27 @@
 }
 
 @utility message-actions {
-  @apply flex px-1;
+  @apply inline-flex min-h-7 min-w-8 items-center gap-1 rounded-[12px] px-1 py-0.5;
+  align-self: flex-start;
+  background: transparent;
+  transition: opacity 140ms ease;
+}
+
+@utility message-actions-user {
+  align-self: flex-end;
+}
+
+@utility message-actions-active {
+  background: transparent;
 }
 
 @utility message-copy-button {
   @apply inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim transition disabled:cursor-not-allowed disabled:opacity-35;
   background: transparent;
   border: 1px solid transparent;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 
   &:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.05);
@@ -564,6 +578,12 @@
   & span:nth-child(3) {
     animation-delay: 0.3s;
   }
+}
+
+@utility message-copy-button-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 @utility chat-composer-shell {

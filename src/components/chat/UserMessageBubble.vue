@@ -1,6 +1,6 @@
 <template>
   <article
-    class="chat-row chat-row-user"
+    class="chat-row chat-row-user message-row-user"
     :class="isHighlighted ? 'ring-1 ring-accent/45 rounded-2xl' : ''"
     :data-entry-key="entryKey"
   >
@@ -44,12 +44,36 @@
 
         <p class="whitespace-pre-wrap text-[12px] leading-[1.5] text-text">{{ entry.content }}</p>
       </div>
+
+      <div
+        class="message-actions message-actions-user"
+        :class="isActionBarVisible ? 'message-actions-active' : ''"
+        @mouseenter="isActionBarVisible = true"
+        @mouseleave="isActionBarVisible = false"
+        @focusin="isActionBarVisible = true"
+        @focusout="handleFocusOut"
+      >
+        <button
+          class="message-copy-button"
+          :class="isActionBarVisible ? 'message-copy-button-visible' : ''"
+          type="button"
+          :title="copyButtonTitle"
+          :aria-label="copyButtonTitle"
+          :disabled="!canCopyMessage"
+          @click="copyUserMessage"
+        >
+          <Icon :icon="copyFeedbackIcon" class="message-copy-icon" />
+        </button>
+      </div>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { Icon } from '@iconify/vue';
+import checkIcon from '@iconify-icons/lucide/check';
+import copyIcon from '@iconify-icons/lucide/copy';
 import type { ChatImageAttachment, UserMessage } from '@/data/mock';
 import type { ComposerReplyPreview } from '@/composables/workspaceApp/types';
 
@@ -67,6 +91,17 @@ defineEmits<{
 
 const entryKey = computed(() => `user_message:${props.entry.userMessageId}`);
 const isHighlighted = computed(() => props.activeHighlightKey === entryKey.value);
+const copied = ref(false);
+const isActionBarVisible = ref(false);
+const canCopyMessage = computed(() => props.entry.content.trim().length > 0);
+const copyFeedbackIcon = computed(() => (copied.value ? checkIcon : copyIcon));
+const copyButtonTitle = computed(() => {
+  if (!canCopyMessage.value) {
+    return '暂无可复制内容';
+  }
+
+  return copied.value ? '已复制' : '复制消息';
+});
 const selfReply = computed<ComposerReplyPreview>(() => ({
   kind: 'user_message',
   id: props.entry.userMessageId,
@@ -78,6 +113,7 @@ const resolvedReplies = computed(() =>
     .map((reply) => props.replyTargets?.[`${reply.kind}:${reply.id}`])
     .filter((reply): reply is ComposerReplyPreview => !!reply),
 );
+let copiedResetTimer: number | null = null;
 
 function formatEntryTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString([], {
@@ -93,4 +129,40 @@ function summarizeReplyText(text: string) {
   }
   return compact.length > 72 ? `${compact.slice(0, 72)}…` : compact;
 }
+
+async function copyUserMessage() {
+  if (!canCopyMessage.value) {
+    return;
+  }
+
+  await navigator.clipboard.writeText(props.entry.content.trim());
+  copied.value = true;
+  resetCopiedStateSoon();
+}
+
+function resetCopiedStateSoon() {
+  if (copiedResetTimer !== null) {
+    window.clearTimeout(copiedResetTimer);
+  }
+
+  copiedResetTimer = window.setTimeout(() => {
+    copied.value = false;
+    copiedResetTimer = null;
+  }, 1400);
+}
+
+function handleFocusOut(event: FocusEvent) {
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+    return;
+  }
+
+  isActionBarVisible.value = false;
+}
+
+onBeforeUnmount(() => {
+  if (copiedResetTimer !== null) {
+    window.clearTimeout(copiedResetTimer);
+  }
+});
 </script>

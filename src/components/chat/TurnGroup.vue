@@ -1,6 +1,6 @@
 <template>
   <article
-    class="chat-row chat-row-assistant"
+    class="chat-row chat-row-assistant message-row-assistant"
     :class="isHighlighted ? 'ring-1 ring-accent/45 rounded-2xl' : ''"
     :data-entry-key="entryKey"
   >
@@ -81,15 +81,38 @@
           {{ entry.errorMessage }}
         </p>
       </div>
+
+      <div
+        class="message-actions"
+        :class="isActionBarVisible ? 'message-actions-active' : ''"
+        @mouseenter="isActionBarVisible = true"
+        @mouseleave="isActionBarVisible = false"
+        @focusin="isActionBarVisible = true"
+        @focusout="handleFocusOut"
+      >
+        <button
+          class="message-copy-button"
+          :class="isActionBarVisible ? 'message-copy-button-visible' : ''"
+          type="button"
+          :title="copyButtonTitle"
+          :aria-label="copyButtonTitle"
+          :disabled="!canCopyMessage"
+          @click="copyAssistantMessage"
+        >
+          <Icon :icon="copyFeedbackIcon" class="message-copy-icon" />
+        </button>
+      </div>
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import pauseIcon from '@iconify-icons/lucide/pause';
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right';
+import checkIcon from '@iconify-icons/lucide/check';
+import copyIcon from '@iconify-icons/lucide/copy';
 import type { AssistantTimelineEntry, Turn } from '@/data/mock';
 import { countTurnToolCalls } from '@/composables/chatRuntime/chatEventReducer';
 import type { ComposerReplyPreview } from '@/composables/workspaceApp/types';
@@ -106,6 +129,8 @@ defineEmits<{
 }>();
 
 const expanded = ref(false);
+const copied = ref(false);
+const isActionBarVisible = ref(false);
 const entryKey = computed(() => `turn:${props.entry.turnId}`);
 const isHighlighted = computed(() => props.activeHighlightKey === entryKey.value);
 
@@ -123,12 +148,34 @@ const triggerLabel = computed(() =>
   props.entry.trigger.kind === 'user' ? '来自用户消息' : '来自上一个 turn'
 );
 const toolSummaryCountLabel = computed(() => `${countTurnToolCalls(props.entry)}个动作`);
+const copyableMessageText = computed(() => {
+  if (props.entry.state === 'streaming') {
+    return '';
+  }
+
+  return props.entry.messages
+    .flatMap((message) => message.timeline)
+    .filter((timelineEntry): timelineEntry is Extract<AssistantTimelineEntry, { kind: 'text' }> => timelineEntry.kind === 'text')
+    .map((timelineEntry) => timelineEntry.text.trimEnd())
+    .join('')
+    .trim();
+});
+const canCopyMessage = computed(() => copyableMessageText.value.length > 0);
+const copyFeedbackIcon = computed(() => (copied.value ? checkIcon : copyIcon));
+const copyButtonTitle = computed(() => {
+  if (!canCopyMessage.value) {
+    return props.entry.state === 'streaming' ? '消息生成中，暂不可复制' : '暂无可复制内容';
+  }
+
+  return copied.value ? '已复制' : '复制消息';
+});
 const selfReply = computed<ComposerReplyPreview>(() => ({
   kind: 'turn',
   id: props.entry.turnId,
   author: props.entry.agentName,
   summary: summarizeTurnReply(props.entry),
 }));
+let copiedResetTimer: number | null = null;
 
 function formatEntryTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString([], {
@@ -168,4 +215,40 @@ function hasRenderableStreamingContent(entry: Turn) {
     });
   });
 }
+
+async function copyAssistantMessage() {
+  if (!canCopyMessage.value) {
+    return;
+  }
+
+  await navigator.clipboard.writeText(copyableMessageText.value);
+  copied.value = true;
+  resetCopiedStateSoon();
+}
+
+function resetCopiedStateSoon() {
+  if (copiedResetTimer !== null) {
+    window.clearTimeout(copiedResetTimer);
+  }
+
+  copiedResetTimer = window.setTimeout(() => {
+    copied.value = false;
+    copiedResetTimer = null;
+  }, 1400);
+}
+
+function handleFocusOut(event: FocusEvent) {
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+    return;
+  }
+
+  isActionBarVisible.value = false;
+}
+
+onBeforeUnmount(() => {
+  if (copiedResetTimer !== null) {
+    window.clearTimeout(copiedResetTimer);
+  }
+});
 </script>
