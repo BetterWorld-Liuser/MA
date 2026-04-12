@@ -9,8 +9,8 @@ import { createWorkspaceActionRunner } from './workspaceActionRunner';
 type UseWorkspaceTaskActionsOptions = {
   workspaceState: WorkspaceSnapshotState;
   taskChatState: TaskChatState;
-  sendingTaskId: Ref<number | null>;
-  cancellingTaskId: Ref<number | null>;
+  sendingTaskIds: Ref<Set<number>>;
+  cancellingTaskIds: Ref<Set<number>>;
   busy: Ref<boolean>;
   errorMessage: Ref<string>;
   chatPaneRef: Ref<{ focusComposer: () => void } | null>;
@@ -58,8 +58,8 @@ type UseWorkspaceTaskActionsOptions = {
 export function useWorkspaceTaskActions({
   workspaceState,
   taskChatState,
-  sendingTaskId,
-  cancellingTaskId,
+  sendingTaskIds,
+  cancellingTaskIds,
   busy,
   errorMessage,
   chatPaneRef,
@@ -86,8 +86,8 @@ export function useWorkspaceTaskActions({
   const messageActions = createMessageActions({
     workspaceState,
     taskChatState,
-    sendingTaskId,
-    cancellingTaskId,
+    sendingTaskIds,
+    cancellingTaskIds,
     errorMessage,
     chatPaneRef,
     clearTaskActivity,

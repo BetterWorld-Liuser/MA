@@ -20,6 +20,7 @@ import { frontendDiagnosticLogger } from '@/lib/frontendDiagnosticLogger';
 import { useWindowControls } from '@/composables/workspaceApp/useWindowControls';
 import { useWorkspaceSnapshotState } from '@/composables/workspaceApp/useWorkspaceSnapshotState';
 import { useTaskTimelineState } from '@/composables/workspaceApp/useTaskTimelineState';
+import { isTaskInteractionLocked } from '@/composables/workspaceApp/taskRunLocks';
 import { useWorkspaceTaskActions } from '@/composables/workspaceApp/useWorkspaceTaskActions';
 import {
   humanizeError,
@@ -46,8 +47,8 @@ type TaskWorkingChangedEvent = {
 export function useWorkspaceApp() {
   const appTitle = 'March';
   const busy = ref(false);
-  const sendingTaskId = ref<number | null>(null);
-  const cancellingTaskId = ref<number | null>(null);
+  const sendingTaskIds = ref<Set<number>>(new Set());
+  const cancellingTaskIds = ref<Set<number>>(new Set());
   const errorMessage = ref('');
   const backendNotices = ref<BackendNotice[]>([]);
   const chatPaneRef = ref<ChatPaneHandle | null>(null);
@@ -166,8 +167,8 @@ export function useWorkspaceApp() {
   } = useWorkspaceTaskActions({
     workspaceState,
     taskChatState,
-    sendingTaskId,
-    cancellingTaskId,
+    sendingTaskIds,
+    cancellingTaskIds,
     busy,
     errorMessage,
     chatPaneRef,
@@ -232,12 +233,14 @@ export function useWorkspaceApp() {
     openEditMemoryDialog,
   });
 
-  const hasPendingSend = computed(() => sendingTaskId.value !== null);
+  const isActiveTaskInteractionLocked = computed(() => {
+    return isTaskInteractionLocked(workspaceState.activeTaskIdNumber.value, sendingTaskIds.value);
+  });
   const isActiveTaskSending = computed(() =>
-    !!workspaceState.activeTaskIdNumber.value && sendingTaskId.value === workspaceState.activeTaskIdNumber.value,
+    !!workspaceState.activeTaskIdNumber.value && sendingTaskIds.value.has(workspaceState.activeTaskIdNumber.value),
   );
   const isActiveTaskCancelling = computed(() =>
-    !!workspaceState.activeTaskIdNumber.value && cancellingTaskId.value === workspaceState.activeTaskIdNumber.value,
+    !!workspaceState.activeTaskIdNumber.value && cancellingTaskIds.value.has(workspaceState.activeTaskIdNumber.value),
   );
 
   async function initialize() {
@@ -483,7 +486,7 @@ export function useWorkspaceApp() {
     composerView: workspaceState.composerView,
     contextView: workspaceState.contextView,
     activeTaskIdNumber: workspaceState.activeTaskIdNumber,
-    hasPendingSend,
+    isActiveTaskInteractionLocked,
     isActiveTaskSending,
     isActiveTaskCancelling,
     settingsOpen,

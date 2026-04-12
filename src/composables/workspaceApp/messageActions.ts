@@ -4,6 +4,12 @@ import type { BackendWorkspaceSnapshot } from '@/data/mock';
 import { toDebugRoundItem } from '@/data/mock';
 import { debugChat, summarizeSnapshot } from '@/lib/chatDebug';
 import {
+  addTaskLock as addTaskLockState,
+  canCancelForTask,
+  canSendForTask,
+  removeTaskLock as removeTaskLockState,
+} from './taskRunLocks';
+import {
   augmentComposerMessage,
   extractBase64Payload,
   humanizeError,
@@ -18,8 +24,8 @@ type ChatPaneHandle = { focusComposer: () => void };
 type MessageActionsOptions = {
   workspaceState: WorkspaceSnapshotState;
   taskChatState: TaskChatState;
-  sendingTaskId: Ref<number | null>;
-  cancellingTaskId: Ref<number | null>;
+  sendingTaskIds: Ref<Set<number>>;
+  cancellingTaskIds: Ref<Set<number>>;
   errorMessage: Ref<string>;
   chatPaneRef: Ref<ChatPaneHandle | null>;
   clearTaskActivity: (taskId: number) => void;
@@ -37,8 +43,8 @@ type MessageActionsOptions = {
 export function createMessageActions({
   workspaceState,
   taskChatState,
-  sendingTaskId,
-  cancellingTaskId,
+  sendingTaskIds,
+  cancellingTaskIds,
   errorMessage,
   chatPaneRef,
   clearTaskActivity,
@@ -58,6 +64,14 @@ export function createMessageActions({
     syncTaskContextSnapshot,
   } = workspaceState;
   const { optimisticAppendUserMessage, clearTaskTimeline } = taskChatState;
+
+  function addTaskLock(state: Ref<Set<number>>, taskId: number) {
+    state.value = addTaskLockState(state.value, taskId);
+  }
+
+  function removeTaskLock(state: Ref<Set<number>>, taskId: number) {
+    state.value = removeTaskLockState(state.value, taskId);
+  }
 
   function applyCompletedTaskSnapshot(nextSnapshot: BackendWorkspaceSnapshot, taskId: number) {
     debugChat('message-actions', 'apply-completed-snapshot:start', {
@@ -148,7 +162,7 @@ export function createMessageActions({
       images: payload.images.length,
     });
     optimisticAppendUserMessage(taskId, buildPendingUserMessage(content, payload));
-    sendingTaskId.value = taskId;
+    addTaskLock(sendingTaskIds, taskId);
   }
 
   function finalizeFailedSend(taskId: number, error: unknown) {
@@ -266,24 +280,23 @@ export function createMessageActions({
         clearTaskActivity(numericTaskId);
         clearTaskTimeline(numericTaskId);
         clearDeletedTaskOptimism(numericTaskId);
-        if (sendingTaskId.value === numericTaskId) {
-          sendingTaskId.value = null;
-        }
+        removeTaskLock(sendingTaskIds, numericTaskId);
+        removeTaskLock(cancellingTaskIds, numericTaskId);
         closeConfirmDialog();
       },
     });
   }
 
   async function sendMessage(payload: ComposerPayload) {
-    if (!activeTaskIdNumber.value || sendingTaskId.value !== null) {
+    const taskId = activeTaskIdNumber.value;
+    if (!canSendForTask(taskId, sendingTaskIds.value) || taskId === null) {
       debugChat('message-actions', 'send:skip', {
-        activeTaskId: activeTaskIdNumber.value,
-        sendingTaskId: sendingTaskId.value,
+        activeTaskId: taskId,
+        sendingTaskIds: [...sendingTaskIds.value],
       });
       return;
     }
 
-    const taskId = activeTaskIdNumber.value;
     const content = augmentComposerMessage(payload);
     beginPendingTurn(taskId, payload, content);
 
@@ -300,25 +313,21 @@ export function createMessageActions({
     } finally {
       debugChat('message-actions', 'send:finally', {
         taskId,
-        sendingTaskId: sendingTaskId.value,
-        cancellingTaskId: cancellingTaskId.value,
+        sendingTaskIds: [...sendingTaskIds.value],
+        cancellingTaskIds: [...cancellingTaskIds.value],
       });
-      if (sendingTaskId.value === taskId) {
-        sendingTaskId.value = null;
-      }
-      if (cancellingTaskId.value === taskId) {
-        cancellingTaskId.value = null;
-      }
+      removeTaskLock(sendingTaskIds, taskId);
+      removeTaskLock(cancellingTaskIds, taskId);
     }
   }
 
   async function cancelCurrentTurn(turnId?: string) {
-    if (!sendingTaskId.value || cancellingTaskId.value === sendingTaskId.value) {
+    const taskId = activeTaskIdNumber.value;
+    if (taskId === null || !canCancelForTask(taskId, sendingTaskIds.value, cancellingTaskIds.value)) {
       return;
     }
 
-    const taskId = sendingTaskId.value;
-    cancellingTaskId.value = taskId;
+    addTaskLock(cancellingTaskIds, taskId);
 
     try {
       if (turnId) {
@@ -327,7 +336,7 @@ export function createMessageActions({
         await invoke('cancel_task', { taskId });
       }
     } catch (error) {
-      cancellingTaskId.value = null;
+      removeTaskLock(cancellingTaskIds, taskId);
       errorMessage.value = humanizeError(error);
     }
   }

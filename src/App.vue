@@ -68,7 +68,7 @@
           :settings-open="settingsOpen"
           :disabled="!activeTaskIdNumber"
           :sending="isActiveTaskSending"
-          :interaction-locked="hasPendingSend"
+          :interaction-locked="isActiveTaskInteractionLocked"
           :cancelling="isActiveTaskCancelling"
           @send="sendMessage"
           @cancel-turn="cancelCurrentTurn"
@@ -221,7 +221,7 @@ const {
   composerView,
   contextView,
   activeTaskIdNumber,
-  hasPendingSend,
+  isActiveTaskInteractionLocked,
   isActiveTaskSending,
   isActiveTaskCancelling,
   settingsOpen,
