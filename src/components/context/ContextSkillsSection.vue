@@ -1,12 +1,10 @@
 <template>
-  <div class="space-y-1.5">
-    <div class="flex items-center justify-between gap-3">
-      <div class="flex items-center gap-1.5">
-        <Icon :icon="sparklesIcon" class="h-3.5 w-3.5 text-text-dim" />
-        <h3 class="section-title !mb-0">Skills</h3>
-      </div>
-      <div class="flex items-center gap-2 text-[8px] text-text-dim">
+  <section class="context-section">
+    <div class="context-section-summary">
+      <div class="context-section-meta">
         <span>{{ skills.length ? `${skills.length} available` : 'none' }}</span>
+      </div>
+      <div class="flex items-center gap-2 text-[9px] text-text-dim">
         <button
           class="task-header-icon-button h-6 w-6"
           type="button"
@@ -20,33 +18,61 @@
       </div>
     </div>
 
-    <div v-if="skills.length" class="space-y-1">
-      <button
-        v-for="skill in skills"
-        :key="skill.path"
-        class="compact-row w-full cursor-pointer rounded-xl px-2.5 py-1.75 text-left outline-none transition hover:bg-bg-hover focus-visible:bg-bg-hover"
-        type="button"
-        :disabled="busy"
-        @mouseenter="handleTriggerEnter(skill, $event)"
-        @focusin="handleTriggerEnter(skill, $event)"
-        @mouseleave="hideTooltip"
-        @focusout="hideTooltip"
-        @click="handleTriggerEnter(skill, $event)"
-        @dblclick="$emit('open-skill', skill.path)"
-      >
-        <div class="flex min-w-0 items-center gap-2">
-          <p class="min-w-0 flex-1 truncate text-[12px] font-semibold" :class="skill.opened ? 'text-text' : 'text-text-muted'">
-            {{ skill.name }}
-          </p>
-          <span v-if="skill.opened" class="shrink-0 rounded-full bg-accent-dim px-1.5 py-0.5 text-[8px] text-accent">
-            已打开
-          </span>
-        </div>
-      </button>
+    <div v-if="orderedSkills.length" class="space-y-2">
+      <div v-if="activeSkills.length" class="space-y-0.5">
+        <p class="px-2.5 text-[9px] font-mono uppercase tracking-[0.16em] text-text-dim">Active</p>
+        <button
+          v-for="skill in activeSkills"
+          :key="skill.path"
+          class="group flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
+          type="button"
+          :disabled="busy"
+          @mouseenter="handleTriggerEnter(skill, $event)"
+          @focusin="handleTriggerEnter(skill, $event)"
+          @mouseleave="hideTooltip"
+          @focusout="hideTooltip"
+          @click="handleTriggerEnter(skill, $event)"
+          @dblclick="$emit('open-skill', skill.path)"
+        >
+          <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-[11px] font-medium text-text">
+              {{ skill.name }}
+            </p>
+          </div>
+        </button>
+      </div>
+
+      <div v-if="availableSkills.length" class="space-y-0.5">
+        <p class="px-2.5 text-[9px] font-mono uppercase tracking-[0.16em] text-text-dim">Available</p>
+        <button
+          v-for="skill in availableSkills"
+          :key="skill.path"
+          class="group flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
+          type="button"
+          :disabled="busy"
+          @mouseenter="handleTriggerEnter(skill, $event)"
+          @focusin="handleTriggerEnter(skill, $event)"
+          @mouseleave="hideTooltip"
+          @focusout="hideTooltip"
+          @click="handleTriggerEnter(skill, $event)"
+          @dblclick="$emit('open-skill', skill.path)"
+        >
+          <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim/40"></span>
+          <div class="min-w-0 flex-1 space-y-0.5">
+            <p class="min-w-0 truncate text-[11px] font-medium text-text-muted">
+              {{ skill.name }}
+            </p>
+            <p v-if="skill.description" class="truncate text-[10px] text-text-dim">
+              {{ skill.description }}
+            </p>
+          </div>
+        </button>
+      </div>
     </div>
 
     <div v-else class="compact-empty">No skills discovered for this workspace</div>
-  </div>
+  </section>
 
   <Teleport to="body">
     <div
@@ -62,11 +88,10 @@
             <p class="mt-0.5 text-[9px] uppercase tracking-[0.16em] text-text-dim">Skill</p>
           </div>
           <span
-            v-if="activeSkill.opened"
-            class="shrink-0 rounded-full border border-[color:rgba(212,105,42,0.22)] bg-accent-dim px-1.5 py-0.5 text-[8px] uppercase tracking-[0.12em] text-accent"
-          >
-            已打开
-          </span>
+            class="mt-1 h-2 w-2 shrink-0 rounded-full"
+            :class="activeSkill.opened ? 'bg-accent' : 'bg-text-dim/40'"
+            :title="activeSkill.opened ? 'Active' : 'Available'"
+          ></span>
         </div>
 
         <p v-if="activeSkill.description" class="text-[11px] leading-5 text-text-muted">
@@ -85,13 +110,12 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import refreshIcon from '@iconify-icons/lucide/refresh-cw';
-import sparklesIcon from '@iconify-icons/lucide/sparkles';
 import type { SkillItem } from '@/data/mock';
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   skills: SkillItem[];
   busy?: boolean;
 }>(), {
@@ -103,6 +127,13 @@ defineEmits<{
   refresh: [];
   'open-skill': [path: string];
 }>();
+
+const orderedSkills = computed(() =>
+  [...props.skills]
+    .sort((a, b) => Number(b.opened) - Number(a.opened) || a.name.localeCompare(b.name)),
+);
+const activeSkills = computed(() => orderedSkills.value.filter((skill) => skill.opened));
+const availableSkills = computed(() => orderedSkills.value.filter((skill) => !skill.opened));
 
 const activeSkill = ref<SkillItem | null>(null);
 const activeTrigger = ref<HTMLElement | null>(null);

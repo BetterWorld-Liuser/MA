@@ -1,16 +1,16 @@
 <template>
   <header
     data-tauri-drag-region
-    class="flex h-10 items-center border-b border-border bg-bg-secondary/95 select-none backdrop-blur-sm"
+    class="flex h-10 items-center border-b border-border bg-bg-secondary/90 select-none backdrop-blur-sm"
   >
-    <div data-tauri-drag-region class="flex min-w-0 items-center gap-3 px-4">
+    <div data-tauri-drag-region class="flex min-w-0 items-center gap-2.5 px-4">
       <span
-        class="inline-flex h-5 w-5 items-center justify-center rounded-sm border border-accent/50 bg-accent-dim text-[11px] font-semibold text-accent"
+        class="inline-flex h-5 w-5 items-center justify-center rounded-md border border-accent/40 bg-accent-dim text-[11px] font-semibold text-accent"
       >
         M
       </span>
       <div data-tauri-drag-region class="min-w-0">
-        <p class="truncate text-[13px] font-medium text-text">{{ title }}</p>
+        <p class="truncate text-[12px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
       </div>
     </div>
     <div data-tauri-drag-region class="min-w-0 flex-1"></div>

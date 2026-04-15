@@ -1,7 +1,7 @@
 <template>
   <aside class="panel task-column-divider flex min-h-0 flex-col overflow-hidden">
     <div class="panel-header flex items-center justify-between gap-3">
-      <p class="truncate text-[11px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
+      <p class="truncate text-[13px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
       <button
         class="task-header-icon-button"
         type="button"
@@ -19,7 +19,7 @@
         <div
           v-for="task in tasks"
           :key="task.id"
-          class="task-item group"
+          class="task-item group relative"
           :class="task.id === activeTaskId ? 'task-item-active' : ''"
           @click="!busy && $emit('select', task.id)"
         >
@@ -35,8 +35,15 @@
               :class="task.activityStatus === 'working' ? 'task-item-status-dot-working' : 'task-item-status-dot-review'"
               :title="task.activityStatus === 'working' ? '任务仍在工作' : '任务已完成，等待审阅'"
             ></span>
-            <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[1.4]">{{ task.name }}</span>
-            <span class="task-item-meta" :class="!busy ? 'group-hover:opacity-0' : ''">{{ task.updatedAt }}</span>
+            <span
+              class="min-w-0 flex-1 truncate leading-[1.4]"
+              :class="task.id === activeTaskId ? 'text-[12px] font-medium text-text' : 'text-[12px] font-normal text-text-muted'"
+            >
+              {{ task.name }}
+            </span>
+            <span class="task-item-meta-slot">
+              <span class="task-item-meta" :class="!busy ? 'group-hover:opacity-0' : ''">{{ task.updatedAt }}</span>
+            </span>
           </button>
           <button
             class="task-item-delete"

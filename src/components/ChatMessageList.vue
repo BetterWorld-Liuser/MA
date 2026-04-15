@@ -1,31 +1,33 @@
 <template>
   <div class="relative min-h-0 flex-1">
-    <div ref="scrollContainer" class="min-h-0 h-full overflow-x-hidden overflow-y-auto px-2.5 py-2" @scroll="handleScroll">
+    <div ref="scrollContainer" class="min-h-0 h-full overflow-x-hidden overflow-y-auto" @scroll="handleScroll">
       <div class="chat-stage">
-        <Transition name="chat-empty-fade">
-          <div v-if="!hasRenderableContent" class="empty-state-overlay">
-            <div class="empty-state">
-              <p class="text-[12px] text-text">No messages yet.</p>
-              <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
+        <div class="chat-thread-shell">
+          <Transition name="chat-empty-fade">
+            <div v-if="!hasRenderableContent" class="empty-state-overlay">
+              <div class="empty-state">
+                <p class="text-[12px] text-text">No messages yet.</p>
+                <p class="mt-1 text-[10px] text-text-dim">Start a task from here and March will persist the conversation into the active task.</p>
+              </div>
             </div>
-          </div>
-        </Transition>
+          </Transition>
 
-        <div class="chat-content-layer" :class="hasRenderableContent ? 'chat-content-layer-visible' : ''" @click.capture="handleMarkdownLinkClick">
-          <TransitionGroup name="chat-history" tag="div">
-            <component
-              :is="entry.kind === 'user_message' ? UserMessageBubble : TurnGroup"
-              v-for="entry in timeline"
-              :key="entry.kind === 'user_message' ? entry.userMessageId : entry.turnId"
-              :entry="entry"
-              :active-highlight-key="highlightedEntryKey"
-              :reply-targets="replyTargets"
-              @preview-image="previewImage = $event"
-              @reply-entry="emit('reply-entry', $event)"
-              @cancel-turn="emit('cancel-turn', $event)"
-              @navigate-reply="navigateToReply"
-            />
-          </TransitionGroup>
+          <div class="chat-content-layer" :class="hasRenderableContent ? 'chat-content-layer-visible' : ''" @click.capture="handleMarkdownLinkClick">
+            <TransitionGroup name="chat-history" tag="div">
+              <component
+                :is="entry.kind === 'user_message' ? UserMessageBubble : TurnGroup"
+                v-for="entry in timeline"
+                :key="entry.kind === 'user_message' ? entry.userMessageId : entry.turnId"
+                :entry="entry"
+                :active-highlight-key="highlightedEntryKey"
+                :reply-targets="replyTargets"
+                @preview-image="previewImage = $event"
+                @reply-entry="emit('reply-entry', $event)"
+                @cancel-turn="emit('cancel-turn', $event)"
+                @navigate-reply="navigateToReply"
+              />
+            </TransitionGroup>
+          </div>
         </div>
       </div>
     </div>

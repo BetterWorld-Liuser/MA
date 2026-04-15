@@ -8,9 +8,9 @@
 
     <div class="message-stack items-end">
       <div class="message-meta justify-end">
-        <span class="text-[11px] font-semibold text-text">{{ entry.author }}</span>
-        <time class="font-mono text-[9px] text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
-        <button class="text-[10px] text-text-dim transition hover:text-text" type="button" @click="$emit('reply-entry', selfReply)">
+        <span class="text-[12px] font-semibold text-text">{{ entry.author }}</span>
+        <time class="font-mono text-[10px] text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
+        <button class="text-[10px] text-text-dim/80 transition hover:text-text" type="button" @click="$emit('reply-entry', selfReply)">
           引用
         </button>
       </div>

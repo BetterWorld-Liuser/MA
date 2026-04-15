@@ -8,9 +8,9 @@
 
     <div class="message-stack items-start">
       <div class="message-meta justify-start">
-        <span class="text-[11px] font-semibold text-text">{{ entry.agentName }}</span>
-        <time class="font-mono text-[9px] text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
-        <span class="text-[10px] text-text-dim">← {{ triggerLabel }}</span>
+        <span class="text-[12px] font-semibold text-text">{{ entry.agentName }}</span>
+        <time class="font-mono text-[10px] text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
+        <span class="text-[10px] text-text-dim/80">← {{ triggerLabel }}</span>
         <button
           v-if="entry.state === 'streaming'"
           class="inline-flex h-5 w-5 items-center justify-center rounded-md text-text-dim transition hover:bg-bg-hover hover:text-text"
@@ -20,7 +20,7 @@
         >
           <Icon :icon="pauseIcon" class="h-3 w-3" />
         </button>
-        <button class="text-[10px] text-text-dim transition hover:text-text" type="button" @click="$emit('reply-entry', selfReply)">
+        <button class="text-[10px] text-text-dim/80 transition hover:text-text" type="button" @click="$emit('reply-entry', selfReply)">
           引用
         </button>
       </div>
@@ -58,7 +58,7 @@
             </div>
           </div>
           <div v-if="finalMessage" class="mt-3 space-y-3">
-            <div class="text-[10px] uppercase tracking-[0.12em] text-text-dim">最终消息</div>
+            <div class="text-[11px] uppercase tracking-[0.12em] text-text-dim">最终消息</div>
             <TimelineRenderer :entries="finalMessage.timeline" final />
           </div>
         </template>
@@ -69,7 +69,7 @@
             <Icon :icon="chevronRightIcon" class="h-3 w-3 transition-transform" />
           </button>
           <div v-if="entry.state === 'done' && finalMessage" class="mt-3 space-y-3">
-            <div class="text-[10px] uppercase tracking-[0.12em] text-text-dim">最终消息</div>
+            <div class="text-[11px] uppercase tracking-[0.12em] text-text-dim">最终消息</div>
             <TimelineRenderer :entries="finalMessage.timeline" final />
           </div>
           <p v-if="entry.state !== 'done' && entry.errorMessage" class="mt-2 whitespace-pre-wrap text-[11px] text-error">

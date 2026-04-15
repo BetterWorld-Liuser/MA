@@ -8,7 +8,7 @@
       @close="closeWindow"
     />
 
-    <div class="mx-auto flex h-[calc(100%-2.5rem)] min-h-0 max-w-[1920px] flex-col gap-2 px-2 py-2 lg:px-3 lg:py-3">
+    <div class="flex h-[calc(100%-2.5rem)] min-h-0 flex-col gap-2 px-0 py-0">
       <div v-if="backendNotices.length || errorMessage" class="space-y-2">
         <div
           v-for="notice in backendNotices"
@@ -42,7 +42,7 @@
         </div>
       </div>
 
-      <main class="grid min-h-0 flex-1 overflow-hidden gap-0 lg:grid-cols-[256px_minmax(0,1fr)_332px]">
+      <main class="workspace-shell grid gap-0 lg:grid-cols-[220px_minmax(0,1fr)_272px]">
         <TaskList
           title="任务"
           :tasks="taskListView.tasks"

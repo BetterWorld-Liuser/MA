@@ -1,19 +1,18 @@
 <template>
-  <div class="space-y-1.5">
-    <div class="flex items-center justify-between gap-3">
-      <div class="flex items-center gap-1.5">
-        <Icon :icon="stickyNoteIcon" class="h-3.5 w-3.5 text-text-dim" />
-        <h3 class="section-title mb-0">Notes</h3>
+  <section class="context-section">
+    <div class="context-section-summary">
+      <div class="context-section-meta">
+        <span class="font-mono">{{ `${orderedNotes.length} notes` }}</span>
       </div>
       <button class="pill px-1.5" type="button" :disabled="busy" @click="$emit('add-note')">
         <Icon :icon="plusIcon" class="h-3.5 w-3.5" />
       </button>
     </div>
     <div v-if="orderedNotes.length" class="space-y-0.5">
-      <div v-for="note in orderedNotes" :key="note.id" class="group compact-row">
+      <div v-for="note in orderedNotes" :key="note.id" class="group context-row-quiet">
         <div class="min-w-0 flex flex-1 items-baseline gap-2 overflow-hidden">
           <span class="shrink-0 font-mono text-[9px] uppercase tracking-widest text-text-dim">{{ note.id }}</span>
-          <p class="truncate text-[11px] text-text">{{ note.content }}</p>
+          <p class="truncate text-[10px] text-text">{{ note.content }}</p>
         </div>
         <div class="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
           <button class="context-icon-button" type="button" :disabled="busy" :title="`Edit ${note.id}`" @click="$emit('edit-note', note.id)">
@@ -26,7 +25,7 @@
       </div>
     </div>
     <div v-else class="compact-empty">No notes</div>
-  </div>
+  </section>
 </template>
 
 <script setup lang="ts">
@@ -34,7 +33,6 @@ import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import pencilIcon from '@iconify-icons/lucide/pencil';
 import plusIcon from '@iconify-icons/lucide/plus';
-import stickyNoteIcon from '@iconify-icons/lucide/sticky-note';
 import xIcon from '@iconify-icons/lucide/x';
 import type { NoteItem } from '@/data/mock';
 

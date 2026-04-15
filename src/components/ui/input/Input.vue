@@ -33,7 +33,7 @@ defineExpose({
     v-model="modelValue"
     data-slot="input"
     :class="cn(
-      'file:text-foreground placeholder:text-text-dim selection:bg-primary selection:text-primary-foreground h-10 w-full min-w-0 rounded-xl border border-input bg-bg-secondary px-3 py-2 text-[13px] text-foreground shadow-none transition-[color,box-shadow,border-color] outline-hidden file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50',
+      'file:text-foreground placeholder:text-text-dim selection:bg-primary selection:text-primary-foreground h-9 w-full min-w-0 rounded-lg border border-input bg-bg-secondary px-3 py-1.75 text-[12px] text-foreground shadow-none transition-[color,box-shadow,border-color] outline-hidden file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50',
       'focus-visible:border-ring focus-visible:ring-ring/40 focus-visible:ring-[3px]',
       'aria-invalid:ring-destructive/20 aria-invalid:border-destructive',
       props.class,

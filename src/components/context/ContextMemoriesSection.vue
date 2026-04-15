@@ -1,12 +1,10 @@
 <template>
-  <div class="space-y-1.5">
-    <div class="flex items-center justify-between gap-3">
-      <div class="flex items-center gap-1.5">
-        <Icon :icon="brainIcon" class="h-3.5 w-3.5 text-text-dim" />
-        <h3 class="section-title mb-0">Memory</h3>
+  <section class="context-section">
+    <div class="context-section-summary">
+      <div class="context-section-meta">
+        <span class="font-mono">{{ `${memories.length} memories` }}</span>
       </div>
       <div class="flex items-center gap-1">
-        <span class="text-[9px] font-mono uppercase tracking-[0.18em] text-text-dim">{{ memories.length }}</span>
         <button class="pill px-1.5" type="button" :disabled="busy" @click="$emit('add-memory')">
           <Icon :icon="plusIcon" class="h-3.5 w-3.5" />
         </button>
@@ -14,7 +12,7 @@
     </div>
 
     <div v-if="memories.length" class="space-y-0.5">
-      <div v-for="memory in memories" :key="memory.id" class="group compact-row items-start gap-2">
+      <div v-for="memory in memories" :key="memory.id" class="group context-row-quiet items-start gap-2">
         <div class="min-w-0 flex-1 space-y-0.5">
           <div class="flex items-center gap-2 overflow-hidden">
             <span class="shrink-0 font-mono text-[9px] uppercase tracking-widest text-text-dim">{{ memory.id }}</span>
@@ -23,7 +21,7 @@
             </span>
             <span class="truncate text-[9px] uppercase tracking-[0.16em] text-text-muted">{{ memory.topic }}</span>
           </div>
-          <p class="text-[11px] leading-snug text-text">{{ memory.title }}</p>
+          <p class="text-[10px] leading-snug text-text">{{ memory.title }}</p>
         </div>
         <div class="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
           <span class="shrink-0 text-[8px] uppercase tracking-[0.16em] text-text-dim">{{ memory.level }}</span>
@@ -43,12 +41,11 @@
         {{ warning }}
       </p>
     </div>
-  </div>
+  </section>
 </template>
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import brainIcon from '@iconify-icons/lucide/brain';
 import pencilIcon from '@iconify-icons/lucide/pencil';
 import plusIcon from '@iconify-icons/lucide/plus';
 import xIcon from '@iconify-icons/lucide/x';

@@ -1,11 +1,5 @@
 <template>
   <section class="panel flex min-h-0 overflow-visible flex-col">
-    <div class="chat-pane-header">
-      <div class="chat-pane-meta">
-        {{ timeline.length ? `${timeline.length} entries` : 'No messages yet' }}
-      </div>
-    </div>
-
     <ChatMessageList
       :timeline="timeline"
       :task-id="taskId"
@@ -13,8 +7,9 @@
       @cancel-turn="emit('cancelTurn', $event)"
     />
 
-    <div class="shrink-0 p-2" style="border-top: 1px solid rgba(255, 255, 255, 0.08)">
-      <div ref="composerRootRef" class="chat-composer-shell">
+    <div class="shrink-0 border-t border-border/70 p-3">
+      <div class="chat-pane-footer-shell">
+        <div ref="composerRootRef" class="chat-composer-shell">
         <label class="sr-only" for="message-input">Reply</label>
         <input
           ref="imageInputRef"
@@ -162,11 +157,6 @@
             </div>
 
             <div class="chat-composer-toolbar-group">
-              <p class="composer-shortcut-hint">
-                <span class="font-medium">Enter</span> 发送
-                <span class="mx-1 text-text-dim/70">·</span>
-                <span class="font-medium">Shift+Enter</span> 换行
-              </p>
               <button
                 v-if="sending"
                 class="composer-stop-button"
@@ -192,7 +182,7 @@
           </div>
         </div>
 
-        <div v-if="searchPanelOpen" class="composer-popover">
+          <div v-if="searchPanelOpen" class="composer-popover">
           <div class="composer-popover-header">
             <span>{{ searchPanelLabel }}</span>
             <span class="composer-popover-query">{{ activeSearchQuery || '全部' }}</span>
@@ -243,20 +233,21 @@
             </button>
           </div>
           <div v-else class="composer-popover-empty">没有匹配结果</div>
-        </div>
+          </div>
 
-        <div v-if="plusMenuOpen" class="composer-menu">
-          <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('file')">选择文件…</button>
-          <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('directory')">选择目录…</button>
-          <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('skill')">选择技能…</button>
-          <button
-            v-if="supportsVision"
-            class="composer-menu-item"
-            type="button"
-            @mousedown.prevent="triggerImagePicker"
-          >
-            选择图片…
-          </button>
+          <div v-if="plusMenuOpen" class="composer-menu">
+            <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('file')">选择文件…</button>
+            <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('directory')">选择目录…</button>
+            <button class="composer-menu-item" type="button" @mousedown.prevent="openSearchFromMenu('skill')">选择技能…</button>
+            <button
+              v-if="supportsVision"
+              class="composer-menu-item"
+              type="button"
+              @mousedown.prevent="triggerImagePicker"
+            >
+              选择图片…
+            </button>
+          </div>
         </div>
       </div>
     </div>
