@@ -163,33 +163,33 @@ plan     1. 读现有结构 2. 拆接口层     [编辑] [×]
 
 ### 监控文件区
 
-以可折叠的虚拟目录树展示当前被打开的文件，从 `open_files` 路径集合动态构建，不展示未打开的文件。
+以“工作台材料清单”的方式展示当前被打开的文件：顶部是文件数 / token / 锁定数摘要，内容按 `Workspace` / `Outside workspace` 分组，再在组内提炼轻量材料组。它仍然从 `open_files` 路径集合动态构建，但不再把目录树当成主心智模型。
 
 ```
-[监控文件]  8 files · 5.9k tok
-  ▾ src/
-    ▾ auth/
-        mod.rs          1.2k tok
-        middleware.rs   0.8k tok
-        session.rs      0.6k tok
-    ▸ api/                              1.4k tok
-      lib.rs            0.5k tok
-  🔒 AGENTS.md          0.5k tok
-  ▾ config/
-    🔒 prod.toml        0.3k tok
-      dev.toml          0.6k tok
+9 files   20k   2 locked
+
+Workspace
+  AGENTS.md                         2.2k  🔒
+  Skills                            5.1k
+    content-strategy                3.2k
+      SKILL.md                      3.2k
+    copywriting                     1.9k
+      SKILL.md                      1.9k
+
+Outside workspace
+  scratch.md                        0.4k
                                    [+ 打开文件]
 ```
 
-- 文件夹可折叠，折叠态显示目录 token 汇总，展开态各文件独立显示
-- 🔒 图标在文件名前标识 locked 状态，close 操作被禁用
-- 同级排序：目录在前、文件在后，同类按字母排序
-- 只有单个子目录的中间层做路径压缩（如 `src/services/auth/` 合并为一行）
-- 工作目录外的文件归入「外部文件」分组
-- 右键菜单：文件（关闭、锁定/解锁、在编辑器中打开）、目录（关闭目录下所有文件、折叠/展开）
+- 顶部摘要只保留文件总数、token 总量、锁定数，不再重复标题
+- 内容按 `Workspace` / `Outside workspace` 分组，回答“现在桌上摊开了哪些材料”
+- 目录只在确实形成材料组时作为轻量组标题出现，文件本身仍是主列表项
+- 默认不常驻显示绝对路径；完整路径放到 hover / tooltip
+- token 统一右对齐并弱化，🔒 作为静态状态钉子，关闭操作只在 hover 时出现
+- 只有多文件组才提供折叠，默认展开到能一眼扫完
 - `+ 打开文件` 弹出文件选择器
 
-详见 → [监控文件区目录树](ui-open-files-tree.md)
+详见 → [监控文件区材料清单](ui-open-files-tree.md)
 
 ### 提示区（Hints）
 

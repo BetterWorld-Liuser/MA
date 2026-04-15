@@ -24,7 +24,16 @@
         </div>
       </div>
     </div>
-    <div v-else class="compact-empty">No notes</div>
+    <div v-else class="context-empty-fill">
+      <p class="font-mono text-[11px] text-text-muted">No notes yet</p>
+      <p class="max-w-[180px] text-center text-[10px] leading-5 text-text-dim">
+        Pin short-lived context here so the next turns stay grounded.
+      </p>
+      <button class="pill px-2" type="button" :disabled="busy" @click="$emit('add-note')">
+        <Icon :icon="plusIcon" class="h-3.5 w-3.5" />
+        <span>Add note</span>
+      </button>
+    </div>
   </section>
 </template>
 

@@ -2,23 +2,35 @@
   <section class="context-section">
     <div class="context-section-summary">
       <div class="context-section-meta">
-        <span class="font-mono">{{ `${openFiles.length} files` }}</span>
+        <span class="font-mono">{{ `${panel.totalFiles} files` }}</span>
         <span class="font-mono text-text-muted">{{ totalTokenUsage }}</span>
+        <span v-if="panel.lockedCount" class="font-mono text-text-dim">{{ `${panel.lockedCount} locked` }}</span>
       </div>
     </div>
 
-    <div v-if="treeNodes.length" class="space-y-0.5">
-      <OpenFilesTreeNode
-        v-for="node in treeNodes"
-        :key="node.key"
-        :node="node"
-        :depth="0"
-        :busy="busy"
-        :expanded-keys="expandedKeys"
-        @toggle-directory="toggleDirectory"
-        @toggle-file-lock="(scope, path, locked) => $emit('toggle-file-lock', scope, path, locked)"
-        @close-file="(scope, path) => $emit('close-file', scope, path)"
-      />
+    <div v-if="panel.sources.length" class="space-y-3">
+      <section v-for="source in panel.sources" :key="source.key" class="space-y-1.5">
+        <div class="open-files-source-heading">
+          <span>{{ source.name }}</span>
+          <div class="ml-auto flex items-center gap-2 font-mono text-[10px] text-text-dim">
+            <span>{{ `${source.fileCount} files` }}</span>
+            <span>{{ formatTokenCount(source.tokenCount) }}</span>
+          </div>
+        </div>
+
+        <div class="space-y-0.5">
+          <OpenFilesMaterialEntry
+            v-for="entry in source.entries"
+            :key="entry.key"
+            :entry="entry"
+            :depth="0"
+            :busy="busy"
+            :expanded-keys="expandedKeys"
+            @toggle-group="toggleGroup"
+            @close-file="(scope, path) => $emit('close-file', scope, path)"
+          />
+        </div>
+      </section>
     </div>
 
     <div v-else class="compact-empty">No open files</div>
@@ -27,8 +39,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import OpenFilesTreeNode from '@/components/context/OpenFilesTreeNode.vue';
-import { buildOpenFilesTree, formatTokenCount, isDirectoryNode } from '@/components/context/openFilesTree';
+import OpenFilesMaterialEntry from '@/components/context/OpenFilesMaterialEntry.vue';
+import { buildOpenFilesPanel, formatTokenCount, isGroupEntry } from '@/components/context/openFilesPanel';
 import type { OpenFileItem } from '@/data/mock';
 
 const props = defineProps<{
@@ -44,20 +56,19 @@ const emit = defineEmits<{
 
 const storageKey = computed(() => {
   const scope = props.workspaceRoot?.replaceAll('\\', '/').toLowerCase() ?? 'global';
-  return `ma:open-files-tree:${scope}`;
+  return `ma:open-files-panel:${scope}`;
 });
 
 const expandedKeys = ref<Set<string>>(new Set());
 
-const tree = computed(() => buildOpenFilesTree(props.openFiles, props.workspaceRoot));
-const treeNodes = computed(() => tree.value.nodes);
-const totalTokenUsage = computed(() => formatTokenCount(tree.value.totalTokens));
+const panel = computed(() => buildOpenFilesPanel(props.openFiles, props.workspaceRoot));
+const totalTokenUsage = computed(() => formatTokenCount(panel.value.totalTokens));
 
 watch(
-  [storageKey, treeNodes],
-  ([nextKey, nodes]) => {
+  [storageKey, panel],
+  ([nextKey, nextPanel]) => {
     const saved = loadExpandedKeys(nextKey);
-    const knownKeys = new Set(collectDirectoryKeys(nodes));
+    const knownKeys = new Set(collectGroupKeys(nextPanel.sources.flatMap((source) => source.entries)));
     const nextExpanded = new Set<string>();
 
     for (const key of saved) {
@@ -66,9 +77,8 @@ watch(
       }
     }
 
-    // New directories default to expanded so the first render stays discoverable.
     for (const key of knownKeys) {
-      if (!saved.length) {
+      if (!saved.length || !saved.includes(key)) {
         nextExpanded.add(key);
       }
     }
@@ -78,7 +88,7 @@ watch(
   { immediate: true },
 );
 
-function toggleDirectory(key: string) {
+function toggleGroup(key: string) {
   const next = new Set(expandedKeys.value);
   if (next.has(key)) {
     next.delete(key);
@@ -89,15 +99,15 @@ function toggleDirectory(key: string) {
   persistExpandedKeys(storageKey.value, next);
 }
 
-function collectDirectoryKeys(nodes: ReturnType<typeof buildOpenFilesTree>['nodes']) {
+function collectGroupKeys(entries: ReturnType<typeof buildOpenFilesPanel>['sources'][number]['entries']) {
   const keys: string[] = [];
 
-  for (const node of nodes) {
-    if (!isDirectoryNode(node)) {
+  for (const entry of entries) {
+    if (!isGroupEntry(entry) || !entry.collapsible) {
       continue;
     }
-    keys.push(node.key);
-    keys.push(...collectDirectoryKeys(node.children));
+    keys.push(entry.key);
+    keys.push(...collectGroupKeys(entry.children));
   }
 
   return keys;

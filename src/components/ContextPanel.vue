@@ -1,10 +1,22 @@
 <template>
   <aside class="panel context-column-divider flex min-h-0 flex-col overflow-hidden">
-    <div class="panel-header context-panel-header flex items-center gap-2">
-      <span class="text-accent">
-        <Icon :icon="panelRightIcon" class="h-4 w-4" />
-      </span>
-      <p class="truncate text-[13px] font-semibold tracking-[0.01em] text-text">Context</p>
+    <div class="panel-header context-panel-header flex items-center justify-between gap-2">
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="text-accent">
+          <Icon :icon="panelRightIcon" class="h-4 w-4" />
+        </span>
+        <p class="truncate text-[13px] font-semibold tracking-[0.01em] text-text">Context</p>
+      </div>
+      <button
+        class="task-header-icon-button shrink-0"
+        type="button"
+        :disabled="busy"
+        aria-label="收起上下文栏"
+        title="收起上下文栏"
+        @click="$emit('collapse')"
+      >
+        <Icon :icon="panelRightCloseIcon" class="h-4 w-4" />
+      </button>
     </div>
 
     <div class="context-panel-shell min-h-0 flex flex-1 flex-col overflow-hidden">
@@ -325,6 +337,7 @@ import expandIcon from '@iconify-icons/lucide/expand';
 import filesIcon from '@iconify-icons/lucide/files';
 import gaugeIcon from '@iconify-icons/lucide/gauge';
 import brainIcon from '@iconify-icons/lucide/brain';
+import panelRightCloseIcon from '@iconify-icons/lucide/panel-right-close';
 import panelRightIcon from '@iconify-icons/lucide/panel-right';
 import sparklesIcon from '@iconify-icons/lucide/sparkles';
 import xIcon from '@iconify-icons/lucide/x';
@@ -369,6 +382,7 @@ defineEmits<{
   'close-file': [scope: string, path: string];
   'refresh-skills': [];
   'open-skill': [path: string];
+  'collapse': [];
 }>();
 
 const debugTabs = ['Overview', 'Context', 'Request', 'Response', 'Tools'] as const;

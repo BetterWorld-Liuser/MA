@@ -2,16 +2,28 @@
   <aside class="panel task-column-divider flex min-h-0 flex-col overflow-hidden">
     <div class="panel-header flex items-center justify-between gap-3">
       <p class="truncate text-[13px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
-      <button
-        class="task-header-icon-button"
-        type="button"
-        :disabled="busy"
-        aria-label="新建任务"
-        title="新建任务"
-        @click="$emit('create')"
-      >
-        <Icon :icon="plusIcon" class="h-4 w-4" />
-      </button>
+      <div class="flex items-center gap-1">
+        <button
+          class="task-header-icon-button"
+          type="button"
+          :disabled="busy"
+          aria-label="收起任务栏"
+          title="收起任务栏"
+          @click="$emit('collapse')"
+        >
+          <Icon :icon="panelLeftCloseIcon" class="h-4 w-4" />
+        </button>
+        <button
+          class="task-header-icon-button"
+          type="button"
+          :disabled="busy"
+          aria-label="新建任务"
+          title="新建任务"
+          @click="$emit('create')"
+        >
+          <Icon :icon="plusIcon" class="h-4 w-4" />
+        </button>
+      </div>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -76,6 +88,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
+import panelLeftCloseIcon from '@iconify-icons/lucide/panel-left-close';
 import plusIcon from '@iconify-icons/lucide/plus';
 import settingsIcon from '@iconify-icons/lucide/settings-2';
 import xIcon from '@iconify-icons/lucide/x';
@@ -88,5 +101,5 @@ defineProps<{
   busy?: boolean;
 }>();
 
-defineEmits(['select', 'create', 'delete', 'open-settings']);
+defineEmits(['select', 'create', 'delete', 'open-settings', 'collapse']);
 </script>

@@ -78,6 +78,42 @@
   box-shadow: var(--ma-panel-shadow);
 }
 
+@utility workspace-sidebar-shell {
+  @apply min-h-0 shrink-0 overflow-hidden;
+}
+
+@utility sidebar-rail {
+  @apply flex h-full min-h-0 flex-col items-center gap-2 px-1.5 py-2;
+}
+
+@utility sidebar-rail-button {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-dim transition hover:bg-bg-hover hover:text-text;
+}
+
+@utility sidebar-resize-handle {
+  @apply relative shrink-0;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.sidebar-resize-handle::before {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color 160ms ease;
+}
+
+.sidebar-resize-handle:hover::before {
+  background: color-mix(in srgb, var(--ma-accent) 28%, transparent);
+}
+
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 @utility task-column-divider {
   border-right: 1px solid var(--ma-line-soft);
   background:
@@ -1000,10 +1036,7 @@
 }
 
 @utility context-section {
-  @apply space-y-2 overflow-hidden rounded-[18px] border px-2.5 py-2.5;
-  border: 1px solid color-mix(in srgb, var(--ma-line-soft) 48%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--ma-panel-surface) 72%, transparent), transparent 100%);
+  @apply space-y-2 px-1.5 py-0;
 }
 
 @utility context-usage-header {
@@ -1027,13 +1060,11 @@
 }
 
 @utility context-section-header {
-  @apply flex items-center justify-between gap-3 rounded-xl px-2 py-1.5;
-  background: color-mix(in srgb, var(--ma-panel-surface-strong) 94%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ma-line-soft) 86%, transparent);
+  @apply flex items-center justify-between gap-3 px-0.5 py-0.5;
 }
 
 @utility context-section-summary {
-  @apply flex items-center justify-between gap-3 px-1.5 py-0.5;
+  @apply flex items-center justify-between gap-3 px-0.5 py-0.5;
 }
 
 @utility context-section-title {
@@ -1060,12 +1091,16 @@
   @apply px-1 py-0.5 text-[11px] text-text-dim;
 }
 
+@utility context-empty-fill {
+  @apply flex min-h-[240px] flex-col items-center justify-center gap-2 px-3 py-6 text-center;
+}
+
 @utility context-icon-button {
   @apply inline-flex h-5 w-5 items-center justify-center rounded text-text-dim transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-30;
 }
 
 @utility open-file-glyph {
-  @apply inline-flex h-4 w-4 items-center justify-center border-0 bg-transparent p-0 text-text-dim transition duration-150 hover:text-text disabled:cursor-not-allowed disabled:opacity-30;
+  @apply inline-flex h-4 w-4 items-center justify-center rounded-sm border-0 bg-transparent p-0 text-text-dim transition duration-150 hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-30;
 }
 
 @utility open-file-glyph-locked {
@@ -1076,20 +1111,32 @@
   @apply text-text-dim hover:text-text-muted;
 }
 
-@utility open-files-tree-row {
-  @apply flex min-h-7 items-center gap-1.5 rounded-md py-0.75 pr-2 transition hover:bg-bg-secondary;
+@utility open-files-source-heading {
+  @apply flex items-center gap-2 px-1 text-[12px] font-medium text-text-muted;
 }
 
-@utility open-files-tree-row-directory {
-  @apply text-left;
+@utility open-files-material-group {
+  @apply flex min-h-6 items-center gap-2 rounded-md px-1.5 py-0.75 text-left text-[12px] font-medium text-text-muted;
 }
 
-@utility open-files-tree-arrow {
-  @apply inline-flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[11px];
+@utility open-files-material-group-button {
+  @apply transition hover:bg-bg-secondary;
 }
 
-@utility open-files-tree-lock {
-  @apply shrink-0 text-[10px];
+@utility open-files-material-arrow {
+  @apply inline-flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[10px];
+}
+
+@utility open-files-material-file {
+  @apply flex min-h-6 items-center gap-2 rounded-md px-1.5 py-0.75 transition hover:bg-bg-secondary;
+}
+
+@utility open-files-material-status {
+  @apply shrink-0 font-mono text-[10px] text-text-dim;
+}
+
+@utility open-files-material-lock {
+  @apply h-3.5 w-3.5 shrink-0;
 }
 
 @utility context-divider {
