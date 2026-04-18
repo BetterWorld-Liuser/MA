@@ -1,30 +1,28 @@
 <template>
   <section class="context-section">
-    <div class="context-section-summary">
-      <div class="context-section-meta">
-        <span>{{ skills.length ? `${skills.length} available` : 'none' }}</span>
-      </div>
-      <div class="flex items-center gap-2 text-[9px] text-text-dim">
-        <button
-          class="task-header-icon-button h-6 w-6"
-          type="button"
-          :disabled="busy"
-          aria-label="刷新可用技能"
-          title="刷新可用技能"
-          @click="$emit('refresh')"
-        >
-          <Icon :icon="refreshIcon" class="h-3.5 w-3.5" />
-        </button>
-      </div>
+    <div class="flex items-center justify-between gap-3 px-2.5 py-0.5">
+      <span class="text-[10px] text-text-dim" style="font-variant-numeric: tabular-nums;">
+        {{ skills.length ? `${skills.length} available` : 'none' }}
+      </span>
+      <button
+        class="task-header-icon-button h-6 w-6"
+        type="button"
+        :disabled="busy"
+        aria-label="刷新可用技能"
+        title="刷新可用技能"
+        @click="$emit('refresh')"
+      >
+        <Icon :icon="refreshIcon" class="h-3.5 w-3.5" />
+      </button>
     </div>
 
     <div v-if="orderedSkills.length" class="space-y-2">
       <div v-if="activeSkills.length" class="space-y-0.5">
-        <p class="px-2.5 text-[9px] font-mono uppercase tracking-[0.16em] text-text-dim">Active</p>
+        <p class="px-2.5 text-[11px] font-medium text-text-dim">Active</p>
         <button
           v-for="skill in activeSkills"
           :key="skill.path"
-          class="group flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
+          class="group flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
           type="button"
           :disabled="busy"
           @mouseenter="handleTriggerEnter(skill, $event)"
@@ -34,21 +32,19 @@
           @click="handleTriggerEnter(skill, $event)"
           @dblclick="$emit('open-skill', skill.path)"
         >
-          <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-[11px] font-medium text-text">
-              {{ skill.name }}
-            </p>
-          </div>
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+          <p class="min-w-0 flex-1 truncate text-[12px] font-medium text-text">
+            {{ skill.name }}
+          </p>
         </button>
       </div>
 
       <div v-if="availableSkills.length" class="space-y-0.5">
-        <p class="px-2.5 text-[9px] font-mono uppercase tracking-[0.16em] text-text-dim">Available</p>
+        <p class="px-2.5 text-[11px] font-medium text-text-dim">Available</p>
         <button
           v-for="skill in availableSkills"
           :key="skill.path"
-          class="group flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
+          class="group flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
           type="button"
           :disabled="busy"
           @mouseenter="handleTriggerEnter(skill, $event)"
@@ -58,15 +54,10 @@
           @click="handleTriggerEnter(skill, $event)"
           @dblclick="$emit('open-skill', skill.path)"
         >
-          <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim/40"></span>
-          <div class="min-w-0 flex-1 space-y-0.5">
-            <p class="min-w-0 truncate text-[11px] font-medium text-text-muted">
-              {{ skill.name }}
-            </p>
-            <p v-if="skill.description" class="truncate text-[10px] text-text-dim">
-              {{ skill.description }}
-            </p>
-          </div>
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim/40"></span>
+          <p class="min-w-0 flex-1 truncate text-[12px] font-medium text-text-muted">
+            {{ skill.name }}
+          </p>
         </button>
       </div>
     </div>

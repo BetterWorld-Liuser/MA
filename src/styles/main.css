@@ -1225,15 +1225,15 @@ body.sidebar-resizing {
 }
 
 @utility open-files-source-heading {
-  @apply flex items-center gap-2 px-1 text-[12px] font-medium text-text-muted;
+  @apply flex items-center gap-2 px-1 text-[13px] font-medium text-text-muted;
 }
 
 @utility open-files-material-group {
-  @apply flex min-h-6 items-center gap-2 rounded-md px-1.5 py-0.75 text-left text-[12px] font-medium text-text-muted;
+  @apply flex min-h-6 items-center gap-2 rounded-md pl-6 pr-1 py-0.75 text-left text-[12px] font-medium text-text-muted;
 }
 
 @utility open-files-material-group-button {
-  @apply transition hover:bg-bg-secondary;
+  @apply transition hover:bg-bg-hover;
 }
 
 @utility open-files-material-arrow {
@@ -1241,7 +1241,7 @@ body.sidebar-resizing {
 }
 
 @utility open-files-material-file {
-  @apply flex min-h-6 items-center gap-2 rounded-md px-1.5 py-0.75 transition hover:bg-bg-secondary;
+  @apply flex min-h-6 items-center gap-2 rounded-md pl-6 pr-1 py-0.75 transition hover:bg-bg-hover;
 }
 
 @utility open-files-material-status {

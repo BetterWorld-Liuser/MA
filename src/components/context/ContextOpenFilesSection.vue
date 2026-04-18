@@ -28,6 +28,7 @@
             :expanded-keys="expandedKeys"
             @toggle-group="toggleGroup"
             @close-file="(scope, path) => $emit('close-file', scope, path)"
+            @toggle-file-lock="(scope, path, locked) => $emit('toggle-file-lock', scope, path, locked)"
           />
         </div>
       </section>

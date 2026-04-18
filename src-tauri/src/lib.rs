@@ -1309,6 +1309,45 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_path_in_default_app(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    // 用系统默认程序打开指定路径。只接受已存在于磁盘上的路径，避免被拿来当任意命令执行接口。
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("path does not exist: {}", path));
+    }
+
+    let result = open_path_with_os(&target)
+        .with_context(|| format!("failed to open path: {}", target.display()))
+        .map_err(|error| error.to_string());
+
+    report_command_result(&app, "open_path_in_default_app", result)
+}
+
+fn open_path_with_os(path: &std::path::Path) -> std::io::Result<()> {
+    use std::process::Command;
+
+    #[cfg(target_os = "windows")]
+    {
+        // 走 cmd start 让 Windows shell 决定关联程序；空标题参数 "" 是 start 的惯用写法。
+        Command::new("cmd")
+            .args(["/C", "start", "", &path.to_string_lossy()])
+            .spawn()?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(path).spawn()?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(path).spawn()?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn write_frontend_diagnostic_log(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1394,6 +1433,7 @@ pub fn run() {
             search_skills,
             load_workspace_image,
             open_external_url,
+            open_path_in_default_app,
             write_frontend_diagnostic_log
         ])
         .run(tauri::generate_context!())

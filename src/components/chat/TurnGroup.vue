@@ -69,7 +69,7 @@
             </div>
           </div>
           <div v-if="entry.state === 'done' && finalMessage" class="mt-3 space-y-3">
-            <div class="text-[11px] text-text-dim">最终消息</div>
+            <div v-show="expanded" class="text-[11px] text-text-dim">最终消息</div>
             <TimelineRenderer :entries="finalMessage.timeline" final />
           </div>
           <p v-if="entry.state !== 'done' && entry.errorMessage" class="mt-2 whitespace-pre-wrap text-[11px] text-error">
