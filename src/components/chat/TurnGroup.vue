@@ -10,7 +10,7 @@
       <div class="message-meta justify-start">
         <span class="text-[12px] font-semibold text-text">{{ entry.agentName }}</span>
         <time class="font-mono text-[10px] text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
-        <span class="text-[10px] text-text-dim/80">← {{ triggerLabel }}</span>
+        <span class="text-[10px] text-text-dim/40 transition hover:text-text-dim/80">← {{ triggerLabel }}</span>
         <button
           v-if="entry.state === 'streaming'"
           class="inline-flex h-5 w-5 items-center justify-center rounded-md text-text-dim transition hover:bg-bg-hover hover:text-text"

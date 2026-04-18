@@ -7,7 +7,7 @@
       @cancel-turn="emit('cancelTurn', $event)"
     />
 
-    <div class="shrink-0 border-t border-border/70 p-3">
+    <div class="shrink-0 p-3">
       <div class="chat-pane-footer-shell">
         <div ref="composerRootRef" class="chat-composer-shell">
         <label class="sr-only" for="message-input">Reply</label>
