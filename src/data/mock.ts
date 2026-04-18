@@ -704,7 +704,7 @@ export const mockWorkspace: WorkspaceView = {
   debugRounds: [
     {
       iteration: 1,
-      contextPreview: '# Open Files\nsrc/auth.rs\n\n# Recent Chat\nUser: 帮我把 auth 模块拆成更小的单元。',
+      contextPreview: '[open_files]\nsrc/auth.rs\n\n[recent_chat]\nUser: 帮我把 auth 模块拆成更小的单元。',
       providerRequestJson: '{\n  "model": "gpt-5",\n  "messages": [],\n  "tools": []\n}',
       providerResponseJson:
         '{\n  "choices": [\n    {\n      "message": {\n        "tool_calls": [\n          {\n            "id": "call_1",\n            "function": {\n              "name": "open_file",\n              "arguments": "{\\"path\\":\\"src/auth.rs\\"}"\n            }\n          }\n        ]\n      }\n    }\n  ]\n}',

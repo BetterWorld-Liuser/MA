@@ -12,7 +12,7 @@
         </Button>
         <div>
           <p class="text-[11px] uppercase tracking-[0.18em] text-text-dim">Settings</p>
-          <h2 class="mt-1 text-[22px] font-semibold tracking-[-0.02em] text-text">应用设置</h2>
+          <h2 class="mt-1 heading-serif-display text-text">应用设置</h2>
           <p class="mt-2 max-w-[720px] text-[13px] leading-6 text-text-muted">
             外观、模型、供应商和角色都放在这里。设置页按职责拆开，默认运行直接收进模型页，避免把模型能力和入口配置拆成两套心智模型。
           </p>

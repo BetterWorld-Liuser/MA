@@ -10,6 +10,7 @@
 
 UI 设计拆为“总览 + 子系统文档”，避免把布局、聊天交互、上下文面板和状态反馈混在一份长文里：
 
+- [design-system.md](design-system.md)：三层 token 体系（primitive / semantic / component）、主题机制、消费规则、迁移路径
 - [ui-shell.md](ui-shell.md)：应用壳层、视觉风格、窗口结构、三栏布局、左右侧面板、设置页
 - [ui-chat.md](ui-chat.md)：聊天区、消息流、等待态、工具调用展示、输入框交互
 - [ui-events.md](ui-events.md)：聊天运行事件模型、前后端状态边界、右栏联动草案

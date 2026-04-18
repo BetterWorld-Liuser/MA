@@ -1,174 +1,124 @@
+/*
+  Compatibility alias layer.
+
+  Historical --ma-* and shadcn --foo variables used across existing Vue components
+  and @utility classes. New code should consume semantic tokens directly
+  (see tokens.semantic.css).
+
+  This file will shrink over time as components migrate. Its only job now is to
+  keep existing consumers working by forwarding old names to the new token layers.
+*/
+
 :root {
-  --ma-bg: #0a0a0a;
-  --ma-bg-secondary: #111111;
-  --ma-bg-tertiary: #1a1a1a;
-  --ma-bg-hover: #202020;
-  --ma-border: #2a2a2a;
-  --ma-border-focus: #444444;
-  --ma-text: #e8e8e8;
-  --ma-text-muted: #8a8a8a;
-  --ma-text-dim: #5a5a5a;
-  --ma-accent: #d4692a;
-  --ma-accent-hover: #e07a3a;
-  --ma-accent-dim: rgba(212, 105, 42, 0.15);
-  --ma-warning: #e6a817;
-  --ma-error: #e05252;
-  --ma-success: #4caf7d;
-  --ma-font-sans: "SF Pro Text", "Segoe UI Variable Text", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei UI", "Noto Sans SC", "Source Han Sans SC", "Segoe UI", system-ui, sans-serif;
-  --ma-font-mono: "Maple Mono", "Berkeley Mono", "JetBrains Mono", "Cascadia Mono",
-    "Sarasa Mono SC", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, Monaco, ui-monospace,
-    monospace;
-  /*
-    March typography uses a four-step primary scale for persistent UI:
-    12px caption/meta, 13px UI controls, 14px reading text, 16px section titles.
-    10px remains available only for dense mono/debug/status cases that must stay visually recessed.
-  */
-  --ma-font-size-dense: 10px;
-  --ma-font-size-caption: 12px;
-  --ma-font-size-ui: 13px;
-  --ma-font-size-body: 14px;
-  --ma-font-size-title: 16px;
-  --ma-radius-sm: 4px;
-  --ma-radius-md: 6px;
-  --ma-radius-lg: 10px;
+  /* Old --ma-* background / text / border → semantic surface + text + border */
+  --ma-bg:             var(--bg-canvas);
+  --ma-bg-secondary:   var(--bg-surface);
+  --ma-bg-tertiary:    var(--bg-surface-strong);
+  --ma-bg-hover:       var(--bg-surface-hover);
+  --ma-border:         var(--border-default);
+  --ma-border-focus:   var(--border-focus);
+  --ma-text:           var(--text-primary);
+  --ma-text-muted:     var(--text-secondary);
+  --ma-text-dim:       var(--text-muted);
 
-  --ma-line-soft: rgba(255, 255, 255, 0.08);
-  --ma-line-strong: rgba(255, 255, 255, 0.14);
-  --ma-panel-surface: rgba(255, 255, 255, 0.02);
-  --ma-panel-surface-strong: rgba(255, 255, 255, 0.035);
-  --ma-panel-surface-hover: rgba(255, 255, 255, 0.05);
-  --ma-panel-elevated: rgba(10, 10, 10, 0.92);
-  --ma-panel-elevated-strong: rgba(10, 10, 10, 0.98);
-  --ma-panel-popover: rgba(12, 12, 12, 0.98);
-  --ma-sidebar-left: rgba(255, 255, 255, 0.02);
-  --ma-sidebar-right: rgba(255, 255, 255, 0.03);
-  --ma-settings-backdrop: rgba(5, 5, 5, 0.84);
-  --ma-dialog-backdrop: rgba(3, 3, 3, 0.7);
-  --ma-window-glow-start: rgba(212, 105, 42, 0.13);
-  --ma-window-glow-end: rgba(255, 255, 255, 0.04);
-  --ma-panel-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.04),
-    0 18px 50px rgba(0, 0, 0, 0.45);
-  --ma-floating-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
-  --ma-composer-shadow:
-    0 14px 40px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --ma-dialog-shadow:
-    0 28px 90px rgba(0, 0, 0, 0.48),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --ma-chat-stage: transparent;
-  --ma-chat-bubble-base: var(--ma-panel-surface);
-  --ma-chat-bubble-user: color-mix(in srgb, var(--ma-panel-surface-strong) 94%, transparent);
-  --ma-chat-bubble-assistant: color-mix(in srgb, var(--ma-panel-surface) 88%, transparent);
-  --ma-chat-bubble-border: var(--ma-line-soft);
-  --ma-chat-bubble-shadow: none;
+  --ma-accent:         var(--accent-default);
+  --ma-accent-hover:   var(--accent-hover);
+  --ma-accent-dim:     var(--accent-subtle);
+  --ma-warning:        var(--status-warning);
+  --ma-error:          var(--status-error);
+  --ma-success:        var(--status-success);
 
-  --color-bg: var(--ma-bg);
-  --color-bg-secondary: var(--ma-bg-secondary);
-  --color-bg-tertiary: var(--ma-bg-tertiary);
-  --color-bg-hover: var(--ma-bg-hover);
-  --color-border: var(--ma-border);
-  --color-border-focus: var(--ma-border-focus);
-  --color-text: var(--ma-text);
-  --color-text-muted: var(--ma-text-muted);
-  --color-text-dim: var(--ma-text-dim);
-  --color-accent: var(--ma-accent);
-  --color-accent-hover: var(--ma-accent-hover);
-  --color-accent-dim: var(--ma-accent-dim);
-  --color-warning: var(--ma-warning);
-  --color-error: var(--ma-error);
-  --color-success: var(--ma-success);
-  --font-sans: var(--ma-font-sans);
-  --font-mono: var(--ma-font-mono);
-  --radius-sm: var(--ma-radius-sm);
-  --radius-md: var(--ma-radius-md);
-  --radius-lg: var(--ma-radius-lg);
+  --ma-font-sans:      var(--font-family-sans);
+  --ma-font-mono:      var(--font-family-mono);
 
-  --background: var(--ma-bg);
-  --foreground: var(--ma-text);
-  --card: rgba(17, 17, 17, 0.96);
-  --card-foreground: var(--ma-text);
-  --popover: rgba(14, 14, 14, 0.98);
-  --popover-foreground: var(--ma-text);
-  --primary: var(--ma-accent);
-  --primary-foreground: #16110d;
-  --secondary: #151515;
-  --secondary-foreground: var(--ma-text);
-  --muted: #141414;
-  --muted-foreground: var(--ma-text-muted);
-  --accent: rgba(255, 255, 255, 0.04);
-  --accent-foreground: var(--ma-text);
-  --destructive: var(--ma-error);
-  --destructive-foreground: #fff1f1;
-  --border: var(--ma-line-soft);
-  --input: var(--ma-line-soft);
-  --ring: rgba(212, 105, 42, 0.45);
-  --radius: 0.875rem;
-  --scrollbar-width: 4px;
+  --ma-font-size-dense:   var(--font-size-dense);
+  --ma-font-size-caption: var(--font-size-caption);
+  --ma-font-size-ui:      var(--font-size-ui);
+  --ma-font-size-body:    var(--font-size-body);
+  --ma-font-size-title:   var(--font-size-title);
+
+  --ma-radius-sm: var(--radius-1);
+  --ma-radius-md: var(--radius-2);
+  --ma-radius-lg: var(--radius-3);
+
+  --ma-line-soft:            var(--border-subtle);
+  --ma-line-strong:          var(--border-strong);
+  --ma-panel-surface:        var(--panel-tint-subtle);
+  --ma-panel-surface-strong: var(--panel-tint-soft);
+  --ma-panel-surface-hover:  var(--panel-tint-hover);
+  --ma-panel-elevated:         var(--bg-elevated);
+  --ma-panel-elevated-strong:  var(--bg-elevated-strong);
+  --ma-panel-popover:          var(--bg-popover);
+  --ma-sidebar-left:           var(--bg-sidebar-left);
+  --ma-sidebar-right:          var(--bg-sidebar-right);
+  --ma-settings-backdrop:      var(--bg-settings-backdrop);
+  --ma-dialog-backdrop:        var(--bg-overlay);
+  --ma-window-glow-start:      var(--glow-start);
+  --ma-window-glow-end:        var(--glow-end);
+
+  --ma-panel-shadow:    var(--shadow-panel);
+  --ma-floating-shadow: var(--shadow-floating);
+  --ma-composer-shadow: var(--shadow-composer);
+  --ma-dialog-shadow:   var(--shadow-dialog);
+
+  --ma-chat-stage:            var(--chat-stage);
+  --ma-chat-bubble-base:      var(--panel-tint-subtle);
+  --ma-chat-bubble-user:      var(--chat-bubble-user-bg);
+  --ma-chat-bubble-assistant: var(--chat-bubble-assistant-bg);
+  --ma-chat-bubble-border:    var(--chat-bubble-border);
+  --ma-chat-bubble-shadow:    var(--chat-bubble-shadow);
+
+  /* Tailwind @theme bridge names (consumed by generated utility classes) */
+  --color-bg:             var(--bg-canvas);
+  --color-bg-secondary:   var(--bg-surface);
+  --color-bg-tertiary:    var(--bg-surface-strong);
+  --color-bg-hover:       var(--bg-surface-hover);
+  --color-border:         var(--border-default);
+  --color-border-focus:   var(--border-focus);
+  --color-text:           var(--text-primary);
+  --color-text-muted:     var(--text-secondary);
+  --color-text-dim:       var(--text-muted);
+  --color-accent:         var(--accent-default);
+  --color-accent-hover:   var(--accent-hover);
+  --color-accent-dim:     var(--accent-subtle);
+  --color-warning:        var(--status-warning);
+  --color-error:          var(--status-error);
+  --color-success:        var(--status-success);
+  --font-sans:            var(--font-family-sans);
+  --font-mono:            var(--font-family-mono);
+  --radius-sm:            var(--radius-1);
+  --radius-md:            var(--radius-2);
+  --radius-lg:            var(--radius-3);
+
+  /* shadcn variables */
+  --background:           var(--bg-canvas);
+  --foreground:           var(--text-primary);
+  --card:                 rgba(17, 17, 17, 0.96);
+  --card-foreground:      var(--text-primary);
+  --popover:              rgba(14, 14, 14, 0.98);
+  --popover-foreground:   var(--text-primary);
+  --primary:              var(--accent-default);
+  --primary-foreground:   var(--text-on-accent);
+  --secondary:            #151515;
+  --secondary-foreground: var(--text-primary);
+  --muted:                #141414;
+  --muted-foreground:     var(--text-secondary);
+  --accent:               var(--alpha-white-04);
+  --accent-foreground:    var(--text-primary);
+  --destructive:          var(--status-error);
+  --destructive-foreground: var(--text-on-error);
+  --border:               var(--border-subtle);
+  --input:                var(--border-subtle);
+  --ring:                 var(--accent-ring);
+  --radius:               0.875rem;
+  --scrollbar-width:      4px;
 }
 
 :root[data-theme='light'] {
-  --ma-bg: #f4efe8;
-  --ma-bg-secondary: #fbf8f3;
-  --ma-bg-tertiary: #efe8df;
-  --ma-bg-hover: #e8ddd1;
-  --ma-border: #d9cdbf;
-  --ma-border-focus: #c4b19c;
-  --ma-text: #241d16;
-  --ma-text-muted: #75685b;
-  --ma-text-dim: #9a8c7d;
-  --ma-accent-dim: rgba(212, 105, 42, 0.14);
-  --ma-warning: #b98512;
-  --ma-error: #c74f4f;
-  --ma-success: #3f8f69;
-
-  --ma-line-soft: rgba(36, 29, 22, 0.1);
-  --ma-line-strong: rgba(36, 29, 22, 0.16);
-  --ma-panel-surface: rgba(255, 255, 255, 0.72);
-  --ma-panel-surface-strong: rgba(255, 255, 255, 0.9);
-  --ma-panel-surface-hover: rgba(36, 29, 22, 0.06);
-  --ma-panel-elevated: rgba(251, 248, 243, 0.94);
-  --ma-panel-elevated-strong: rgba(251, 248, 243, 0.98);
-  --ma-panel-popover: rgba(248, 243, 236, 0.98);
-  --ma-sidebar-left: #fafafa;
-  --ma-sidebar-right: #fafafa;
-  --ma-settings-backdrop: rgba(219, 207, 191, 0.64);
-  --ma-dialog-backdrop: rgba(192, 175, 154, 0.34);
-  --ma-window-glow-start: rgba(212, 105, 42, 0.1);
-  --ma-window-glow-end: rgba(107, 83, 61, 0.06);
-  --ma-panel-shadow:
-    0 0 0 1px rgba(112, 90, 70, 0.05),
-    0 22px 48px rgba(109, 86, 63, 0.12);
-  --ma-floating-shadow: 0 24px 56px rgba(104, 82, 60, 0.14);
-  --ma-composer-shadow:
-    0 16px 36px rgba(117, 93, 69, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --ma-dialog-shadow:
-    0 28px 72px rgba(105, 82, 60, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --ma-chat-stage: #ffffff;
-  --ma-chat-bubble-base: rgba(255, 255, 255, 0.98);
-  --ma-chat-bubble-user: rgba(255, 255, 255, 1);
-  --ma-chat-bubble-assistant: #f5f5f5;
-  --ma-chat-bubble-border: rgba(36, 29, 22, 0.06);
-  --ma-chat-bubble-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.86),
-    0 8px 20px rgba(116, 91, 66, 0.06);
-
-  --background: #fbf8f3;
-  --foreground: var(--ma-text);
-  --card: rgba(255, 255, 255, 0.92);
-  --card-foreground: var(--ma-text);
-  --popover: rgba(252, 249, 244, 0.98);
-  --popover-foreground: var(--ma-text);
-  --primary-foreground: #fff8f3;
-  --secondary: #f1e8de;
-  --secondary-foreground: var(--ma-text);
-  --muted: #f3ebe2;
-  --muted-foreground: var(--ma-text-muted);
-  --accent: rgba(36, 29, 22, 0.05);
-  --accent-foreground: var(--ma-text);
-  --destructive-foreground: #fff7f7;
-  --ring: rgba(212, 105, 42, 0.28);
+  --card:               rgba(255, 255, 255, 0.92);
+  --popover:            rgba(252, 249, 244, 0.98);
+  --secondary:          #f1e8de;
+  --muted:              #f3ebe2;
+  --accent:             var(--alpha-warm-05);
+  --background:         var(--color-warm-50);
 }

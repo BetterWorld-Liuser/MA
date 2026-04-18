@@ -110,9 +110,9 @@ pub(crate) fn default_system_core() -> String {
 
 pub(super) fn render_prompt(context: &AgentContext) -> String {
     let mut output = String::new();
-    output.push_str("# System Core\n");
+    output.push_str("[system_core]\n");
     output.push_str(&context.system_core);
-    output.push_str("\n\n# Injections\n");
+    output.push_str("\n\n[injections]\n");
     if context.injections.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -120,14 +120,14 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
             output.push_str(&format!("## {}\n{}\n", injection.id, injection.content));
         }
     }
-    output.push_str("\n# Tools\n");
+    output.push_str("\n[tools]\n");
     output.push_str(
         &ToolRuntime {
             tools: context.tools.clone(),
         }
         .render_prompt_section(),
     );
-    output.push_str("\n\n# Session Status\n");
+    output.push_str("\n\n[session_status]\n");
     if context.session_status.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -154,12 +154,12 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
             }
         }
     }
-    output.push_str("\n# Open Files\n");
+    output.push_str("\n[open_files]\n");
     for snapshot in context.open_files_in_prompt_order() {
         output.push_str(&render_file_snapshot_for_prompt(snapshot));
         output.push('\n');
     }
-    output.push_str("# Notes\n");
+    output.push_str("[notes]\n");
     if context.notes.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -167,7 +167,7 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
             output.push_str(&format!("{id}: {}\n", note.content));
         }
     }
-    output.push_str("\n# Memory Index\n");
+    output.push_str("\n[memory_index]\n");
     if let Some(memory_index) = &context.memory_index {
         if memory_index.is_empty() {
             output.push_str("(none)\n");
@@ -178,7 +178,7 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
     } else {
         output.push_str("(none)\n");
     }
-    output.push_str("\n# Runtime Status\n");
+    output.push_str("\n[runtime_status]\n");
     if context.runtime_status.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -195,7 +195,7 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
             ));
         }
     }
-    output.push_str("\n# Hints\n");
+    output.push_str("\n[hints]\n");
     if context.hints.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -203,7 +203,7 @@ pub(super) fn render_prompt(context: &AgentContext) -> String {
             output.push_str(&format!("- {}\n", hint.content));
         }
     }
-    output.push_str("\n# Recent Chat\n");
+    output.push_str("\n[recent_chat]\n");
     for turn in &context.recent_chat {
         output.push_str(&format!("{}\n", render_chat_turn_for_prompt(turn)));
     }

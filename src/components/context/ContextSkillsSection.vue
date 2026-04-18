@@ -78,7 +78,7 @@
     <div
       v-if="activeSkill"
       ref="tooltipRef"
-      class="pointer-events-none fixed z-[140] w-[300px] rounded-2xl border px-3 py-2.5 text-popover-foreground shadow-[0_18px_50px_rgba(0,0,0,0.22)] backdrop-blur-[16px]"
+      class="pointer-events-none fixed z-[140] w-[300px] rounded-2xl border px-3 py-2.5 text-popover-foreground shadow-[var(--tooltip-shadow)] backdrop-blur-[16px]"
       :style="tooltipStyle"
     >
       <div class="space-y-2">

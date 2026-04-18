@@ -56,10 +56,10 @@
               ></div>
             </div>
 
-            <ul class="grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
+            <ul class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
               <li v-for="section in usage.sections" :key="section.name" class="flex items-center justify-between gap-2">
                 <span class="truncate text-text-dim">{{ section.name }}</span>
-                <span class="font-mono text-[10px] text-text">{{ section.size }}</span>
+                <span class="text-text tabular-nums">{{ section.size }}</span>
               </li>
             </ul>
           </section>

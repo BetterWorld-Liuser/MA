@@ -19,15 +19,19 @@
       <button
         v-for="item in filteredModelItems"
         :key="item.modelConfigId"
-        class="composer-menu-item composer-menu-item-model flex-col items-start gap-1"
+        class="composer-menu-item composer-menu-item-model"
         :class="isModelActive(item.modelConfigId, item.modelId) ? 'composer-menu-item-active' : ''"
         type="button"
         @mousedown.prevent="emit('selectModel', { modelConfigId: item.modelConfigId, model: item.modelId })"
       >
-        <span class="w-full text-left">{{ item.displayName }}</span>
-        <span class="flex w-full items-center justify-between text-[11px] text-text-dim">
-          <span>{{ item.providerName }} · {{ item.modelId }}</span>
-          <span>
+        <span class="composer-menu-item-title">{{ item.displayName }}</span>
+        <span class="composer-menu-item-meta-row">
+          <span class="composer-menu-item-meta">
+            <span>{{ item.providerName }}</span>
+            <span aria-hidden="true">·</span>
+            <span class="composer-menu-item-model-id">{{ item.modelId }}</span>
+          </span>
+          <span class="composer-menu-item-provider">
             {{ isModelActive(item.modelConfigId, item.modelId) ? '✓ ' : '' }}{{ providerTypeLabel(item.providerType) }}
           </span>
         </span>

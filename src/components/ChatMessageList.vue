@@ -296,9 +296,7 @@ function cssEscape(value: string) {
   border: 1px solid var(--ma-line-strong);
   background: color-mix(in srgb, var(--ma-panel-elevated) 88%, transparent);
   color: color-mix(in srgb, var(--ma-text-muted) 82%, transparent);
-  box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: var(--chat-action-light-shadow);
   backdrop-filter: blur(10px);
 }
 
@@ -313,8 +311,6 @@ function cssEscape(value: string) {
 }
 
 :global(:root:not([data-theme='light'])) .jump-to-bottom-button {
-  box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: var(--chat-action-dark-shadow);
 }
 </style>

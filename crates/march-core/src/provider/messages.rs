@@ -266,7 +266,7 @@ pub fn render_tool_description(tool: &ToolDefinition) -> String {
 }
 
 fn render_injections(context: &AgentContext) -> String {
-    let mut output = String::from("# Injections\n");
+    let mut output = String::from("[injections]\n");
 
     for injection in &context.injections {
         output.push_str(&format!("## {}\n{}\n", injection.id, injection.content));
@@ -277,7 +277,7 @@ fn render_injections(context: &AgentContext) -> String {
 
 fn render_context_body(context: &AgentContext) -> String {
     let mut output = String::new();
-    output.push_str("# Session Status\n");
+    output.push_str("[session_status]\n");
     if context.session_status.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -307,7 +307,7 @@ fn render_context_body(context: &AgentContext) -> String {
         }
     }
 
-    output.push_str("\n# Open Files\n");
+    output.push_str("\n[open_files]\n");
     if context.open_files.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -320,7 +320,7 @@ fn render_context_body(context: &AgentContext) -> String {
         }
     }
 
-    output.push_str("# Notes\n");
+    output.push_str("[notes]\n");
     if context.notes.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -329,7 +329,7 @@ fn render_context_body(context: &AgentContext) -> String {
         }
     }
 
-    output.push_str("\n# Memory Index\n");
+    output.push_str("\n[memory_index]\n");
     if let Some(memory_index) = &context.memory_index {
         if memory_index.is_empty() {
             output.push_str("(none)\n");
@@ -341,7 +341,7 @@ fn render_context_body(context: &AgentContext) -> String {
         output.push_str("(none)\n");
     }
 
-    output.push_str("\n# Runtime Status\n");
+    output.push_str("\n[runtime_status]\n");
     if context.runtime_status.is_empty() {
         output.push_str("(none)\n");
     } else {
@@ -362,7 +362,7 @@ fn render_context_body(context: &AgentContext) -> String {
         }
     }
 
-    output.push_str("\n# Hints\n");
+    output.push_str("\n[hints]\n");
     if context.hints.is_empty() {
         output.push_str("(none)\n");
     } else {

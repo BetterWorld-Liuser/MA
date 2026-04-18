@@ -9,7 +9,7 @@
     <div class="message-stack items-start">
       <div class="message-meta justify-start">
         <span class="text-[12px] font-semibold text-text">{{ entry.agentName }}</span>
-        <time class="font-mono text-[10px] text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
+        <time class="text-[10px] tabular-nums text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
         <span class="text-[10px] text-text-dim/40 transition hover:text-text-dim/80">← {{ triggerLabel }}</span>
         <button
           v-if="entry.state === 'streaming'"
@@ -46,30 +46,30 @@
           </div>
         </template>
 
-        <template v-else-if="expanded && canCollapse">
-          <button class="inline-flex items-center gap-1 text-[11px] text-text-dim transition hover:text-text" type="button" @click="expanded = false">
-            <span>收起</span>
-            <Icon :icon="chevronRightIcon" class="h-3 w-3 rotate-90 transition-transform" />
+        <template v-else>
+          <button
+            class="inline-flex items-center gap-1 text-[11px] text-text-dim transition hover:text-text"
+            type="button"
+            @click="expanded = !expanded"
+          >
+            <span class="grid">
+              <span class="col-start-1 row-start-1" :class="expanded ? 'invisible' : ''">{{ toolSummaryCountLabel }}</span>
+              <span class="col-start-1 row-start-1" :class="expanded ? '' : 'invisible'">收起</span>
+            </span>
+            <Icon
+              :icon="chevronRightIcon"
+              class="h-3 w-3 transition-transform"
+              :class="expanded ? 'rotate-90' : ''"
+            />
           </button>
-          <div v-if="processMessages.length" class="space-y-3">
+          <div v-show="expanded && processMessages.length" class="space-y-3">
             <div v-for="message in processMessages" :key="message.messageId" class="space-y-2">
               <p v-if="message.reasoning" class="whitespace-pre-wrap text-[11px] leading-[1.5] text-text-dim">{{ message.reasoning }}</p>
               <TimelineRenderer :entries="message.timeline" final />
             </div>
           </div>
-          <div v-if="finalMessage" class="mt-3 space-y-3">
-            <div class="text-[11px] uppercase tracking-[0.12em] text-text-dim">最终消息</div>
-            <TimelineRenderer :entries="finalMessage.timeline" final />
-          </div>
-        </template>
-
-        <template v-else>
-          <button class="inline-flex items-center gap-1 text-[11px] text-text-dim transition hover:text-text" type="button" @click="expanded = true">
-            <span>{{ toolSummaryCountLabel }}</span>
-            <Icon :icon="chevronRightIcon" class="h-3 w-3 transition-transform" />
-          </button>
           <div v-if="entry.state === 'done' && finalMessage" class="mt-3 space-y-3">
-            <div class="text-[11px] uppercase tracking-[0.12em] text-text-dim">最终消息</div>
+            <div class="text-[11px] text-text-dim">最终消息</div>
             <TimelineRenderer :entries="finalMessage.timeline" final />
           </div>
           <p v-if="entry.state !== 'done' && entry.errorMessage" class="mt-2 whitespace-pre-wrap text-[11px] text-error">

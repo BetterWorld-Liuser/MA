@@ -83,7 +83,10 @@ impl AgentSession {
                 let path = self.resolve_path(args.path);
                 self.open_file(path.clone())?;
                 Ok(simple_tool(
-                    format!("opened {}", path.display()),
+                    format!(
+                        "opened {}\n\nThe file's full contents are now rendered in the [open_files] section of your context. Read them there to complete the task — do not call read tools on this path again unless you need a view outside the watcher snapshot.",
+                        path.display()
+                    ),
                     "open_file",
                     format!("开始追踪 {}", path.display()),
                 ))

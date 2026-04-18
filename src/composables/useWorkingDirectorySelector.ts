@@ -21,7 +21,12 @@ export function useWorkingDirectorySelector({
       && !!normalizedWorkspacePath.value
       && normalizedWorkingDirectory.value !== normalizedWorkspacePath.value,
   );
-  const workingDirectoryLabel = computed(() => normalizedWorkingDirectory.value || '工作目录');
+  const workingDirectoryLabel = computed(() => {
+    if (!normalizedWorkingDirectory.value) {
+      return '工作目录';
+    }
+    return getPathLeafLabel(normalizedWorkingDirectory.value);
+  });
   const workingDirectoryTooltip = computed(() =>
     normalizedWorkingDirectory.value
       ? `AI 工作目录：${normalizedWorkingDirectory.value}`
@@ -52,4 +57,15 @@ export function useWorkingDirectorySelector({
     pickWorkingDirectory,
     resetWorkingDirectory,
   };
+}
+
+function getPathLeafLabel(path: string) {
+  const trimmed = path.replace(/\/+$/, '');
+  if (!trimmed) {
+    return path;
+  }
+
+  const segments = trimmed.split('/');
+  const lastSegment = segments.at(-1);
+  return lastSegment && lastSegment.length > 0 ? lastSegment : trimmed;
 }

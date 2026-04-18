@@ -1,9 +1,9 @@
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="overflow-visible bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.015)),rgba(10,10,10,0.94)]">
+    <DialogContent class="dialog-glass-surface overflow-visible">
       <form class="contents" @submit.prevent="emit('submit')">
         <DialogHeader class="gap-0 px-5 pb-3 pt-5 text-left">
-          <DialogTitle class="text-[18px] font-semibold tracking-[-0.01em] text-text">
+          <DialogTitle class="heading-serif-lg text-text">
             {{ mode === 'edit' ? `编辑 Memory · ${draftId}` : '新增 Memory' }}
           </DialogTitle>
           <DialogDescription class="mt-1 text-[12px] leading-5 text-text-muted">

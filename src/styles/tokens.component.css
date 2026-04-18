@@ -1,0 +1,83 @@
+/*
+  Component tokens — cross-component customisation that can't be expressed
+  by the semantic layer alone.
+*/
+
+:root {
+  /* ───────────────────────────── Chat bubble ───────────────────────────── */
+  --chat-stage:              transparent;
+  --chat-bubble-user-bg:     color-mix(in srgb, var(--bg-surface-strong) 94%, transparent);
+  --chat-bubble-assistant-bg: color-mix(in srgb, var(--panel-tint-subtle) 88%, transparent);
+  --chat-bubble-border:      var(--border-subtle);
+  --chat-bubble-shadow:      none;
+
+  /* ───────────────────────────── Window chrome ───────────────────────────── */
+  --titlebar-close-hover-bg: var(--color-crimson-600);
+  --titlebar-close-hover-fg: var(--color-warm-50);
+
+  /* ───────────────────────────── Composer ───────────────────────────── */
+  --composer-shadow: var(--shadow-composer);
+  --composer-bg:     var(--bg-elevated);
+
+  /* ───────────────────────────── Dialog glass ───────────────────────────── */
+  --dialog-gradient:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+    rgba(20, 20, 19, 0.94);
+  --dialog-shadow-inline: var(--shadow-dialog);
+
+  /* ───────────────────────────── Destructive palette ───────────────────────────── */
+  --destructive-text:         var(--color-crimson-450);
+  --destructive-hover-bg:     var(--color-crimson-650);
+  --destructive-ring:         var(--alpha-error-28);
+
+  /* Selection / active accents */
+  --selection-accent-border:  var(--alpha-accent-30);
+
+  /* Task list status dots */
+  --task-dot-working-shadow:  0 0 0 1px var(--alpha-warning-08);
+  --task-dot-review-shadow:   0 0 0 3px var(--alpha-success-12);
+
+  /* Tooltip */
+  --tooltip-shadow:           0 18px 50px var(--alpha-black-22);
+
+  /* Chat jump-to-bottom button */
+  --chat-action-light-shadow:
+    0 0 0 1px var(--color-warm-150),
+    0 4px 24px var(--alpha-black-05);
+  --chat-action-dark-shadow:
+    0 10px 24px var(--alpha-black-22),
+    inset 0 1px 0 var(--alpha-white-05);
+
+  /* Danger button palette */
+  --button-danger-bg:         var(--alpha-error-16);
+  --button-danger-bg-hover:   var(--alpha-error-24);
+  --button-danger-border:     var(--alpha-error-25);
+  --button-danger-text:       var(--color-crimson-450);
+
+  /* Input focus */
+  --input-focus-ring:         0 0 0 3px var(--alpha-accent-12);
+  --input-focus-border:       var(--accent-ring);
+
+  /* Composer directory chip */
+  --composer-chip-active-bg:     var(--alpha-accent-10);
+  --composer-chip-active-border: var(--alpha-accent-34);
+
+  /* Warm Sand button (Claude signature secondary CTA) — light theme */
+  --button-sand-bg:        var(--color-warm-150);
+  --button-sand-text:      var(--color-warm-600);
+  --button-sand-ring:      var(--elevation-ring);
+  --button-sand-hover-bg:  var(--color-warm-175);
+}
+
+/* Light theme: warm chat bubbles with visible whisper shadow */
+:root[data-theme='light'] {
+  --chat-stage:              var(--color-warm-0);
+  --chat-bubble-user-bg:     var(--alpha-surface-warm-98);
+  --chat-bubble-assistant-bg: var(--color-warm-50);
+  --chat-bubble-border:      var(--color-warm-100);
+  --chat-bubble-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.86),
+    0 8px 20px rgba(116, 91, 66, 0.06);
+
+  --button-danger-text:      var(--color-crimson-600);
+}

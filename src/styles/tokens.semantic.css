@@ -1,0 +1,135 @@
+/*
+  Semantic tokens — role-based, theme-switchable.
+
+  Theme design (Claude-inspired hybrid):
+  - Light theme = Parchment-forward. Canvas is #f5f4ed, elevated cards on Ivory,
+    text on Anthropic near-black. This is the "signature" mode.
+  - Dark theme = Warm charcoal. Deeper than Claude's #141413 (March supports
+    long night-work sessions) but carries the same warm undertone — no cool
+    blue-greys anywhere.
+*/
+
+:root {
+  /* ───────────────────────────── Surface ─────────────────────────────
+     Dark theme defaults — redefined by [data-theme='light'] below.
+  */
+  --bg-canvas:           var(--color-warm-950);        /* deepest; app window base */
+  --bg-surface:          var(--color-warm-900);        /* main panel background */
+  --bg-surface-strong:   var(--color-warm-850);        /* panel hover / selected */
+  --bg-surface-hover:    var(--color-warm-750);
+  --bg-elevated:         var(--alpha-panel-dark-92);   /* raised panels */
+  --bg-elevated-strong:  var(--alpha-panel-dark-98);
+  --bg-popover:          var(--alpha-panel-dark-popover);
+  --bg-overlay:          var(--alpha-dialog-backdrop-dark);
+  --bg-settings-backdrop: var(--alpha-black-84);
+
+  /* Translucent tints for layered glass look */
+  --panel-tint-subtle:   var(--alpha-white-02);
+  --panel-tint-soft:     var(--alpha-white-03);
+  --panel-tint-hover:    var(--alpha-white-05);
+
+  --bg-sidebar-left:     var(--alpha-white-02);
+  --bg-sidebar-right:    var(--alpha-white-025);
+
+  /* ───────────────────────────── Text ───────────────────────────── */
+  --text-primary:    var(--color-warm-300);   /* warm silver on dark */
+  --text-secondary:  var(--color-warm-350);   /* stone gray */
+  --text-muted:      var(--color-warm-500);   /* olive gray */
+  --text-on-accent:  var(--color-warm-50);    /* ivory on terracotta */
+  --text-on-error:   #fff1f1;
+
+  /* ───────────────────────────── Border / line ───────────────────────────── */
+  --border-subtle:   var(--alpha-white-08);
+  --border-default:  var(--color-warm-750);   /* warm charcoal */
+  --border-strong:   var(--alpha-white-14);
+  --border-focus:    var(--color-warm-700);
+  --border-accent:   var(--color-terracotta-500);
+
+  /* ───────────────────────────── Brand accent ───────────────────────────── */
+  --accent-default:  var(--color-terracotta-500);
+  --accent-hover:    var(--color-terracotta-400);
+  --accent-subtle:   var(--alpha-accent-15);
+  --accent-ring:     var(--alpha-accent-45);
+
+  /* ───────────────────────────── Status ───────────────────────────── */
+  --status-warning:  var(--color-amber-500);
+  --status-error:    var(--color-crimson-500);
+  --status-success:  var(--color-sage-500);
+
+  /* ───────────────────────────── Elevation re-export ─────────────────────────────
+     Dark-theme values first; overridden in the light-theme block below with
+     warmer, shorter shadows.
+  */
+  --shadow-panel:    var(--elevation-1);
+  --shadow-floating: var(--elevation-3);
+  --shadow-composer: var(--elevation-2);
+  --shadow-dialog:   var(--elevation-4);
+  --shadow-ring:           var(--elevation-ring);
+  --shadow-ring-strong:    var(--elevation-ring-strong);
+  --shadow-ring-subtle:    var(--elevation-ring-subtle);
+  --shadow-whisper:        var(--elevation-whisper);
+
+  /* Window corner glow */
+  --glow-start: var(--alpha-glow-dark-start);
+  --glow-end:   var(--alpha-glow-dark-end);
+
+  /* ───────────────────────────── Type role ─────────────────────────────
+     Sans is the default everywhere. Serif is an opt-in role for heading-class
+     surfaces only — dialog titles, settings hero, brand wordmark, empty states.
+     Body, chat content, buttons, labels stay sans.
+  */
+  --font-heading: var(--font-family-serif);
+  --font-body:    var(--font-family-sans);
+  --font-mono-role: var(--font-family-mono);
+}
+
+/* ───────────────────────────── Light theme (Parchment — signature) ───────────────────────────── */
+:root[data-theme='light'] {
+  --bg-canvas:           var(--color-warm-75);         /* parchment */
+  --bg-surface:          var(--color-warm-50);         /* ivory */
+  --bg-surface-strong:   var(--color-warm-150);        /* warm sand */
+  --bg-surface-hover:    var(--color-warm-125);
+  --bg-elevated:         var(--alpha-panel-warm-94);
+  --bg-elevated-strong:  var(--alpha-panel-warm-98);
+  --bg-popover:          var(--alpha-panel-warm-popover);
+  --bg-overlay:          var(--alpha-dialog-backdrop-warm);
+  --bg-settings-backdrop: var(--alpha-settings-backdrop-warm);
+
+  --panel-tint-subtle: var(--alpha-surface-warm-72);
+  --panel-tint-soft:   var(--alpha-surface-warm-90);
+  --panel-tint-hover:  var(--alpha-warm-06);
+
+  --bg-sidebar-left:  var(--color-warm-75);
+  --bg-sidebar-right: var(--color-warm-75);
+
+  --text-primary:   var(--color-warm-900);             /* Anthropic near-black */
+  --text-secondary: var(--color-warm-500);             /* olive gray */
+  --text-muted:     var(--color-warm-350);             /* stone gray */
+  --text-on-accent: var(--color-warm-50);
+  --text-on-error:  #fff7f7;
+
+  --border-subtle:  var(--color-warm-100);             /* border cream */
+  --border-default: var(--color-warm-150);             /* border warm */
+  --border-strong:  var(--color-warm-200);
+  --border-focus:   var(--color-warm-250);
+
+  --accent-subtle:  var(--alpha-accent-14);
+  --accent-ring:    var(--alpha-accent-28);
+
+  --status-warning: var(--color-amber-600);
+  --status-error:   var(--color-crimson-600);
+  --status-success: var(--color-sage-600);
+
+  /* Light-theme elevation: prefer ring + whisper (Claude's signature depth) */
+  --shadow-panel:    0 0 0 1px var(--color-warm-100),
+                     0 4px 24px var(--alpha-black-05);
+  --shadow-floating: 0 0 0 1px var(--color-warm-150),
+                     0 10px 30px var(--alpha-black-05);
+  --shadow-composer: 0 0 0 1px var(--color-warm-150),
+                     0 4px 24px var(--alpha-black-05);
+  --shadow-dialog:   0 0 0 1px var(--color-warm-150),
+                     0 20px 60px var(--alpha-black-08);
+
+  --glow-start: var(--alpha-glow-warm-start);
+  --glow-end:   var(--alpha-glow-warm-end);
+}

@@ -1,22 +1,64 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+@font-face {
+  font-family: 'Maple Mono';
+  src: url('../assets/fonts/MapleMono-VF.ttf') format('truetype-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Maple Mono';
+  src: url('../assets/fonts/MapleMono-Italic-VF.ttf') format('truetype-variations');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 @theme {
-  --color-bg: var(--ma-bg);
-  --color-bg-secondary: var(--ma-bg-secondary);
-  --color-bg-tertiary: var(--ma-bg-tertiary);
-  --color-bg-hover: var(--ma-bg-hover);
-  --color-border: var(--ma-border);
-  --color-border-focus: var(--ma-border-focus);
-  --color-text: var(--ma-text);
-  --color-text-muted: var(--ma-text-muted);
-  --color-text-dim: var(--ma-text-dim);
-  --color-accent: var(--ma-accent);
-  --color-accent-hover: var(--ma-accent-hover);
-  --color-accent-dim: var(--ma-accent-dim);
-  --color-warning: var(--ma-warning);
-  --color-error: var(--ma-error);
-  --color-success: var(--ma-success);
+  /*
+    Legacy aliases — existing Vue templates reference these via Tailwind
+    utilities (bg-bg-secondary, text-text-muted, etc.). Kept working while
+    components migrate; each points into the semantic layer now.
+  */
+  --color-bg: var(--bg-canvas);
+  --color-bg-secondary: var(--bg-surface);
+  --color-bg-tertiary: var(--bg-surface-strong);
+  --color-bg-hover: var(--bg-surface-hover);
+  --color-border: var(--border-default);
+  --color-border-focus: var(--border-focus);
+  --color-text: var(--text-primary);
+  --color-text-muted: var(--text-secondary);
+  --color-text-dim: var(--text-muted);
+  --color-accent: var(--accent-default);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-dim: var(--accent-subtle);
+  --color-warning: var(--status-warning);
+  --color-error: var(--status-error);
+  --color-success: var(--status-success);
+
+  /*
+    Semantic utility names — preferred for new code.
+    bg-surface, bg-elevated, text-primary, border-subtle, etc.
+  */
+  --color-canvas: var(--bg-canvas);
+  --color-surface: var(--bg-surface);
+  --color-surface-strong: var(--bg-surface-strong);
+  --color-surface-hover: var(--bg-surface-hover);
+  --color-elevated: var(--bg-elevated);
+  --color-elevated-strong: var(--bg-elevated-strong);
+  --color-popover-surface: var(--bg-popover);
+  --color-overlay: var(--bg-overlay);
+
+  --color-primary-text: var(--text-primary);
+  --color-secondary-text: var(--text-secondary);
+  --color-muted-text: var(--text-muted);
+
+  --color-subtle: var(--border-subtle);
+  --color-default: var(--border-default);
+  --color-strong: var(--border-strong);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -36,15 +78,18 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --font-sans: var(--ma-font-sans);
-  --font-mono: var(--ma-font-mono);
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
+  --font-serif: var(--font-family-serif);
 
-  --radius-sm: var(--ma-radius-sm);
-  --radius-md: var(--ma-radius-md);
-  --radius-lg: var(--ma-radius-lg);
+  /* Radius aliases (Tailwind rounded-sm / md / lg). */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
   --radius-xl: calc(var(--radius) + 0.25rem);
 
-  --shadow-panel: var(--ma-panel-shadow);
+  /* Shadow utilities for new code (shadow-panel / shadow-floating / etc).
+     Resolved at use-site against tokens.component.css (theme-aware). */
 }
 
 /*
@@ -67,6 +112,46 @@
 
 @utility panel {
   @apply min-h-0 bg-transparent;
+}
+
+/* ───────────────────────────── Editorial headings ─────────────────────────────
+   Opt-in serif for heading-class surfaces. Applies to dialog titles, settings
+   hero, brand wordmark, empty states. Body / UI controls stay sans.
+*/
+@utility heading-serif {
+  font-family: var(--font-family-serif);
+  font-weight: 500;
+  letter-spacing: normal;
+}
+
+@utility heading-serif-display {
+  font-family: var(--font-family-serif);
+  font-weight: 500;
+  font-size: var(--font-size-display);
+  line-height: 1.20;
+  letter-spacing: normal;
+}
+
+@utility heading-serif-lg {
+  font-family: var(--font-family-serif);
+  font-weight: 500;
+  font-size: var(--font-size-heading);
+  line-height: 1.25;
+  letter-spacing: normal;
+}
+
+@utility heading-serif-md {
+  font-family: var(--font-family-serif);
+  font-weight: 500;
+  font-size: var(--font-size-title);
+  line-height: 1.25;
+  letter-spacing: normal;
+}
+
+@utility brand-wordmark {
+  font-family: var(--font-family-serif);
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 @utility workspace-shell {
@@ -139,7 +224,11 @@ body.sidebar-resizing {
 }
 
 @utility titlebar-button-close {
-  @apply hover:border-[#c42b1c] hover:bg-[#c42b1c] hover:text-white;
+  &:hover {
+    border-color: var(--titlebar-close-hover-bg);
+    background: var(--titlebar-close-hover-bg);
+    color: var(--titlebar-close-hover-fg);
+  }
 }
 
 @utility panel-header {
@@ -205,7 +294,8 @@ body.sidebar-resizing {
 }
 
 @utility task-item-meta {
-  @apply shrink-0 font-mono text-[10px] text-text-dim/60 transition-opacity;
+  @apply shrink-0 text-[10px] text-text-dim/60 transition-opacity;
+  font-variant-numeric: tabular-nums;
 }
 
 @utility task-item-meta-slot {
@@ -224,13 +314,13 @@ body.sidebar-resizing {
   background: var(--color-warning);
   opacity: 0.58;
   transform: scale(0.94);
-  box-shadow: 0 0 0 1px rgba(230, 168, 23, 0.08);
+  box-shadow: 0 0 0 1px var(--alpha-warning-08);
   animation: ma-task-status-pulse 1.6s ease-in-out infinite alternate;
 }
 
 @utility task-item-status-dot-review {
   background: var(--color-success);
-  box-shadow: 0 0 0 3px rgba(76, 175, 125, 0.12);
+  box-shadow: 0 0 0 3px var(--alpha-success-12);
 }
 
 @utility task-item-delete {
@@ -238,7 +328,7 @@ body.sidebar-resizing {
 }
 
 @utility task-settings-button {
-  @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-text-muted transition hover:border-white/8 hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
+  @apply inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[color:var(--border-subtle)] text-text-muted transition hover:border-[color:var(--border-strong)] hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40;
 }
 
 @utility task-header-icon-button {
@@ -378,8 +468,8 @@ body.sidebar-resizing {
 }
 
 @utility settings-combobox-shell-open {
-  border-color: rgba(212, 105, 42, 0.45);
-  box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+  border-color: var(--alpha-accent-45);
+  box-shadow: 0 0 0 3px var(--alpha-accent-12);
 }
 
 @utility settings-combobox-shell-disabled {
@@ -457,7 +547,7 @@ body.sidebar-resizing {
 @utility message-meta-badge {
   @apply inline-flex items-center rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-[0.12em] text-text-dim;
   border-color: var(--ma-line-soft);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--alpha-white-025);
 }
 
 @utility message-bubble {
@@ -478,7 +568,7 @@ body.sidebar-resizing {
 @utility message-bubble-intermediate {
   border: 1px solid var(--ma-line-soft);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0.008)),
+    linear-gradient(180deg, var(--alpha-white-01), var(--alpha-white-008)),
     var(--ma-panel-surface);
   opacity: 0.84;
 }
@@ -540,8 +630,8 @@ body.sidebar-resizing {
   pointer-events: none;
 
   &:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.06);
+    background: var(--alpha-white-05);
+    border-color: var(--alpha-white-06);
     color: var(--color-text);
   }
 }
@@ -592,9 +682,9 @@ body.sidebar-resizing {
 }
 
 @utility live-bubble-error {
-  border-color: rgba(224, 82, 82, 0.22);
+  border-color: var(--alpha-error-22);
   background:
-    linear-gradient(180deg, rgba(224, 82, 82, 0.04), rgba(224, 82, 82, 0.02)),
+    linear-gradient(180deg, var(--alpha-error-04), var(--alpha-error-02)),
     var(--ma-panel-surface);
 }
 
@@ -616,17 +706,17 @@ body.sidebar-resizing {
 
 @utility live-tool-state-running {
   background: var(--color-warning);
-  box-shadow: 0 0 0 3px rgba(230, 168, 23, 0.1);
+  box-shadow: 0 0 0 3px var(--alpha-warning-10);
 }
 
 @utility live-tool-state-success {
   background: var(--color-success);
-  box-shadow: 0 0 0 3px rgba(76, 175, 125, 0.1);
+  box-shadow: 0 0 0 3px var(--alpha-success-10);
 }
 
 @utility live-tool-state-error {
   background: var(--color-error);
-  box-shadow: 0 0 0 3px rgba(224, 82, 82, 0.1);
+  box-shadow: 0 0 0 3px var(--alpha-error-10);
 }
 
 @utility live-tool-text {
@@ -682,8 +772,8 @@ body.sidebar-resizing {
 }
 
 @utility chat-composer-dragging {
-  border-color: rgba(212, 105, 42, 0.42);
-  box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+  border-color: var(--alpha-accent-42);
+  box-shadow: 0 0 0 3px var(--alpha-accent-12);
 }
 
 @utility chat-composer-chips {
@@ -692,18 +782,18 @@ body.sidebar-resizing {
 
 @utility mention-chip {
   @apply inline-flex items-center gap-1 rounded-full border px-2.25 py-0.5 text-[10px] text-text transition disabled:cursor-not-allowed disabled:opacity-50;
-  background: rgba(212, 105, 42, 0.12);
-  border-color: rgba(212, 105, 42, 0.26);
+  background: var(--alpha-accent-12);
+  border-color: var(--alpha-accent-26);
 
   &:hover:not(:disabled) {
-    background: rgba(212, 105, 42, 0.18);
-    border-color: rgba(212, 105, 42, 0.34);
+    background: var(--alpha-accent-18);
+    border-color: var(--alpha-accent-34);
   }
 }
 
 @utility mention-chip-directory {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.12);
+  background: var(--alpha-white-05);
+  border-color: var(--alpha-white-12);
 }
 
 @utility mention-chip-kind {
@@ -734,11 +824,11 @@ body.sidebar-resizing {
 
 @utility composer-image-card {
   @apply relative flex w-24 flex-col overflow-hidden rounded-xl border text-left transition disabled:cursor-not-allowed disabled:opacity-60;
-  border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--alpha-white-10);
+  background: var(--alpha-white-025);
 
   &:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--alpha-white-06);
   }
 }
 
@@ -788,12 +878,12 @@ body.sidebar-resizing {
   @apply flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.25 text-left transition;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--alpha-white-04);
   }
 }
 
 @utility composer-popover-item-active {
-  background: rgba(212, 105, 42, 0.12);
+  background: var(--alpha-accent-12);
 }
 
 @utility composer-popover-item-kind {
@@ -857,7 +947,7 @@ body.sidebar-resizing {
 }
 
 @utility composer-menu-header {
-  @apply flex items-center justify-between gap-3 px-3 py-1.75 text-[8px] uppercase tracking-[0.16em] text-text-dim;
+  @apply flex items-center justify-between gap-3 px-3 py-2 text-[11px] font-medium text-text;
 }
 
 @utility composer-menu-search-shell {
@@ -865,7 +955,7 @@ body.sidebar-resizing {
 }
 
 @utility composer-menu-search-input {
-  @apply h-8 rounded-lg px-3 py-1.5 text-[12px];
+  @apply h-8 rounded-lg px-3 py-1.5 text-[12px] text-text;
 }
 
 @utility composer-menu-list {
@@ -873,19 +963,40 @@ body.sidebar-resizing {
 }
 
 @utility composer-menu-item {
-  @apply flex w-full items-center justify-between gap-3 px-3 py-1.25 text-left text-[12px] text-text transition;
+  @apply flex w-full items-start justify-between gap-3 px-3 py-2 text-left text-[12px] text-text transition;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--alpha-white-04);
   }
 }
 
 @utility composer-menu-item-model {
-  @apply font-mono;
+  @apply flex-col gap-1.5;
 }
 
 @utility composer-menu-item-active {
-  background: rgba(212, 105, 42, 0.12);
+  background: var(--alpha-accent-12);
+}
+
+@utility composer-menu-item-title {
+  @apply w-full text-left text-[13px] font-medium leading-5 text-text;
+}
+
+@utility composer-menu-item-meta-row {
+  @apply flex w-full items-center justify-between gap-3;
+}
+
+@utility composer-menu-item-meta {
+  @apply flex min-w-0 items-center gap-1.5 text-[11px] text-text-dim;
+}
+
+@utility composer-menu-item-model-id {
+  @apply truncate;
+  font-variant-numeric: tabular-nums;
+}
+
+@utility composer-menu-item-provider {
+  @apply shrink-0 text-[11px] text-text-dim;
 }
 
 @utility composer-menu-empty {
@@ -893,7 +1004,7 @@ body.sidebar-resizing {
 }
 
 @utility composer-menu-status {
-  @apply normal-case tracking-normal text-text-muted;
+  @apply text-[10px] font-normal text-text-muted;
 }
 
 @utility composer-image-preview-backdrop {
@@ -944,7 +1055,7 @@ body.sidebar-resizing {
 }
 
 @utility composer-model-button {
-  @apply inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.12em] text-text-muted transition disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium normal-case tracking-normal text-text-muted transition disabled:cursor-not-allowed disabled:opacity-50;
   border-color: var(--ma-line-soft);
   background: var(--ma-panel-surface);
 
@@ -966,9 +1077,9 @@ body.sidebar-resizing {
 }
 
 @utility composer-directory-button-active {
-  border-color: rgba(212, 105, 42, 0.34);
+  border-color: var(--composer-chip-active-border);
   color: var(--color-text);
-  background: rgba(212, 105, 42, 0.1);
+  background: var(--composer-chip-active-bg);
 }
 
 @utility message-image-grid {
@@ -978,8 +1089,8 @@ body.sidebar-resizing {
 
 @utility message-image-card {
   @apply flex flex-col overflow-hidden rounded-xl border text-left transition;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--alpha-white-08);
+  background: var(--alpha-white-025);
 }
 
 @utility message-image-thumb {
@@ -992,9 +1103,9 @@ body.sidebar-resizing {
 
 @utility composer-send-button {
   @apply inline-flex min-h-8 items-center justify-center rounded-lg border px-3 py-1.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-45;
-  border-color: rgba(212, 105, 42, 0.2);
+  border-color: var(--alpha-accent-20);
   background: var(--color-accent);
-  color: #16110d;
+  color: var(--text-on-accent);
 
   &:hover:not(:disabled) {
     background: var(--color-accent-hover);
@@ -1043,7 +1154,7 @@ body.sidebar-resizing {
 }
 
 @utility context-usage-title {
-  @apply text-[9px] font-semibold uppercase tracking-[0.18em] text-text;
+  @apply text-[11px] font-medium text-text;
 }
 
 @utility context-usage-meta {
@@ -1051,11 +1162,13 @@ body.sidebar-resizing {
 }
 
 @utility context-usage-percent {
-  @apply font-mono text-[11px] text-text;
+  @apply text-[11px] text-text;
+  font-variant-numeric: tabular-nums;
 }
 
 @utility context-usage-total {
-  @apply font-mono text-[9px] text-text-dim;
+  @apply text-[10px] text-text-dim;
+  font-variant-numeric: tabular-nums;
 }
 
 @utility context-section-header {
@@ -1067,11 +1180,12 @@ body.sidebar-resizing {
 }
 
 @utility context-section-title {
-  @apply mb-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-text;
+  @apply mb-0 text-[11px] font-medium text-text;
 }
 
 @utility context-section-meta {
-  @apply flex items-center gap-2 text-[9px] text-text-dim;
+  @apply flex items-center gap-2 text-[10px] text-text-dim;
+  font-variant-numeric: tabular-nums;
 }
 
 @utility context-row {
@@ -1231,8 +1345,8 @@ body.sidebar-resizing {
 
 @utility app-button-primary {
   background: var(--color-accent);
-  border-color: rgba(255, 255, 255, 0.08);
-  color: #16110d;
+  border-color: var(--alpha-white-08);
+  color: var(--text-on-accent);
 
   &:hover {
     background: var(--color-accent-hover);
@@ -1250,12 +1364,12 @@ body.sidebar-resizing {
 }
 
 @utility app-button-danger {
-  background: rgba(224, 82, 82, 0.16);
-  border-color: rgba(224, 82, 82, 0.25);
-  color: #ffb2b2;
+  background: var(--button-danger-bg);
+  border-color: var(--button-danger-border);
+  color: var(--button-danger-text);
 
   &:hover {
-    background: rgba(224, 82, 82, 0.24);
+    background: var(--button-danger-bg-hover);
   }
 }
 
@@ -1268,8 +1382,8 @@ body.sidebar-resizing {
   }
 
   &:focus {
-    border-color: rgba(212, 105, 42, 0.45);
-    box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+    border-color: var(--input-focus-border);
+    box-shadow: var(--input-focus-ring);
   }
 }
 
@@ -1282,10 +1396,14 @@ body.sidebar-resizing {
   }
 
   &:focus {
-    border-color: rgba(212, 105, 42, 0.45);
-    box-shadow: 0 0 0 3px rgba(212, 105, 42, 0.12);
+    border-color: var(--input-focus-border);
+    box-shadow: var(--input-focus-ring);
   }
   @apply min-h-28 resize-y leading-6;
+}
+
+@utility dialog-glass-surface {
+  background: var(--dialog-gradient);
 }
 
 @utility dialog-backdrop {
@@ -1449,16 +1567,16 @@ body.sidebar-resizing {
 
   .theme-preview[data-preview-theme='dark'] {
     --preview-bg: #0d0d0d;
-    --preview-border: rgba(255, 255, 255, 0.08);
+    --preview-border: var(--alpha-white-08);
     --preview-accent: rgba(212, 105, 42, 0.9);
     --preview-text: #ece4dc;
     --preview-titlebar-bg: rgba(255, 255, 255, 0.015);
-    --preview-sidebar-bg: rgba(255, 255, 255, 0.03);
+    --preview-sidebar-bg: var(--alpha-white-025);
     --preview-main-bg: #080808;
-    --preview-message-bg: rgba(255, 255, 255, 0.04);
-    --preview-message-secondary-bg: rgba(212, 105, 42, 0.18);
+    --preview-message-bg: var(--alpha-white-04);
+    --preview-message-secondary-bg: var(--alpha-accent-18);
     --preview-input-bg: rgba(255, 255, 255, 0.02);
-    --preview-chip-bg: rgba(255, 255, 255, 0.12);
+    --preview-chip-bg: var(--alpha-white-12);
     --preview-chip-active-bg: rgba(212, 105, 42, 0.9);
     --preview-logo-border: rgba(212, 105, 42, 0.44);
     --preview-logo-bg: rgba(212, 105, 42, 0.14);
@@ -1473,12 +1591,12 @@ body.sidebar-resizing {
     --preview-sidebar-bg: rgba(36, 29, 22, 0.045);
     --preview-main-bg: #fffdf9;
     --preview-message-bg: rgba(36, 29, 22, 0.05);
-    --preview-message-secondary-bg: rgba(212, 105, 42, 0.18);
+    --preview-message-secondary-bg: var(--alpha-accent-18);
     --preview-input-bg: rgba(255, 255, 255, 0.82);
     --preview-chip-bg: rgba(36, 29, 22, 0.14);
     --preview-chip-active-bg: rgba(212, 105, 42, 0.82);
     --preview-logo-border: rgba(212, 105, 42, 0.38);
-    --preview-logo-bg: rgba(212, 105, 42, 0.12);
+    --preview-logo-bg: var(--alpha-accent-12);
   }
 
   /*
@@ -1651,7 +1769,7 @@ body.sidebar-resizing {
   .message-bubble-assistant .markstream-vue [class*='code-toolbar'] button:hover,
   .message-bubble-assistant .markstream-vue [class*='CodeToolbar'] button:hover {
     color: var(--color-text) !important;
-    background: rgba(255, 255, 255, 0.04) !important;
+    background: var(--alpha-white-04) !important;
   }
 
   .chat-history-enter-active,
@@ -1717,6 +1835,9 @@ body.sidebar-resizing {
     color: var(--color-text);
     overflow: hidden;
     cursor: default;
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   * {
@@ -1774,12 +1895,12 @@ body.sidebar-resizing {
   0% {
     opacity: 0.58;
     transform: scale(0.94);
-    box-shadow: 0 0 0 1px rgba(230, 168, 23, 0.08);
+    box-shadow: 0 0 0 1px var(--alpha-warning-08);
   }
 
   100% {
     opacity: 1;
     transform: scale(1);
-    box-shadow: 0 0 0 4px rgba(230, 168, 23, 0.14);
+    box-shadow: 0 0 0 4px var(--alpha-warning-14);
   }
 }

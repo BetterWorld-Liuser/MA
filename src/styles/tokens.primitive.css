@@ -1,0 +1,248 @@
+/*
+  Primitive tokens — raw values, no semantic meaning.
+
+  Palette is Claude-inspired: exclusively warm-toned. Every neutral carries a
+  yellow-brown undertone; no cool blue-grays anywhere. The brand accent is
+  Claude's terracotta (#c96442).
+
+  Rules:
+  - No consumer (Vue component, @utility class) may reference these directly.
+  - Consume only via the semantic layer or the component layer.
+  - These values are theme-agnostic; theme switching happens in the semantic layer.
+*/
+
+:root {
+  /* ───────────────────────────── Warm neutral scale ─────────────────────────────
+     Every step has an olive/yellow-brown undertone. Deep end (dark theme canvas)
+     goes past Claude's #141413 to accommodate March's night-work density.
+  */
+  --color-warm-950: #0a0a09;   /* deepest dark canvas (March-specific, darker than Claude) */
+  --color-warm-900: #141413;   /* Claude near-black — dark surface */
+  --color-warm-850: #1c1b1a;   /* dark elevated */
+  --color-warm-800: #241d16;   /* light-theme primary text (retained from prior palette) */
+  --color-warm-750: #30302e;   /* dark charcoal — dark border / surface-strong */
+  --color-warm-700: #3d3d3a;   /* dark warm — emphasized secondary text */
+  --color-warm-600: #4d4c48;   /* charcoal warm — button text on light */
+  --color-warm-500: #5e5d59;   /* olive gray — secondary body text */
+  --color-warm-400: #75685b;   /* warm taupe (retained) */
+  --color-warm-350: #87867f;   /* stone gray — tertiary/meta text */
+  --color-warm-300: #b0aea5;   /* warm silver — text on dark */
+  --color-warm-250: #c2c0b6;   /* ring deep */
+  --color-warm-200: #d1cfc5;   /* ring warm */
+  --color-warm-175: #dedcd3;   /* ring subtle */
+  --color-warm-150: #e8e6dc;   /* border warm / warm sand surface */
+  --color-warm-125: #efe8df;   /* surface tertiary (retained) */
+  --color-warm-100: #f0eee6;   /* border cream */
+  --color-warm-75:  #f5f4ed;   /* parchment — canvas */
+  --color-warm-50:  #faf9f5;   /* ivory — elevated surface */
+  --color-warm-0:   #ffffff;   /* pure white */
+
+  /* ───────────────────────────── Brand (terracotta) ───────────────────────────── */
+  --color-terracotta-600: #b55636;   /* pressed */
+  --color-terracotta-500: #c96442;   /* brand default */
+  --color-terracotta-400: #d97757;   /* coral — lighter accent, text on dark */
+  --color-terracotta-300: #e08866;   /* hover tint */
+
+  /* ───────────────────────────── Status ─────────────────────────────
+     All warm-biased. Error is crimson (warm red), warning is amber-honey,
+     success is sage (warm green).
+  */
+  --color-crimson-500: #b53333;
+  --color-crimson-600: #a02a2a;
+  --color-crimson-550: #c74f4f;
+  --color-crimson-450: #d44a4a;
+  --color-crimson-650: #b93f3f;
+
+  --color-amber-500: #c08a1a;   /* slightly warmer warning than prior yellow */
+  --color-amber-600: #a5761a;
+
+  --color-sage-500: #4caf7d;    /* retained */
+  --color-sage-600: #3f8f69;
+
+  /* Focus ring (the only cool color allowed — accessibility, not decoration) */
+  --color-focus-blue: #3898ec;
+
+  /* ───────────────────────────── Alpha tokens ─────────────────────────────
+     Warm-on-warm opacities. "white" here means decompressed lightness on dark
+     surfaces; "warm" means warm-black overlays on light surfaces.
+  */
+  --alpha-white-008: rgba(255, 255, 255, 0.008);
+  --alpha-white-01:  rgba(255, 255, 255, 0.018);
+  --alpha-white-02:  rgba(255, 255, 255, 0.02);
+  --alpha-white-025: rgba(255, 255, 255, 0.03);
+  --alpha-white-03:  rgba(255, 255, 255, 0.035);
+  --alpha-white-04:  rgba(255, 255, 255, 0.04);
+  --alpha-white-05:  rgba(255, 255, 255, 0.05);
+  --alpha-white-06:  rgba(255, 255, 255, 0.06);
+  --alpha-white-08:  rgba(255, 255, 255, 0.08);
+  --alpha-white-10:  rgba(255, 255, 255, 0.10);
+  --alpha-white-12:  rgba(255, 255, 255, 0.12);
+  --alpha-white-14:  rgba(255, 255, 255, 0.14);
+  --alpha-white-20:  rgba(255, 255, 255, 0.20);
+
+  --alpha-black-05:  rgba(0, 0, 0, 0.05);   /* whisper shadow */
+  --alpha-black-08:  rgba(0, 0, 0, 0.08);
+  --alpha-black-22:  rgba(0, 0, 0, 0.22);
+  --alpha-black-28:  rgba(0, 0, 0, 0.28);
+  --alpha-black-42:  rgba(0, 0, 0, 0.42);
+  --alpha-black-45:  rgba(0, 0, 0, 0.45);
+  --alpha-black-48:  rgba(0, 0, 0, 0.48);
+  --alpha-black-70:  rgba(0, 0, 0, 0.70);
+  --alpha-black-84:  rgba(5, 5, 5, 0.84);
+
+  /* Warm-black overlays for light theme (carry a 20° yellow-brown hue) */
+  --alpha-warm-04:   rgba(36, 29, 22, 0.04);
+  --alpha-warm-045:  rgba(36, 29, 22, 0.045);
+  --alpha-warm-05:   rgba(36, 29, 22, 0.05);
+  --alpha-warm-06:   rgba(36, 29, 22, 0.06);
+  --alpha-warm-10:   rgba(36, 29, 22, 0.10);
+  --alpha-warm-14:   rgba(36, 29, 22, 0.14);
+  --alpha-warm-16:   rgba(36, 29, 22, 0.16);
+
+  /* Accent alphas (terracotta) */
+  --alpha-accent-10: rgba(201, 100, 66, 0.10);
+  --alpha-accent-12: rgba(201, 100, 66, 0.12);
+  --alpha-accent-13: rgba(201, 100, 66, 0.13);
+  --alpha-accent-14: rgba(201, 100, 66, 0.14);
+  --alpha-accent-15: rgba(201, 100, 66, 0.15);
+  --alpha-accent-18: rgba(201, 100, 66, 0.18);
+  --alpha-accent-20: rgba(201, 100, 66, 0.20);
+  --alpha-accent-26: rgba(201, 100, 66, 0.26);
+  --alpha-accent-28: rgba(201, 100, 66, 0.28);
+  --alpha-accent-30: rgba(201, 100, 66, 0.30);
+  --alpha-accent-34: rgba(201, 100, 66, 0.34);
+  --alpha-accent-42: rgba(201, 100, 66, 0.42);
+  --alpha-accent-45: rgba(201, 100, 66, 0.45);
+
+  --alpha-warning-08: rgba(192, 138, 26, 0.08);
+  --alpha-warning-10: rgba(192, 138, 26, 0.10);
+  --alpha-warning-14: rgba(192, 138, 26, 0.14);
+
+  --alpha-success-10: rgba(76, 175, 125, 0.10);
+  --alpha-success-12: rgba(76, 175, 125, 0.12);
+
+  --alpha-error-02:  rgba(181, 51, 51, 0.02);
+  --alpha-error-04:  rgba(181, 51, 51, 0.04);
+  --alpha-error-10:  rgba(181, 51, 51, 0.10);
+  --alpha-error-16:  rgba(181, 51, 51, 0.16);
+  --alpha-error-22:  rgba(181, 51, 51, 0.22);
+  --alpha-error-24:  rgba(181, 51, 51, 0.24);
+  --alpha-error-25:  rgba(181, 51, 51, 0.25);
+  --alpha-error-28:  rgba(181, 51, 51, 0.28);
+
+  /* Panel surface tints (translucent, warmth already baked in through base) */
+  --alpha-panel-dark-92:  rgba(20, 20, 19, 0.92);
+  --alpha-panel-dark-98:  rgba(20, 20, 19, 0.98);
+  --alpha-panel-dark-popover: rgba(28, 27, 26, 0.98);
+  --alpha-dialog-backdrop-dark: rgba(3, 3, 3, 0.70);
+
+  --alpha-panel-warm-94: rgba(250, 249, 245, 0.94);
+  --alpha-panel-warm-98: rgba(250, 249, 245, 0.98);
+  --alpha-panel-warm-popover: rgba(245, 244, 237, 0.98);
+  --alpha-dialog-backdrop-warm: rgba(192, 175, 154, 0.34);
+  --alpha-settings-backdrop-warm: rgba(219, 207, 191, 0.64);
+
+  --alpha-surface-warm-72: rgba(255, 255, 255, 0.72);
+  --alpha-surface-warm-90: rgba(255, 255, 255, 0.90);
+  --alpha-surface-warm-98: rgba(255, 255, 255, 0.98);
+
+  /* Glow (window corner accent) */
+  --alpha-glow-warm-start: rgba(201, 100, 66, 0.10);
+  --alpha-glow-warm-end:   rgba(107, 83, 61, 0.06);
+  --alpha-glow-dark-start: rgba(201, 100, 66, 0.13);
+  --alpha-glow-dark-end:   rgba(255, 255, 255, 0.04);
+
+  /* ───────────────────────────── Typography scale ─────────────────────────────
+     UI scale kept tight (Mar desktop density). Serif role sizes are for
+     headline-class content only (dialog titles, settings header, brand wordmark,
+     empty-state heroes). Body / controls / chat text still use sans.
+  */
+  --font-size-dense:    10px;
+  --font-size-caption:  12px;
+  --font-size-ui:       13px;
+  --font-size-body:     14px;
+  --font-size-title:    16px;
+  --font-size-heading:  20px;
+  --font-size-display:  26px;
+
+  --font-family-sans:
+    "Segoe UI Variable Text", "Segoe UI",
+    "Anthropic Sans", "SF Pro Text",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans SC", "Source Han Sans SC",
+    system-ui, sans-serif;
+
+  /* Editorial serif — used ONLY for heading-class surfaces (dialog titles,
+     settings hero, brand wordmark, empty states). Never for body / UI controls. */
+  --font-family-serif:
+    "Anthropic Serif", "Source Serif 4", "Source Serif Pro", "Iowan Old Style",
+    "Apple Garamond", "Baskerville", "Times New Roman",
+    "Noto Serif SC", "Songti SC", Georgia, serif;
+
+  --font-family-mono:
+    "Maple Mono", "Berkeley Mono", "JetBrains Mono", "Cascadia Mono",
+    "Sarasa Mono SC", "Cascadia Code", Consolas, "SFMono-Regular", Menlo, Monaco,
+    ui-monospace, monospace;
+
+  /* ───────────────────────────── Spacing scale (4px base, unchanged) ───────────────────────────── */
+  --space-0:  0;
+  --space-1:  2px;
+  --space-2:  4px;
+  --space-3:  6px;
+  --space-4:  8px;
+  --space-5:  12px;
+  --space-6:  16px;
+  --space-7:  20px;
+  --space-8:  24px;
+  --space-9:  32px;
+  --space-10: 48px;
+
+  /* ───────────────────────────── Radius scale ─────────────────────────────
+     Claude leans on soft corners; nudged up by 1px to match the editorial feel
+     without ruining March's desktop density.
+  */
+  --radius-1:    5px;   /* tags, pills, small buttons */
+  --radius-2:    8px;   /* standard cards, buttons, chat bubble */
+  --radius-3:    12px;  /* panels, inputs, dialogs small */
+  --radius-4:    16px;  /* featured containers, video, large cards */
+  --radius-5:    24px;  /* tag-like highlighted containers */
+  --radius-6:    32px;  /* hero containers, embedded media */
+  --radius-full: 9999px;
+
+  /* ───────────────────────────── Elevation (ring + whisper) ─────────────────────────────
+     Claude's depth is ring-based (0px 0px 0px 1px) with rare ultra-soft drops.
+     March keeps a stronger drop for big detached surfaces (composer / dialog)
+     because they need to float over busy panels.
+  */
+  --elevation-0: none;
+
+  /* Ring halo — border-like, warm-toned. Used on buttons, cards, hover states. */
+  --elevation-ring:        0 0 0 1px var(--color-warm-200);
+  --elevation-ring-strong: 0 0 0 1px var(--color-warm-250);
+  --elevation-ring-subtle: 0 0 0 1px var(--color-warm-175);
+  --elevation-ring-dark:   0 0 0 1px var(--color-warm-750);
+
+  /* Whisper — barely-there lift for elevated cards / product screenshots */
+  --elevation-whisper:     0 4px 24px var(--alpha-black-05);
+
+  /* Panel / floating / composer / dialog — surfaces that must separate from
+     a busy background. Warm-toned, softer than prior scale. */
+  --elevation-1:
+    0 0 0 1px var(--alpha-white-04),
+    0 18px 50px var(--alpha-black-45);
+  --elevation-2:
+    0 14px 40px var(--alpha-black-28),
+    inset 0 1px 0 var(--alpha-white-04);
+  --elevation-3: 0 24px 60px var(--alpha-black-42);
+  --elevation-4:
+    0 28px 90px var(--alpha-black-48),
+    inset 0 1px 0 var(--alpha-white-05);
+
+  /* ───────────────────────────── Motion ───────────────────────────── */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-standard:   cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+}

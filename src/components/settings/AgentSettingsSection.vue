@@ -44,7 +44,7 @@
                 v-else-if="agent.source === 'user'"
                 variant="ghost"
                 size="sm"
-                class="text-[#d44a4a] hover:text-[#d44a4a]"
+                class="text-[color:var(--destructive-text)] hover:text-[color:var(--destructive-text)]"
                 @click="emit('deleteAgent', agent.name)"
               >
                 删除

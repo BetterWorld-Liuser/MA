@@ -61,13 +61,13 @@
           <header class="flex items-center justify-between gap-3 border-b border-[color:var(--ma-line-soft)] pb-2">
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <h4 class="truncate text-[13px] font-semibold uppercase tracking-[0.16em] text-text">
+                <h4 class="truncate text-[13px] font-semibold text-text">
                   {{ group.topic }}
                 </h4>
                 <span class="text-[11px] text-text-dim">{{ group.items.length }} 条</span>
                 <span
                   v-if="group.items.length > 5"
-                  class="rounded-full border border-[color:color-mix(in_srgb,var(--color-warning)_38%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_16%,transparent)] px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-warning"
+                  class="rounded-full border border-[color:color-mix(in_srgb,var(--color-warning)_38%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_16%,transparent)] px-2 py-0.5 text-[10px] text-warning"
                 >
                   建议合并
                 </span>

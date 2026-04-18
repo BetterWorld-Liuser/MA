@@ -47,7 +47,7 @@
                 <Icon :icon="starIcon" class="h-4 w-4" />
               </Button>
               <Button variant="ghost" size="sm" type="button" @click="startEditModel(model)">编辑能力</Button>
-              <Button variant="ghost" size="sm" type="button" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProviderModel', model.id)">
+              <Button variant="ghost" size="sm" type="button" class="text-[color:var(--destructive-text)] hover:text-[color:var(--destructive-text)]" @click="emit('deleteProviderModel', model.id)">
                 删除
               </Button>
             </div>
@@ -122,7 +122,7 @@
               type="button"
               class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition"
               :class="capability.enabled
-                ? 'border-[color:rgba(212,105,42,0.3)] bg-accent-dim text-accent'
+                ? 'border-[color:var(--selection-accent-border)] bg-accent-dim text-accent'
                 : 'border-[color:var(--ma-line-soft)] bg-bg-hover/35 text-text-dim hover:bg-bg-hover hover:text-text'"
               :aria-pressed="capability.enabled"
               @click="capability.toggle()"
@@ -145,7 +145,7 @@
                 type="button"
                 class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition"
                 :class="tool.enabled
-                  ? 'border-[color:rgba(212,105,42,0.3)] bg-accent-dim text-accent'
+                  ? 'border-[color:var(--selection-accent-border)] bg-accent-dim text-accent'
                   : 'border-[color:var(--ma-line-soft)] bg-bg-hover/35 text-text-dim hover:bg-bg-hover hover:text-text'"
                 :aria-pressed="tool.enabled"
                 @click="emitServerToolToggle(tool.capability, !tool.enabled)"

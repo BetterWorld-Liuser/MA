@@ -36,7 +36,7 @@
             </div>
             <div class="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="sm" type="button" @click="startEditModel(model)">定位到通道</Button>
-              <Button variant="ghost" size="sm" type="button" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProviderModel', model.id)">
+              <Button variant="ghost" size="sm" type="button" class="text-[color:var(--destructive-text)] hover:text-[color:var(--destructive-text)]" @click="emit('deleteProviderModel', model.id)">
                 删除
               </Button>
             </div>
@@ -79,7 +79,7 @@
             </div>
             <div class="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="sm" @click="emit('startEdit', provider)">管理模型</Button>
-              <Button variant="ghost" size="sm" class="text-[#d44a4a] hover:text-[#d44a4a]" @click="emit('deleteProvider', provider.id)">
+              <Button variant="ghost" size="sm" class="text-[color:var(--destructive-text)] hover:text-[color:var(--destructive-text)]" @click="emit('deleteProvider', provider.id)">
                 删除
               </Button>
             </div>

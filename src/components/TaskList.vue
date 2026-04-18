@@ -49,7 +49,7 @@
             ></span>
             <span
               class="min-w-0 flex-1 truncate leading-[1.4]"
-              :class="task.id === activeTaskId ? 'text-[12px] font-medium text-text' : 'text-[12px] font-normal text-text-muted'"
+              :class="task.id === activeTaskId ? 'text-[12px] font-semibold text-text' : 'text-[12px] font-medium text-text-muted'"
             >
               {{ task.name }}
             </span>
@@ -72,7 +72,7 @@
       </div>
     </div>
 
-    <div class="border-t border-white/8 p-1.5">
+    <div class="border-t border-[color:var(--border-subtle)] p-1.5">
       <button
         class="task-settings-button"
         type="button"
