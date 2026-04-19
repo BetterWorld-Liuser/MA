@@ -21,6 +21,7 @@ export type ReplyRef =
 export type UserMessage = {
   kind: 'user_message';
   userMessageId: string;
+  clientMessageId?: string;
   content: string;
   mentions: string[];
   replies: ReplyRef[];

@@ -16,49 +16,90 @@
       </button>
     </div>
 
-    <div v-if="orderedSkills.length" class="space-y-2">
-      <div v-if="activeSkills.length" class="space-y-0.5">
-        <p class="px-2.5 text-[11px] font-medium text-text-dim">Active</p>
-        <button
-          v-for="skill in activeSkills"
-          :key="skill.path"
-          class="group flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
-          type="button"
-          :disabled="busy"
-          @mouseenter="handleTriggerEnter(skill, $event)"
-          @focusin="handleTriggerEnter(skill, $event)"
-          @mouseleave="hideTooltip"
-          @focusout="hideTooltip"
-          @click="handleTriggerEnter(skill, $event)"
-          @dblclick="$emit('open-skill', skill.path)"
-        >
-          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
-          <p class="min-w-0 flex-1 truncate text-[12px] font-medium text-text">
-            {{ skill.name }}
-          </p>
-        </button>
+    <div v-if="orderedSkills.length" class="space-y-3">
+      <div v-if="activeSkills.length">
+        <div class="skills-group-heading">
+          <span class="skills-group-label">Active</span>
+          <span class="skills-group-count">{{ activeSkills.length }}</span>
+        </div>
+        <TransitionGroup name="skill-row" tag="div">
+          <div
+            v-for="skill in activeSkills"
+            :key="skill.path"
+            class="skill-row group flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-0.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
+            tabindex="0"
+            @mouseenter="handleTriggerEnter(skill, $event)"
+            @focusin="handleTriggerEnter(skill, $event)"
+            @mouseleave="hideTooltip"
+            @focusout="hideTooltip"
+            @click="handleTriggerEnter(skill, $event)"
+            @dblclick="handleOpenSkill(skill)"
+          >
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+            <p class="min-w-0 flex-1 truncate text-[12px] font-medium text-text">
+              {{ skill.name }}
+            </p>
+            <div class="relative ml-auto flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+              <Icon
+                v-if="isSkillLocked(skill)"
+                :icon="lockIcon"
+                class="h-3 w-3 text-text-dim"
+                :title="`${skill.name} 已锁定，前往 Open files 解锁`"
+              />
+              <button
+                v-else-if="getSkillOpenFile(skill)"
+                class="flex h-3.5 w-3.5 items-center justify-center rounded text-text-dim opacity-0 transition hover:text-text group-hover:opacity-100 focus-visible:opacity-100 disabled:cursor-not-allowed"
+                type="button"
+                :disabled="busy"
+                :aria-label="`Close ${skill.name}`"
+                :title="`Close ${skill.name}`"
+                @click.stop="handleCloseSkill(skill)"
+              >
+                <Icon :icon="xIcon" class="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        </TransitionGroup>
       </div>
 
-      <div v-if="availableSkills.length" class="space-y-0.5">
-        <p class="px-2.5 text-[11px] font-medium text-text-dim">Available</p>
-        <button
-          v-for="skill in availableSkills"
-          :key="skill.path"
-          class="group flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
-          type="button"
-          :disabled="busy"
-          @mouseenter="handleTriggerEnter(skill, $event)"
-          @focusin="handleTriggerEnter(skill, $event)"
-          @mouseleave="hideTooltip"
-          @focusout="hideTooltip"
-          @click="handleTriggerEnter(skill, $event)"
-          @dblclick="$emit('open-skill', skill.path)"
-        >
-          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim/40"></span>
-          <p class="min-w-0 flex-1 truncate text-[12px] font-medium text-text-muted">
-            {{ skill.name }}
-          </p>
-        </button>
+      <div v-if="availableSkills.length">
+        <div class="skills-group-heading">
+          <span class="skills-group-label">Available</span>
+          <span class="skills-group-count">{{ availableSkills.length }}</span>
+        </div>
+        <TransitionGroup name="skill-row" tag="div">
+          <button
+            v-for="skill in availableSkills"
+            :key="skill.path"
+            class="skill-row group flex w-full items-center gap-2 rounded-lg px-2.5 py-0.5 text-left outline-none transition hover:bg-bg-hover/70 focus-visible:bg-bg-hover/70"
+            :class="isPending(skill) ? 'skill-row-pending' : ''"
+            type="button"
+            :disabled="busy || isPending(skill)"
+            @mouseenter="handleTriggerEnter(skill, $event)"
+            @focusin="handleTriggerEnter(skill, $event)"
+            @mouseleave="hideTooltip"
+            @focusout="hideTooltip"
+            @click="handleTriggerEnter(skill, $event)"
+            @dblclick="handleOpenSkill(skill)"
+          >
+            <span
+              v-if="isPending(skill)"
+              class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse"
+            ></span>
+            <span
+              v-else
+              class="h-1.5 w-1.5 shrink-0 rounded-full bg-text-dim/40"
+            ></span>
+            <p class="min-w-0 flex-1 truncate text-[12px] font-medium text-text-muted">
+              {{ skill.name }}
+            </p>
+            <Icon
+              v-if="isPending(skill)"
+              :icon="loaderIcon"
+              class="h-3 w-3 shrink-0 animate-spin text-accent"
+            />
+          </button>
+        </TransitionGroup>
       </div>
     </div>
 
@@ -101,23 +142,114 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import refreshIcon from '@iconify-icons/lucide/refresh-cw';
-import type { SkillItem } from '@/data/mock';
+import lockIcon from '@iconify-icons/lucide/lock';
+import loaderIcon from '@iconify-icons/lucide/loader-2';
+import xIcon from '@iconify-icons/lucide/x';
+import type { OpenFileItem, SkillItem } from '@/data/mock';
 
 const props = withDefaults(defineProps<{
   skills: SkillItem[];
+  openFiles?: OpenFileItem[];
   busy?: boolean;
 }>(), {
   skills: () => [],
+  openFiles: () => [],
   busy: false,
 });
 
-defineEmits<{
+const emit = defineEmits<{
   refresh: [];
   'open-skill': [path: string];
+  'close-file': [scope: string, path: string];
 }>();
+
+function normalizePath(path: string) {
+  return path.replaceAll('\\', '/').toLowerCase();
+}
+
+const openFileLookup = computed(() => {
+  const map = new Map<string, OpenFileItem>();
+  for (const file of props.openFiles) {
+    map.set(normalizePath(file.path), file);
+  }
+  return map;
+});
+
+function getSkillOpenFile(skill: SkillItem): OpenFileItem | undefined {
+  return openFileLookup.value.get(normalizePath(skill.path));
+}
+
+function isSkillLocked(skill: SkillItem) {
+  return getSkillOpenFile(skill)?.locked ?? false;
+}
+
+function handleCloseSkill(skill: SkillItem) {
+  const file = getSkillOpenFile(skill);
+  if (!file || file.locked) {
+    return;
+  }
+  emit('close-file', file.scope, file.path);
+}
+
+const PENDING_TIMEOUT_MS = 8000;
+const pendingSkills = ref(new Set<string>());
+const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearPendingKey(key: string) {
+  const timer = pendingTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    pendingTimers.delete(key);
+  }
+  if (pendingSkills.value.has(key)) {
+    const next = new Set(pendingSkills.value);
+    next.delete(key);
+    pendingSkills.value = next;
+  }
+}
+
+function isPending(skill: SkillItem) {
+  return pendingSkills.value.has(normalizePath(skill.path));
+}
+
+function handleOpenSkill(skill: SkillItem) {
+  if (props.busy || skill.opened) {
+    return;
+  }
+  const key = normalizePath(skill.path);
+  if (pendingSkills.value.has(key)) {
+    return;
+  }
+  const next = new Set(pendingSkills.value);
+  next.add(key);
+  pendingSkills.value = next;
+  pendingTimers.set(
+    key,
+    setTimeout(() => clearPendingKey(key), PENDING_TIMEOUT_MS),
+  );
+  emit('open-skill', skill.path);
+}
+
+watch(
+  () => props.skills,
+  (nextSkills) => {
+    if (!pendingSkills.value.size) {
+      return;
+    }
+    const openedKeys = new Set(
+      nextSkills.filter((s) => s.opened).map((s) => normalizePath(s.path)),
+    );
+    for (const key of [...pendingSkills.value]) {
+      if (openedKeys.has(key)) {
+        clearPendingKey(key);
+      }
+    }
+  },
+  { deep: true },
+);
 
 const orderedSkills = computed(() =>
   [...props.skills]
@@ -199,5 +331,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleViewportChange);
   window.removeEventListener('scroll', handleViewportChange, true);
+  for (const timer of pendingTimers.values()) {
+    clearTimeout(timer);
+  }
+  pendingTimers.clear();
 });
 </script>

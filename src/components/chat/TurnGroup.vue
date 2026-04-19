@@ -20,9 +20,6 @@
         >
           <Icon :icon="pauseIcon" class="h-3 w-3" />
         </button>
-        <button class="text-[10px] text-text-dim/80 transition hover:text-text" type="button" @click="$emit('reply-entry', selfReply)">
-          引用
-        </button>
       </div>
 
       <div class="message-bubble message-bubble-assistant opacity-95">
@@ -94,6 +91,16 @@
           class="message-copy-button"
           :class="isActionBarVisible ? 'message-copy-button-visible' : ''"
           type="button"
+          title="引用此消息"
+          aria-label="引用此消息"
+          @click="$emit('reply-entry', selfReply)"
+        >
+          <Icon :icon="quoteIcon" class="message-copy-icon" />
+        </button>
+        <button
+          class="message-copy-button"
+          :class="isActionBarVisible ? 'message-copy-button-visible' : ''"
+          type="button"
           :title="copyButtonTitle"
           :aria-label="copyButtonTitle"
           :disabled="!canCopyMessage"
@@ -113,6 +120,7 @@ import pauseIcon from '@iconify-icons/lucide/pause';
 import chevronRightIcon from '@iconify-icons/lucide/chevron-right';
 import checkIcon from '@iconify-icons/lucide/check';
 import copyIcon from '@iconify-icons/lucide/copy';
+import quoteIcon from '@iconify-icons/lucide/quote';
 import type { AssistantTimelineEntry, Turn } from '@/data/mock';
 import { countTurnToolCalls } from '@/composables/chatRuntime/chatEventReducer';
 import type { ComposerReplyPreview } from '@/composables/workspaceApp/types';

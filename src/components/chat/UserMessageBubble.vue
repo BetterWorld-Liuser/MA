@@ -10,9 +10,6 @@
       <div class="message-meta justify-end">
         <span class="text-[12px] font-semibold text-text">{{ entry.author }}</span>
         <time class="text-[10px] tabular-nums text-text-dim">{{ formatEntryTime(entry.ts) }}</time>
-        <button class="text-[10px] text-text-dim/80 transition hover:text-text" type="button" @click="$emit('reply-entry', selfReply)">
-          引用
-        </button>
       </div>
 
       <div class="message-bubble message-bubble-user">
@@ -57,6 +54,16 @@
           class="message-copy-button"
           :class="isActionBarVisible ? 'message-copy-button-visible' : ''"
           type="button"
+          title="引用此消息"
+          aria-label="引用此消息"
+          @click="$emit('reply-entry', selfReply)"
+        >
+          <Icon :icon="quoteIcon" class="message-copy-icon" />
+        </button>
+        <button
+          class="message-copy-button"
+          :class="isActionBarVisible ? 'message-copy-button-visible' : ''"
+          type="button"
           :title="copyButtonTitle"
           :aria-label="copyButtonTitle"
           :disabled="!canCopyMessage"
@@ -74,6 +81,7 @@ import { computed, onBeforeUnmount, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import checkIcon from '@iconify-icons/lucide/check';
 import copyIcon from '@iconify-icons/lucide/copy';
+import quoteIcon from '@iconify-icons/lucide/quote';
 import type { ChatImageAttachment, UserMessage } from '@/data/mock';
 import type { ComposerReplyPreview } from '@/composables/workspaceApp/types';
 

@@ -17,7 +17,7 @@
               <component
                 :is="entry.kind === 'user_message' ? UserMessageBubble : TurnGroup"
                 v-for="entry in timeline"
-                :key="entry.kind === 'user_message' ? entry.userMessageId : entry.turnId"
+                :key="entry.kind === 'user_message' ? (entry.clientMessageId ?? entry.userMessageId) : entry.turnId"
                 :entry="entry"
                 :active-highlight-key="highlightedEntryKey"
                 :reply-targets="replyTargets"

@@ -164,7 +164,7 @@
 }
 
 @utility workspace-sidebar-shell {
-  @apply min-h-0 shrink-0 overflow-hidden;
+  @apply flex min-h-0 shrink-0 flex-col overflow-hidden;
 }
 
 @utility sidebar-rail {
@@ -758,6 +758,13 @@ body.sidebar-resizing {
   pointer-events: auto;
 }
 
+.chat-row:hover .message-copy-button,
+.chat-row:focus-within .message-copy-button {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
 @utility chat-composer-shell {
   @apply relative overflow-visible;
 }
@@ -778,6 +785,47 @@ body.sidebar-resizing {
 
 @utility chat-composer-chips {
   @apply flex flex-wrap gap-1 px-3 pt-2.5;
+}
+
+@utility chat-composer-replies {
+  @apply flex flex-col gap-1.5 px-3 pt-2.5;
+}
+
+@utility reply-chip {
+  @apply relative flex w-full flex-col gap-1 overflow-hidden rounded-lg border px-2.5 py-2 pr-9 text-left transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.reply-chip:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+@utility reply-chip-header {
+  @apply flex min-w-0 items-center gap-1.5;
+}
+
+@utility reply-chip-kind {
+  @apply shrink-0 rounded px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.14em] text-accent;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+@utility reply-chip-author {
+  @apply min-w-0 truncate text-[11px] font-semibold text-text;
+}
+
+@utility reply-chip-summary {
+  @apply line-clamp-2 text-[12px] leading-[1.45] text-text-muted;
+}
+
+@utility reply-chip-remove {
+  @apply absolute right-1.5 top-1.5 inline-flex h-5 w-5 items-center justify-center rounded-md text-text-dim transition;
+}
+
+.reply-chip:hover .reply-chip-remove,
+.reply-chip:focus-visible .reply-chip-remove {
+  background: var(--alpha-white-05);
+  color: var(--color-text);
 }
 
 @utility mention-chip {
@@ -1224,6 +1272,54 @@ body.sidebar-resizing {
   @apply text-text-dim hover:text-text-muted;
 }
 
+@utility skills-group-heading {
+  @apply flex items-baseline gap-1.5 px-2.5 pt-0.5 pb-1;
+}
+
+.skill-row {
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  will-change: transform, opacity;
+}
+
+.skill-row-pending {
+  opacity: 0.72;
+}
+
+.skill-row-move {
+  transition: transform 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.skill-row-enter-active,
+.skill-row-leave-active {
+  transition:
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.skill-row-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.skill-row-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+
+@utility skills-group-label {
+  @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted;
+}
+
+@utility skills-group-count {
+  @apply text-[10px] text-text-dim;
+  font-variant-numeric: tabular-nums;
+}
+
 @utility open-files-source-heading {
   @apply flex items-center gap-2 px-1 text-[13px] font-medium text-text-muted;
 }
@@ -1237,7 +1333,7 @@ body.sidebar-resizing {
 }
 
 @utility open-files-material-arrow {
-  @apply inline-flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[10px];
+  @apply inline-flex h-4 w-4 shrink-0 items-center justify-center;
 }
 
 @utility open-files-material-file {
@@ -1538,6 +1634,131 @@ body.sidebar-resizing {
   @apply rounded-2xl border px-4 py-4;
   border-color: var(--ma-line-soft);
   background: var(--ma-panel-surface);
+}
+
+@utility memory-stat-strip {
+  @apply mt-3 inline-flex items-center gap-3 rounded-full border px-3 py-1 text-[11px];
+  border-color: var(--ma-line-soft);
+  background: var(--ma-panel-surface);
+  color: var(--color-text-muted);
+
+  & .memory-stat-label {
+    @apply mr-1.5 uppercase tracking-[0.14em] text-[10px];
+    color: var(--color-text-dim);
+  }
+
+  & .memory-stat-value {
+    @apply font-semibold text-text;
+    font-variant-numeric: tabular-nums;
+  }
+
+  & .memory-stat-divider {
+    width: 1px;
+    height: 10px;
+    background: var(--ma-line-soft);
+  }
+}
+
+@utility memory-filter-bar {
+  @apply mt-4 flex items-end gap-3 rounded-2xl border px-3 py-3;
+  border-color: var(--ma-line-soft);
+  background: color-mix(in srgb, var(--ma-panel-surface) 60%, transparent);
+}
+
+@utility memory-result-count {
+  @apply mt-3 text-[11px] text-text-dim;
+}
+
+@utility memory-topic-group {
+  @apply space-y-2.5;
+}
+
+@utility memory-topic-header {
+  @apply flex items-baseline gap-2 px-1;
+}
+
+@utility memory-topic-title {
+  @apply truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted;
+}
+
+@utility memory-topic-count {
+  @apply text-[10px] text-text-dim;
+  font-variant-numeric: tabular-nums;
+}
+
+@utility memory-topic-warn {
+  @apply rounded-full px-2 py-0.5 text-[10px] text-warning;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 38%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+@utility memory-card {
+  @apply rounded-2xl border px-4 py-3 transition;
+  border-color: var(--ma-line-soft);
+  background: var(--ma-panel-surface);
+
+  &:hover {
+    background: var(--ma-panel-surface-hover);
+  }
+}
+
+@utility memory-card-faded {
+  opacity: 0.65;
+}
+
+@utility memory-card-top {
+  @apply flex items-start justify-between gap-3;
+}
+
+@utility memory-card-title {
+  @apply min-w-0 flex-1 text-[13.5px] font-semibold leading-6 text-text;
+}
+
+@utility memory-card-actions {
+  @apply flex shrink-0 items-center gap-0.5 opacity-0 transition;
+}
+
+.memory-card:hover .memory-card-actions,
+.memory-card:focus-within .memory-card-actions {
+  opacity: 1;
+}
+
+@utility memory-card-content {
+  @apply mt-1 text-[12px] leading-5 text-text-muted;
+}
+
+@utility memory-card-meta {
+  @apply mt-3 flex flex-wrap items-center gap-1.5;
+}
+
+@utility memory-card-meta-spacer {
+  @apply ml-auto;
+}
+
+@utility memory-chip {
+  @apply rounded-full px-2 py-0.5 text-[10px] text-text-dim;
+  border: 1px solid var(--ma-line-soft);
+  background: var(--ma-panel-surface-strong);
+}
+
+@utility memory-chip-type {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+@utility memory-chip-tag {
+  background: transparent;
+}
+
+@utility memory-card-id {
+  @apply font-mono text-[10px] text-text-dim;
+  font-variant-numeric: tabular-nums;
+}
+
+@utility memory-card-counter {
+  @apply font-mono text-[10px] text-text-dim;
+  font-variant-numeric: tabular-nums;
 }
 
 @utility settings-info-label {

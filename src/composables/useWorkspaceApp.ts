@@ -393,6 +393,10 @@ export function useWorkspaceApp() {
       return;
     }
 
+    if (payload.level !== 'error') {
+      return;
+    }
+
     const latest = backendNotices.value[0];
     if (
       latest

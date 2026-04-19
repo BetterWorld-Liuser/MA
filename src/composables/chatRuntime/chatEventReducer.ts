@@ -143,6 +143,7 @@ export function appendUserMessage(
     {
       kind: 'user_message',
       userMessageId: input.id,
+      clientMessageId: input.id.startsWith('pending-user:') ? input.id : undefined,
       content: input.content,
       mentions: input.mentions ?? [],
       replies: input.replies ?? [],
@@ -169,7 +170,9 @@ function appendOrReplaceUserMessage(timeline: TaskTimelineEntry[], message: Extr
       && entry.content === message.content,
   );
   if (pendingIndex !== -1) {
-    return timeline.map((entry, index) => (index === pendingIndex ? message : entry));
+    const pending = timeline[pendingIndex] as Extract<TaskTimelineEntry, { kind: 'user_message' }>;
+    const merged = { ...message, clientMessageId: pending.clientMessageId ?? pending.userMessageId };
+    return timeline.map((entry, index) => (index === pendingIndex ? merged : entry));
   }
 
   if (timeline.some((entry) => entry.kind === 'user_message' && entry.userMessageId === message.userMessageId)) {

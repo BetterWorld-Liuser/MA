@@ -1,5 +1,5 @@
 <template>
-  <aside class="panel context-column-divider flex min-h-0 flex-col overflow-hidden">
+  <aside class="panel context-column-divider flex min-h-0 flex-1 flex-col overflow-hidden">
     <div class="panel-header context-panel-header flex items-center justify-between gap-2">
       <div class="flex min-w-0 items-center gap-2">
         <span class="text-accent">
@@ -80,9 +80,11 @@
         <ContextSkillsSection
           v-else-if="activeContextTab === 'skills'"
           :skills="skills"
+          :open-files="openFiles"
           :busy="busy"
           @refresh="$emit('refresh-skills')"
           @open-skill="$emit('open-skill', $event)"
+          @close-file="(scope, path) => $emit('close-file', scope, path)"
         />
 
         <ContextNotesSection

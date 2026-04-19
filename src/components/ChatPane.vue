@@ -32,17 +32,21 @@
             <button
               v-for="reply in replyPreviews"
               :key="`${reply.kind}:${reply.id}`"
-              class="reply-chip"
+              class="group reply-chip"
               type="button"
               :disabled="disabled"
+              :title="`点击移除对 ${reply.author} 的引用`"
+              :aria-label="`Remove reference to ${reply.author}`"
               @click="removeReply(reply.kind, reply.id)"
             >
-              <span class="reply-chip-kind">{{ reply.kind === 'turn' ? 'TURN' : 'MSG' }}</span>
-              <span class="reply-chip-body">
+              <span class="reply-chip-header">
+                <span class="reply-chip-kind">{{ reply.kind === 'turn' ? 'TURN' : 'MSG' }}</span>
                 <span class="reply-chip-author">{{ reply.author }}</span>
-                <span class="reply-chip-summary">{{ reply.summary }}</span>
               </span>
-              <span class="reply-chip-remove" aria-hidden="true">×</span>
+              <span class="reply-chip-summary">{{ reply.summary }}</span>
+              <span class="reply-chip-remove" aria-hidden="true">
+                <Icon :icon="xIcon" class="h-3.5 w-3.5" />
+              </span>
             </button>
           </div>
 
@@ -316,6 +320,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import pauseIcon from '@iconify-icons/lucide/pause';
+import xIcon from '@iconify-icons/lucide/x';
 import folderOpenIcon from '@iconify-icons/lucide/folder-open';
 import rotateCcwIcon from '@iconify-icons/lucide/rotate-ccw';
 import slidersHorizontalIcon from '@iconify-icons/lucide/sliders-horizontal';

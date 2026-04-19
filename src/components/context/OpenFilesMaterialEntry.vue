@@ -4,12 +4,15 @@
       v-if="entry.type === 'group' && entry.collapsible"
       class="open-files-material-group open-files-material-group-button w-full"
       type="button"
-      :style="{ paddingLeft: `${20 + depth * 14}px` }"
+      :style="{ paddingLeft: `${4 + depth * 14}px` }"
       :title="entry.fullPath"
       @click="emit('toggle-group', entry.key)"
     >
       <div class="min-w-0 flex items-center gap-2">
-        <span class="open-files-material-arrow text-text-dim">{{ expanded ? '▾' : '▸' }}</span>
+        <Icon
+          :icon="expanded ? chevronDownIcon : chevronRightIcon"
+          class="open-files-material-arrow text-text-dim"
+        />
         <span class="truncate text-[12px]">{{ entry.name }}</span>
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2 font-mono text-[10px] text-text-dim">
@@ -21,7 +24,7 @@
     <div
       v-else-if="entry.type === 'group'"
       class="open-files-material-group"
-      :style="{ paddingLeft: `${20 + depth * 14}px` }"
+      :style="{ paddingLeft: `${28 + depth * 14}px` }"
       :title="entry.fullPath"
     >
       <div class="min-w-0 flex items-center gap-2">
@@ -36,7 +39,7 @@
     <div
       v-else
       class="group open-files-material-file cursor-default"
-      :style="{ paddingLeft: `${4 + depth * 14}px` }"
+      :style="{ paddingLeft: `${6 + depth * 14}px` }"
       :title="`${entry.fullPath}\n双击用默认程序打开`"
       @dblclick="openInDefaultApp(entry)"
     >
@@ -106,6 +109,8 @@
 import { computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { Icon } from '@iconify/vue';
+import chevronDownIcon from '@iconify-icons/lucide/chevron-down';
+import chevronRightIcon from '@iconify-icons/lucide/chevron-right';
 import lockIcon from '@iconify-icons/lucide/lock';
 import unlockIcon from '@iconify-icons/lucide/unlock';
 import xIcon from '@iconify-icons/lucide/x';

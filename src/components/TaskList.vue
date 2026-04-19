@@ -1,5 +1,5 @@
 <template>
-  <aside class="panel task-column-divider flex min-h-0 flex-col overflow-hidden">
+  <aside class="panel task-column-divider flex min-h-0 flex-1 flex-col overflow-hidden">
     <div class="panel-header flex items-center justify-between gap-3">
       <p class="truncate text-[13px] font-semibold tracking-[0.01em] text-text">{{ title }}</p>
       <div class="flex items-center gap-1">
